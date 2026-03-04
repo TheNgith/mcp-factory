@@ -9,7 +9,7 @@
 
 | Role | Member | GitHub |
 |------|--------|--------|
-| Lead & Sections 2-3 | Evan King | [@evanking12](https://github.com/evanking12) |
+| Sections 2-3 | Evan King | [@evanking12](https://github.com/evanking12) |
 | Section 4 (MCP Generation) | Layalie AbuOleim | [@abuoleim1](https://github.com/abuoleim1) |
 | Section 4 (MCP Generation) | Caden Spokas | [@bustlingbungus](https://github.com/bustlingbungus) |
 | Section 5 (Verification) | Thinh Nguyen | [@TheNgith](https://github.com/TheNgith) |
@@ -29,7 +29,15 @@ Enterprise organizations need AI-powered customer service that can invoke existi
   - ✅ **Strict Artifact Hygiene**: No empty "ghost" files, no separator lines in descriptions, correct parameter names (ADR-0005)
   - ✅ **§3 Tool Selection**: `select_invocables.py` — displays full invocable list, filters by confidence, writes `selected-invocables.json` for §4
   - ✅ **Demo Suite**: 29/29 targets succeed across all source types (10 sections, including §2.a directory scan)
-- [x] **Section 4: MCP Generation** - In progress (reads `selected-invocables.json`)
+- [x] **Section 4: MCP Generation** - **DEMO-READY**
+  - ✅ **Single-command pipeline:** `python mcp_factory.py --target <file>` runs full discovery → selection → server generation
+  - ✅ **Instant demo:** `python mcp_factory.py --serve <name>` starts a pre-built server with no re-analysis
+  - ✅ **Flask MCP server** with `/tools`, `/invoke`, `/chat`, `/download/invocables` routes
+  - ✅ **Chat UI** — dark-theme single-page app served at `http://localhost:5000`; shows tool calls + results inline
+  - ✅ **OpenAI function-calling** — converts invocables to function definitions, executes matched tool, returns natural-language reply
+  - ✅ **GUI automation** — pywinauto UIA backend drives real app windows; supports button clicks, text input, save/open dialogs, menu navigation
+  - ✅ **App-type detection** — Win32 vs WinUI3/MSIX detected at scan time; MSIX apps use HWND-diff launch (no duplicate windows)
+  - ✅ **Working demos:** Calculator (55 invocables, UIA buttons) and Notepad (Win32, type/save/open/append)
 - [ ] **Section 5: Verification UI** - Interactive validation
 - [ ] **Section 6: Deployment** - Azure integration
 
@@ -138,9 +146,32 @@ Summary: 29 succeeded  0 skipped  (29 total)
 - **medium:** Pattern-matched, best effort
 - **low:** Minimal information (symbol name only)
 
-### 2. Analyze a Specific File or Installed Directory
+### 2. Live App Demo ⚡ (The "It Controls Windows" Demo)
 
-To analyze a specific binary, script, or installed application directory:
+**Start a pre-built server and chat with it:**
+
+```powershell
+# Calculator (WinUI3/MSIX, 55 invocables — digit buttons, operators, scientific functions)
+python mcp_factory.py --serve calculator-test2
+
+# Notepad (classic Win32 — type, save, open, append)
+python mcp_factory.py --serve notepad
+```
+
+Open [http://localhost:5000](http://localhost:5000) and try:
+- *"Open the calculator and compute the square root of 144, then multiply by 7"*
+- *"Open notepad, type a short poem, save it as poem.txt, then reopen it and append a title"*
+
+The chat UI shows every tool call, its arguments, and the raw result from the live application window.
+
+**Run the full pipeline on any binary:**
+
+```powershell
+# Discovery → selection TUI → server generation in one command
+python mcp_factory.py --target C:\Windows\System32\notepad.exe --description "text editor"
+```
+
+### Analyze a Specific File or Installed Directory
 
 ```powershell
 # Native DLL
@@ -156,99 +187,11 @@ python src/discovery/main.py --target "api\openapi.yaml" --out artifacts
 python src/discovery/main.py --target "C:\Program Files\MyApp\" --out artifacts
 ```
 
-### 3. Analyze Windows CLI Tools
+### Analyze Windows CLI Tools
 
 ```powershell
-# Extract arguments from any Windows command-line tool
 python src/discovery/cli_analyzer.py "C:\Windows\System32\ipconfig.exe"
 ```
-
-## validation_output/ Structure (Strict Hygiene)
-
-The pipeline enforces **Strict Artifact Hygiene** (ADR-0005). Files are only generated when features are actually present.
-
-```
-demo_output/unified/
-├── shell32.dll/
-│   ├── shell32_exports_mcp.json        # ✅ native exports found
-│   └── shell32_com_objects_mcp.json    # ✅ COM objects found
-├── kernel32.dll/
-│   └── kernel32_exports_mcp.json       # ✅ exports only (no COM → no com file)
-├── sample.py/
-│   └── sample_python_script_mcp.json   # ✅ functions found
-└── sample.sql/
-    └── sample_sql_file_mcp.json        # ✅ stored procs + tables + views found
-```
-
-**No more "empty success" files.** If a JSON exists, it contains usable, LLM-callable tools.
-
-
-
-### Output Files (Demo Mode)
-
-All results from the demo are saved to `demo_output/unified/`. The file format matches the **Stable v2.0.0 MCP JSON Schema**.
-
-**Example structure:**
-```
-demo_output/unified/
-├── kernel32.dll/
-│   └── kernel32_exports_mcp.json        # Native exports
-├── shell32.dll/
-│   ├── shell32_exports_mcp.json         # Native exports
-│   └── shell32_com_objects_mcp.json     # COM objects
-├── mscorlib.dll/
-│   └── mscorlib_dotnet_methods_mcp.json # .NET methods
-├── sample.py/
-│   └── sample_python_script_mcp.json    # Python functions
-├── sample.sql/
-│   └── sample_sql_file_mcp.json         # Stored procs, views, tables
-└── sample.ts/
-    └── sample_typescript_mcp.json       # TypeScript methods
-```
-
-Every JSON file has identical top-level structure:
-```json
-{
-  "metadata": { "tier": 4, "target_name": "...", "target_type": "..." },
-  "invocables": [
-    {
-      "name": "compress_file",
-      "kind": "python_function",
-      "confidence": "guaranteed",
-      "description": "Compress source into dest using the specified level.",
-      "return_type": "int",
-      "parameters": [{"name": "source", "type": "string", "required": true}],
-      "execution": {
-        "method": "python_subprocess",
-        "module_path": "...",
-        "function_name": "compress_file"
-      }
-    }
-  ],
-  "summary": { "total_invocables": 1, "by_source_type": {"python_function": 1} }
-}
-```
-
-**JSON Schema:** See [docs/schemas/discovery-output.schema.json](docs/schemas/discovery-output.schema.json) for the formal schema definition consumed by Section 4 (MCP generation).
-
-## Advanced Usage
-
-### Analyze Any DLL/EXE
-
-Use `main.py` to target any file. The system will auto-detect if it's a Native DLL, COM Server, .NET Assembly, or CLI Tool (or a mix!).
-
-```powershell
-# Basic analysis
-python src/discovery/main.py --target "path/to/file.dll" --out custom_output
-
-# With C++ Headers (for higher confidence)
-python src/discovery/main.py --target mylib.dll --headers include/ --out out
-
-# Installed application directory
-python src/discovery/main.py --target "C:\Program Files\MyApp\" --out custom_output
-```
-
-### 3. Interactive Invocable Selection (§2-3 hand-off to §4)
 
 Run the selection UI to review discovered tools and choose what the MCP server exposes:
 
@@ -268,15 +211,10 @@ python src/ui/select_invocables.py --input artifacts/discovery-output.json
 
 The UI defaults **guaranteed + high confidence ON**, medium + low OFF (§3.b). Commands: `<n>` toggle row, `3-10` range, `g` guaranteed+high only, `m` toggle medium, `l` toggle low, `a`/`n` all/none, `f <text>` filter, `done` save → `artifacts/selected-invocables.json`.
 
-### Analyze Windows CLI Tools
-
-```powershell
-python src/discovery/cli_analyzer.py "C:\Program Files\Git\bin\git.exe"
-```
-
 ## Repository Structure
 ```
 mcp-factory/
+├── mcp_factory.py                 # Single-command entry point (--target / --serve)
 ├── scripts/
 │   ├── demo_all_capabilities.py   # Main demo — 29 targets, all source types (10 sections)
 │   ├── demo_legacy_protocols.py   # Standalone 6-target suite for spec-gap analyzers
@@ -289,6 +227,7 @@ mcp-factory/
 │   ├── pe_parse.py                # .NET reflection
 │   ├── com_scan.py                # COM registry + TLB scanning
 │   ├── cli_analyzer.py            # CLI argument extraction
+│   ├── gui_analyzer.py            # GUI discovery — UIA button walk, menu enumeration, app-type detection
 │   ├── rpc_scan.py                # RPC interface scanning
 │   ├── sql_analyzer.py            # SQL stored procs, views, tables, triggers
 │   ├── script_analyzer.py         # Python, PowerShell, Shell, Batch, VBScript, Ruby, PHP
@@ -303,7 +242,10 @@ mcp-factory/
 │   └── select_invocables.py       # Interactive §3 selection UI (rich table, confidence filter)
 ├── src/generation/                # Section 4: MCP server generation
 │   ├── section4_select_tools.py
-│   └── section4_generate_server.py
+│   └── section4_generate_server.py  # Flask server template + chat UI template
+├── generated/                     # Pre-built servers (ready to --serve)
+│   ├── calculator-test2/          # Calculator — 55 invocables, WinUI3/MSIX
+│   └── notepad/                   # Notepad — classic Win32, type/save/open/append
 ├── tests/
 │   └── fixtures/scripts/          # Sample files for all supported source types
 │       ├── sample_openapi.yaml    # OpenAPI 3.0 fixture (9 operations)
@@ -313,7 +255,7 @@ mcp-factory/
 │       └── sample.jndi            # JNDI fixture (12 bindings)
 ├── demo_output/unified/           # Generated demo artifacts (one sub-dir per target)
 └── docs/
-    ├── adr/                       # Architecture Decision Records (ADR-0001 → ADR-0007)
+    ├── adr/                       # Architecture Decision Records (ADR-0001 → ADR-0008)
     ├── copilot-log/entries.md     # Session-by-session development log
     ├── sections-2-3.md            # §2-3 feature coverage reference (29/29 targets)
     └── schemas/                   # JSON schema contracts for Section 4
@@ -326,24 +268,67 @@ mcp-factory/
 - **Section 5 (Verification):** Thinh Nguyen - Interactive UI, LLM-based validation
 - **Integration & Deployment:** Team effort - Azure deployment, CI/CD, documentation
 
-##Section 4:
-- run python src/generation/section4_select_tools.py
-- It will print your invocables list (reads discovery-output.json which is a description of what a program can do)
-You optionally remove some by number (user selects which tools are allowed)
-You enter a component name
-It writes: (saves selected-invocables.json) which is the filtered tool list
-artifacts/selected-invocables.json this is the approved list of tools AI is allowed to call, without it section 4 doesnt know what to generate.
--the command: python3 src/generation/section4_generate_server.py generates runnable wrapper MCP server. satisfies requirement 4b
-  Discovered tools
-• Selected tools
-• Generated MCP architecture
-• Wrapped the executable
-• Launched the server
-test it with curl http://127.0.0.1:5000/tools
-or curl -X POST http://127.0.0.1:5000/invoke \
--H "Content-Type: application/json" \
--d '{"tool":"get-account-balance","args":{"accountNumber":"12345"}}'
-in a new terminal window
+## Section 4: MCP Server Generation
+
+### Full pipeline (discovery → selection → server)
+
+```powershell
+# Run the entire pipeline on any target in one command
+python mcp_factory.py --target C:\Windows\System32\calc.exe --description "calculator"
+
+# Skip re-discovery — load an existing discovery JSON directly
+python mcp_factory.py --input artifacts/discovery-output.json
+
+# Generate the server without auto-launching it
+python mcp_factory.py --target zstd.dll --skip-launch
+
+# Suppress the browser auto-open (e.g. headless / CI)
+python mcp_factory.py --serve notepad --no-browser
+```
+
+This runs discovery, opens the selection TUI, then generates and starts the server.
+
+| Flag | Description |
+|------|-------------|
+| `--target FILE_OR_DIR` | Binary, script, or directory to analyse — runs full discovery |
+| `--serve COMPONENT` | Skip pipeline entirely; start a pre-built server from `generated/` |
+| `--input JSON` | Skip discovery; load an existing `discovery-output.json` directly |
+| `--description TEXT` | Free-text hint that highlights matching rows in the selection TUI |
+| `--no-browser` | Do not auto-open the browser after the server starts |
+| `--skip-launch` | Stop after generation — do not start the server |
+
+### Start a pre-built server
+
+```powershell
+python mcp_factory.py --serve notepad
+python mcp_factory.py --serve calculator-test2
+```
+
+### Manual pipeline steps
+
+```powershell
+# 1. Discovery
+python src/discovery/main.py --target <file> --out artifacts
+
+# 2. Select invocables (interactive TUI)
+python src/ui/select_invocables.py --target <file>
+# Writes: artifacts/selected-invocables.json
+
+# 3. Generate server
+python src/generation/section4_generate_server.py
+# Writes: generated/<name>/server.py + static/index.html
+
+# 4. Run the server
+cd generated/<name>
+cp .env.example .env  # fill in OPENAI_API_KEY
+python server.py
+```
+
+Verify with:
+```powershell
+curl http://localhost:5000/tools
+# Open http://localhost:5000 in browser for chat UI
+```
 
 
 ## Data Contract Stability (for Section 4)
@@ -373,4 +358,4 @@ This is an active capstone project. For development setup and workflow guideline
 ---
 
 **Sponsored by Microsoft** | Mentored by Microsoft Engineers  
-_Last updated: February 22, 2026 — §2.a directory scan complete, 29/29 demo targets_
+_Last updated: March 4, 2026 — Section 4 demo-ready: Calculator + Notepad servers working end-to-end_
