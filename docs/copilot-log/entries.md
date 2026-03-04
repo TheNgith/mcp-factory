@@ -573,7 +573,86 @@ Section 10 "Directory Scan" now appears in the output table.  Aggregate `scripts
 
 ---
 
-## 2026-02-27 — §4 /chat Endpoint + §5 Chat UI + CREATE_NO_WINDOW Suppression
+## 2026-02-22 — Mac Compatibility Guide + Windows Unicode Fix
+
+**Task/Issue:** Two independent issues: (1) the README still had a blanket "Windows only" warning that discouraged Mac teammates even though discovery, schema, and UI work fine on Mac. (2) `select_invocables.py` crashed on Windows when Rich tried to write Unicode box-drawing characters to `cp1252` stdout.
+
+**Copilot Prompts Used:**
+- "Create docs/mac-compatibility.md that documents exactly what works on Mac (pefile parsing, schema writing, select_invocables.py TUI, test fixtures) vs. what requires Windows (dumpbin, pywinauto, ctypes DLL calls, CREATE_NO_WINDOW). Condense the README Platform Requirements section to a single line with a link to the new doc."
+- "Fix select_invocables.py Unicode crash on Windows: reconfigure sys.stdout and sys.stderr to UTF-8 before importing Rich, and pass Console(legacy_windows=False) to suppress cp1252 encoding errors."
+
+**Output Accepted:**
+- `docs/mac-compatibility.md` — two-section table: "Works on Mac" vs. "Windows-gated"; explains pefile replaced dumpbin so Visual Studio Build Tools are no longer a prerequisite.
+- `README.md` — Platform Requirements condensed from a multi-line warning to one line with a link.
+- `src/ui/select_invocables.py` — `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')` added before Rich import; `Console(legacy_windows=False)` passed to prevent cp1252 fallback.
+- `requirements.txt` — `rich` pinned (already present, version confirmed).
+
+**Manual Changes:**
+- None required.
+
+**Result:**
+```powershell
+python src/ui/select_invocables.py --target artifacts/zstd_zstd_exports_mcp.json
+```
+TUI launches without Unicode errors on Windows cp1252 terminals.
+
+**Notes:**
+- `pefile` replaced `dumpbin` in an earlier commit, making VS Build Tools optional. `mac-compatibility.md` captures this so Mac teammates don't skip setup unnecessarily.
+- `legacy_windows=False` is the Rich-documented fix for Windows consoles that don't support ANSI escape codes.
+
+**References:**
+- Commit: `5756fbb`
+- Rich docs: https://rich.readthedocs.io/en/stable/console.html#windows-legacy-console
+
+---
+
+## 2026-03-04 — GUI Pipeline Fixes: Exe Launch, UIA-First Backend, Open-File Action
+
+**Task/Issue:** Four bugs in the generated server's GUI execution path blocked the Calculator demo entirely and left Notepad unable to reopen saved files: (1) `_execute_cli` used the wrong key to look up the executable path, producing `WinError 87`. (2) The launch command incorrectly passed the binary name as a CLI argument to itself. (3) MSIX/WinUI3 apps (Calculator) opened two windows — one orphan from the failed win32 Attempt A, one real from Attempt B. (4) `file_open` only triggered the Open dialog but never typed a filename into it.
+
+**Copilot Prompts Used:**
+- "Fix _execute_cli: look up executable_path in addition to target_path and dll_path. When the invocable name matches the exe stem, route through _ensure_gui_app instead of Popen so the window is cached immediately."
+- "Add preferred_backend param to _ensure_gui_app. When 'uia', skip Attempt A entirely. In _execute_cli, detect preferred_backend by scanning sibling invocables for gui_backend == 'uia'."
+- "Increase button_click post-click sleep from 0.1s to 0.25s to prevent WinUI3 dropping rapid repeated presses of the same button."
+- "Add open_file action type to _execute_gui mirroring save_as: trigger File > Open, wait for dialog, type filename into the Edit control, confirm with Open button. Upgrade file_open invocable in notepad server to use it with a filename parameter."
+
+**Output Accepted:**
+- `_execute_cli` — unified key lookup (`executable_path` → `target_path` → `dll_path`); launch-exe branch (`exe_stem == name`) routes through `_ensure_gui_app(target, preferred_backend=_preferred)` instead of raw `Popen`.
+- `_ensure_gui_app(exe_path, preferred_backend="")` — new optional param; `if preferred_backend != "uia":` guard wraps the entire Attempt A block.
+- Sibling scan in `_execute_cli` — iterates `INVOCABLES` looking for matching `exe_path` + `gui_backend == "uia"` to set `_preferred`.
+- `button_click` handler — sleep changed `0.1 → 0.25` s with explanatory comment.
+- `open_file` action type — full dialog-interaction handler: `File → Open` trigger (menu_select / `^o` / `%fo` fallbacks), dialog wait, four-strategy filename control lookup, `type_keys`, Open button click.
+- `file_open` invocable in `generated/notepad/server.py` — upgraded from `action_type: menu_click` / no params to `action_type: open_file` / `filename: string` parameter.
+- Same `_execute_cli` fixes applied to `generated/calculator-test2/server.py`, `generated/mcp-calc/server.py`, `generated/zstd/server.py`, `generated/test-component/server.py`.
+
+**Manual Changes:**
+- None required.
+
+**Result:**
+```powershell
+# Calculator demo
+python mcp_factory.py --serve calculator-test2
+# Prompt: "Open the calculator and compute 4 times 2"
+# Expected tool calls: calc → press_four → press_multiply_by → press_two → press_equals
+# Calculator displays: 8
+
+# Notepad demo
+python mcp_factory.py --serve notepad
+# Prompt: "Open notepad, type hello, save as demo.txt, open demo.txt, append world, save"
+# Expected: full round-trip with one Notepad window
+```
+
+**Notes:**
+- The `exe_stem == name` heuristic correctly identifies launch invocables for `calc`, `notepad`, `mspaint`, etc. It will not misfire for CLI tools like `zstd` because those invocables have a function name (e.g. `ZSTD_compress`) that does not match the exe stem.
+- `preferred_backend` sibling scan is O(n) in invocable count — negligible for all current demo targets.
+- Classic Win32 apps (Notepad, Paint) have no `gui_backend` field on their invocables, so `_preferred` stays `""` and Attempt A still fires for them — no regression.
+- `0.25 s` per button press adds ~2 s overhead for a 10-step sequence. Acceptable for demo; a future batched `press_sequence` action could eliminate this.
+
+**References:**
+- ADR-0008: `docs/adr/0008-gui-pipeline-exe-launch-fixes.md`
+- MSIX HWND-diff launch: Attempt B in `_ensure_gui_app`
+
+---
 
 **Task/Issue:** Three separate gaps addressed in one session: (1) §4's generated Flask server had no LLM connection — it could list and invoke tools but had no natural-language interface. (2) §5 had no UI at all. (3) Discovery and invocation subprocesses were spawning visible desktop windows when running EXEs like `notepad.exe` or `cmd.exe`.
 

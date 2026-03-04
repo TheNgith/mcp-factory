@@ -1,4 +1,4 @@
-# Generated MCP server — test-component
+# Generated MCP server — zstd
 # Run:  pip install -r requirements.txt  &&  cp .env.example .env  (fill values)
 #       python server.py
 
@@ -6,2821 +6,24 @@ import os
 import json
 import ctypes
 import subprocess
+import threading
+from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
+# Always load .env from the server's own directory, regardless of cwd
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
+# openai 2.x reads OPENAI_BASE_URL directly from os.environ;
+# if it's set to "" (e.g. by a system env var) it overrides base_url=None.
+# Remove it entirely so the library defaults to api.openai.com.
+if not os.environ.get("OPENAI_BASE_URL"):
+    os.environ.pop("OPENAI_BASE_URL", None)
 
 app = Flask(__name__, static_folder="static")
 
 # ── Tool registry (injected by generator) ──────────────────────────────────
 INVOCABLES = json.loads(r"""[
-  {
-    "name": "ZDICT_addEntropyTablesFromBuffer",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_addEntropyTablesFromBuffer",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_finalizeDictionary",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_finalizeDictionary",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_getDictHeaderSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_getDictHeaderSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_getDictID",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_getDictID",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_getErrorName",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_getErrorName",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_isError",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_isError",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_optimizeTrainFromBuffer_cover",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_optimizeTrainFromBuffer_cover",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_optimizeTrainFromBuffer_fastCover",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_optimizeTrainFromBuffer_fastCover",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_trainFromBuffer",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_trainFromBuffer",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_trainFromBuffer_cover",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_trainFromBuffer_cover",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_trainFromBuffer_fastCover",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_trainFromBuffer_fastCover",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZDICT_trainFromBuffer_legacy",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZDICT_trainFromBuffer_legacy",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_getParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_getParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_init",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_init",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_init_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_init_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_registerSequenceProducer",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_registerSequenceProducer",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_reset",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_reset",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtxParams_setParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtxParams_setParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_getParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_getParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_loadDictionary",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_loadDictionary",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_loadDictionary_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_loadDictionary_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_loadDictionary_byReference",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_loadDictionary_byReference",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_refCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_refCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_refPrefix",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_refPrefix",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_refPrefix_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_refPrefix_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_refThreadPool",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_refThreadPool",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_reset",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_reset",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setFParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setFParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setParametersUsingCCtxParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setParametersUsingCCtxParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CCtx_setPledgedSrcSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CCtx_setPledgedSrcSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CStreamInSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CStreamInSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_CStreamOutSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_CStreamOutSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_getParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_getParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_loadDictionary",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_loadDictionary",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_loadDictionary_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_loadDictionary_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_loadDictionary_byReference",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_loadDictionary_byReference",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_refDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_refDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_refPrefix",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_refPrefix",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_refPrefix_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_refPrefix_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_reset",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_reset",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_setFormat",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_setFormat",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_setMaxWindowSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_setMaxWindowSize",
-      "calling_convention": "stdcall",
-      "charset": "unicode"
-    }
-  },
-  {
-    "name": "ZSTD_DCtx_setParameter",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DCtx_setParameter",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DStreamInSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DStreamInSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_DStreamOutSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_DStreamOutSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_adjustCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_adjustCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_cParam_getBounds",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_cParam_getBounds",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_checkCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_checkCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress2",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress2",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBegin",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBegin",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBegin_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBegin_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBegin_usingCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBegin_usingCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBegin_usingCDict_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBegin_usingCDict_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBegin_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBegin_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBlock",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBlock",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressBound",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressBound",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressCCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressCCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressContinue",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressContinue",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressEnd",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressEnd",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressSequences",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressSequences",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressSequencesAndLiterals",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressSequencesAndLiterals",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressStream2",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressStream2",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compressStream2_simpleArgs",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compressStream2_simpleArgs",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress_usingCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress_usingCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress_usingCDict_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress_usingCDict_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_compress_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_compress_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_copyCCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_copyCCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_copyDCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_copyDCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCCtxParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCCtxParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCCtx_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCCtx_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCDict_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCDict_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCDict_advanced2",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCDict_advanced2",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCDict_byReference",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCDict_byReference",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createCStream_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createCStream_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDCtx_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDCtx_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDDict_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDDict_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDDict_byReference",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDDict_byReference",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createDStream_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createDStream_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_createThreadPool",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_createThreadPool",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_dParam_getBounds",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_dParam_getBounds",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decodingBufferSize_min",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decodingBufferSize_min",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompress",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompress",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressBegin",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressBegin",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressBegin_usingDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressBegin_usingDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressBegin_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressBegin_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressBlock",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressBlock",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressBound",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressBound",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressContinue",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressContinue",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressDCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressDCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressStream_simpleArgs",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressStream_simpleArgs",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompress_usingDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompress_usingDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompress_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompress_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_decompressionMargin",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_decompressionMargin",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_defaultCLevel",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_defaultCLevel",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_endStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_endStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCCtxSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCCtxSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCCtxSize_usingCCtxParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCCtxSize_usingCCtxParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCCtxSize_usingCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCCtxSize_usingCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCDictSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCDictSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCDictSize_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCDictSize_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCStreamSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCStreamSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCStreamSize_usingCCtxParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCStreamSize_usingCCtxParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateCStreamSize_usingCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateCStreamSize_usingCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateDCtxSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateDCtxSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateDDictSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateDDictSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateDStreamSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateDStreamSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_estimateDStreamSize_fromFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_estimateDStreamSize_fromFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_findDecompressedSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_findDecompressedSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_findFrameCompressedSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_findFrameCompressedSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_flushStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_flushStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_frameHeaderSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_frameHeaderSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeCCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeCCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeCCtxParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeCCtxParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeCStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeCStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeDCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeDCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeDStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeDStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_freeThreadPool",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_freeThreadPool",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_generateSequences",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_generateSequences",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getBlockSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getBlockSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getCParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getCParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getDecompressedSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getDecompressedSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getDictID_fromCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getDictID_fromCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getDictID_fromDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getDictID_fromDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getDictID_fromDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getDictID_fromDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getDictID_fromFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getDictID_fromFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getErrorCode",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getErrorCode",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getErrorName",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getErrorName",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getErrorString",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getErrorString",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getFrameContentSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getFrameContentSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getFrameHeader",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getFrameHeader",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getFrameHeader_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getFrameHeader_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getFrameProgression",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getFrameProgression",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_getParams",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_getParams",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream_srcSize",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream_srcSize",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream_usingCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream_usingCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream_usingCDict_advanced",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream_usingCDict_advanced",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initCStream_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initCStream_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initDStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initDStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initDStream_usingDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initDStream_usingDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initDStream_usingDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initDStream_usingDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticCCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticCCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticCDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticCDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticCStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticCStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticDCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticDCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticDDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticDDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_initStaticDStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_initStaticDStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_insertBlock",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_insertBlock",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_isError",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_isError",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_isFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_isFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_isSkippableFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_isSkippableFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_maxCLevel",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_maxCLevel",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_mergeBlockDelimiters",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_mergeBlockDelimiters",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_minCLevel",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_minCLevel",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_nextInputType",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_nextInputType",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_nextSrcSizeToDecompress",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_nextSrcSizeToDecompress",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_readSkippableFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_readSkippableFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_registerSequenceProducer",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_registerSequenceProducer",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_resetCStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_resetCStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_resetDStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_resetDStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sequenceBound",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sequenceBound",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_CCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_CCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_CDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_CDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_CStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_CStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_DCtx",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_DCtx",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_DDict",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_DDict",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_sizeof_DStream",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_sizeof_DStream",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_toFlushNow",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_toFlushNow",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_versionNumber",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_versionNumber",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_versionString",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_versionString",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
-  {
-    "name": "ZSTD_writeSkippableFrame",
-    "kind": "export",
-    "confidence": "medium",
-    "description": "",
-    "return_type": "unknown",
-    "parameters": [],
-    "execution": {
-      "method": "dll_import",
-      "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
-      "function_name": "ZSTD_writeSkippableFrame",
-      "calling_convention": "stdcall",
-      "charset": "ansi"
-    }
-  },
   {
     "name": "ZDICT_addEntropyTablesFromBuffer",
     "tool_id": "dll_ZDICT_addEntropyTablesFromBuffer_1",
@@ -2904,7 +107,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_addEntropyTablesFromBuffer",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dictContentSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      }
+    ]
   },
   {
     "name": "ZDICT_finalizeDictionary",
@@ -2999,7 +248,65 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_finalizeDictionary",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dstDictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "maxDictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictContent",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictContentSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_params_t",
+        "required": true,
+        "description": "ZDICT_params_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_getDictHeaderSize",
@@ -3064,7 +371,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_getDictHeaderSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_getDictID",
@@ -3129,7 +458,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_getDictID",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_getErrorName",
@@ -3189,7 +540,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_getErrorName",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const char*",
+    "parameters": [
+      {
+        "name": "errorCode",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_isError",
@@ -3249,7 +616,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_isError",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "errorCode",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_optimizeTrainFromBuffer_cover",
@@ -3334,7 +717,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_optimizeTrainFromBuffer_cover",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_cover_params_t*",
+        "required": true,
+        "description": "ZDICT_cover_params_t*"
+      }
+    ]
   },
   {
     "name": "ZDICT_optimizeTrainFromBuffer_fastCover",
@@ -3419,7 +848,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_optimizeTrainFromBuffer_fastCover",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_fastCover_params_t*",
+        "required": true,
+        "description": "ZDICT_fastCover_params_t*"
+      }
+    ]
   },
   {
     "name": "ZDICT_trainFromBuffer",
@@ -3499,7 +974,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_trainFromBuffer",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      }
+    ]
   },
   {
     "name": "ZDICT_trainFromBuffer_cover",
@@ -3584,7 +1099,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_trainFromBuffer_cover",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void",
+        "required": true,
+        "description": "void"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void",
+        "required": true,
+        "description": "const void"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t",
+        "required": true,
+        "description": "const size_t"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_cover_params_t",
+        "required": true,
+        "description": "ZDICT_cover_params_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_trainFromBuffer_fastCover",
@@ -3669,7 +1230,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_trainFromBuffer_fastCover",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void",
+        "required": true,
+        "description": "void"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void",
+        "required": true,
+        "description": "const void"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t",
+        "required": true,
+        "description": "const size_t"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_fastCover_params_t",
+        "required": true,
+        "description": "ZDICT_fastCover_params_t"
+      }
+    ]
   },
   {
     "name": "ZDICT_trainFromBuffer_legacy",
@@ -3754,7 +1361,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZDICT_trainFromBuffer_legacy",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dictBufferCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "samplesBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "samplesSizes",
+        "type": "const size_t*",
+        "required": true,
+        "description": "const size_t*"
+      },
+      {
+        "name": "nbSamples",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      },
+      {
+        "name": "parameters",
+        "type": "ZDICT_legacy_params_t",
+        "required": true,
+        "description": "ZDICT_legacy_params_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_getParameter",
@@ -3824,7 +1477,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_getParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "const ZSTD_CCtx_params*",
+        "required": true,
+        "description": "const ZSTD_CCtx_params*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_cParameter",
+        "required": true,
+        "description": "ZSTD_cParameter"
+      },
+      {
+        "name": "value",
+        "type": "int*",
+        "required": true,
+        "description": "int*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_init",
@@ -3889,7 +1570,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_init",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctxParams",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_init_advanced",
@@ -3954,7 +1657,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_init_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctxParams",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      },
+      {
+        "name": "params",
+        "type": "ZSTD_parameters",
+        "required": true,
+        "description": "ZSTD_parameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_registerSequenceProducer",
@@ -4024,7 +1749,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_registerSequenceProducer",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "void",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      },
+      {
+        "name": "sequenceProducerState",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "sequenceProducer",
+        "type": "ZSTD_sequenceProducer_F",
+        "required": true,
+        "description": "ZSTD_sequenceProducer_F"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_reset",
@@ -4084,7 +1837,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_reset",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtxParams_setParameter",
@@ -4154,7 +1923,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtxParams_setParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_cParameter",
+        "required": true,
+        "description": "ZSTD_cParameter"
+      },
+      {
+        "name": "value",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_getParameter",
@@ -4224,7 +2021,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_getParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "const ZSTD_CCtx*",
+        "required": true,
+        "description": "const ZSTD_CCtx*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_cParameter",
+        "required": true,
+        "description": "ZSTD_cParameter"
+      },
+      {
+        "name": "value",
+        "type": "int*",
+        "required": true,
+        "description": "int*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_loadDictionary",
@@ -4294,7 +2119,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_loadDictionary",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_loadDictionary_advanced",
@@ -4374,7 +2227,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_loadDictionary_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_loadDictionary_byReference",
@@ -4444,7 +2337,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_loadDictionary_byReference",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_refCDict",
@@ -4509,7 +2430,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_refCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_refPrefix",
@@ -4579,7 +2522,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_refPrefix",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "prefix",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "prefixSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_refPrefix_advanced",
@@ -4654,7 +2625,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_refPrefix_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "prefix",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "prefixSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_refThreadPool",
@@ -4719,7 +2724,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_refThreadPool",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "pool",
+        "type": "ZSTD_threadPool*",
+        "required": true,
+        "description": "ZSTD_threadPool*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_reset",
@@ -4784,7 +2811,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_reset",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "reset",
+        "type": "ZSTD_ResetDirective",
+        "required": true,
+        "description": "ZSTD_ResetDirective"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setCParams",
@@ -4849,7 +2898,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "cparams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setFParams",
@@ -4914,7 +2985,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setFParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "fparams",
+        "type": "ZSTD_frameParameters",
+        "required": true,
+        "description": "ZSTD_frameParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setParameter",
@@ -4984,7 +3077,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_cParameter",
+        "required": true,
+        "description": "ZSTD_cParameter"
+      },
+      {
+        "name": "value",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setParametersUsingCCtxParams",
@@ -5049,7 +3170,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setParametersUsingCCtxParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "params",
+        "type": "const ZSTD_CCtx_params*",
+        "required": true,
+        "description": "const ZSTD_CCtx_params*"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setParams",
@@ -5114,7 +3257,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "params",
+        "type": "ZSTD_parameters",
+        "required": true,
+        "description": "ZSTD_parameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_CCtx_setPledgedSrcSize",
@@ -5179,7 +3344,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CCtx_setPledgedSrcSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_CStreamInSize",
@@ -5232,7 +3419,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CStreamInSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t"
   },
   {
     "name": "ZSTD_CStreamOutSize",
@@ -5285,7 +3480,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_CStreamOutSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t"
   },
   {
     "name": "ZSTD_DCtx_getParameter",
@@ -5355,7 +3558,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_getParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_dParameter",
+        "required": true,
+        "description": "ZSTD_dParameter"
+      },
+      {
+        "name": "value",
+        "type": "int*",
+        "required": true,
+        "description": "int*"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_loadDictionary",
@@ -5425,7 +3656,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_loadDictionary",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_loadDictionary_advanced",
@@ -5505,7 +3764,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_loadDictionary_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_loadDictionary_byReference",
@@ -5575,7 +3874,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_loadDictionary_byReference",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_refDDict",
@@ -5640,7 +3967,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_refDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_refPrefix",
@@ -5710,7 +4059,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_refPrefix",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "prefix",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "prefixSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_refPrefix_advanced",
@@ -5785,7 +4162,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_refPrefix_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "prefix",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "prefixSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_reset",
@@ -5850,7 +4261,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_reset",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "reset",
+        "type": "ZSTD_ResetDirective",
+        "required": true,
+        "description": "ZSTD_ResetDirective"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_setFormat",
@@ -5915,7 +4348,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_setFormat",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "format",
+        "type": "ZSTD_format_e",
+        "required": true,
+        "description": "ZSTD_format_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_setMaxWindowSize",
@@ -5980,7 +4435,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_setMaxWindowSize",
+      "calling_convention": "stdcall",
+      "charset": "unicode"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "maxWindowSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_DCtx_setParameter",
@@ -6050,7 +4527,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DCtx_setParameter",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "param",
+        "type": "ZSTD_dParameter",
+        "required": true,
+        "description": "ZSTD_dParameter"
+      },
+      {
+        "name": "value",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_DStreamInSize",
@@ -6103,7 +4608,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DStreamInSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t"
   },
   {
     "name": "ZSTD_DStreamOutSize",
@@ -6156,7 +4669,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_DStreamOutSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t"
   },
   {
     "name": "ZSTD_adjustCParams",
@@ -6226,7 +4747,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_adjustCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_compressionParameters",
+    "parameters": [
+      {
+        "name": "cPar",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      },
+      {
+        "name": "srcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_cParam_getBounds",
@@ -6286,7 +4835,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_cParam_getBounds",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_bounds",
+    "parameters": [
+      {
+        "name": "cParam",
+        "type": "ZSTD_cParameter",
+        "required": true,
+        "description": "ZSTD_cParameter"
+      }
+    ]
   },
   {
     "name": "ZSTD_checkCParams",
@@ -6346,7 +4911,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_checkCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress",
@@ -6426,7 +5007,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress2",
@@ -6506,7 +5127,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress2",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBegin",
@@ -6571,7 +5232,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBegin",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBegin_advanced",
@@ -6651,7 +5334,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBegin_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "params",
+        "type": "ZSTD_parameters",
+        "required": true,
+        "description": "ZSTD_parameters"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBegin_usingCDict",
@@ -6716,7 +5439,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBegin_usingCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBegin_usingCDict_advanced",
@@ -6791,7 +5536,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBegin_usingCDict_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx* const",
+        "required": true,
+        "description": "ZSTD_CCtx* const"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict* const",
+        "required": true,
+        "description": "const ZSTD_CDict* const"
+      },
+      {
+        "name": "fParams",
+        "type": "ZSTD_frameParameters const",
+        "required": true,
+        "description": "ZSTD_frameParameters const"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long const",
+        "required": true,
+        "description": "unsigned long long const"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBegin_usingDict",
@@ -6866,7 +5645,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBegin_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressBlock",
@@ -6919,6 +5732,13 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBlock",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
     }
   },
   {
@@ -6979,7 +5799,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressBound",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressCCtx",
@@ -7064,7 +5900,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressCCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressContinue",
@@ -7144,7 +6026,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressContinue",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressEnd",
@@ -7224,7 +6146,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressEnd",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressSequences",
@@ -7314,7 +6276,59 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressSequences",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "inSeqs",
+        "type": "const ZSTD_Sequence*",
+        "required": true,
+        "description": "const ZSTD_Sequence*"
+      },
+      {
+        "name": "inSeqsSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressSequencesAndLiterals",
@@ -7414,7 +6428,71 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressSequencesAndLiterals",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "inSeqs",
+        "type": "const ZSTD_Sequence*",
+        "required": true,
+        "description": "const ZSTD_Sequence*"
+      },
+      {
+        "name": "nbSequences",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "literals",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "litSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "litBufCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "decompressedSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressStream",
@@ -7484,7 +6562,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "output",
+        "type": "ZSTD_outBuffer*",
+        "required": true,
+        "description": "ZSTD_outBuffer*"
+      },
+      {
+        "name": "input",
+        "type": "ZSTD_inBuffer*",
+        "required": true,
+        "description": "ZSTD_inBuffer*"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressStream2",
@@ -7559,7 +6665,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressStream2",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "output",
+        "type": "ZSTD_outBuffer*",
+        "required": true,
+        "description": "ZSTD_outBuffer*"
+      },
+      {
+        "name": "input",
+        "type": "ZSTD_inBuffer*",
+        "required": true,
+        "description": "ZSTD_inBuffer*"
+      },
+      {
+        "name": "endOp",
+        "type": "ZSTD_EndDirective",
+        "required": true,
+        "description": "ZSTD_EndDirective"
+      }
+    ]
   },
   {
     "name": "ZSTD_compressStream2_simpleArgs",
@@ -7654,7 +6794,65 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compressStream2_simpleArgs",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dstPos",
+        "type": "size_t*",
+        "required": true,
+        "description": "size_t*"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "srcPos",
+        "type": "size_t*",
+        "required": true,
+        "description": "size_t*"
+      },
+      {
+        "name": "endOp",
+        "type": "ZSTD_EndDirective",
+        "required": true,
+        "description": "ZSTD_EndDirective"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress_advanced",
@@ -7749,7 +6947,65 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "params",
+        "type": "ZSTD_parameters",
+        "required": true,
+        "description": "ZSTD_parameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress_usingCDict",
@@ -7834,7 +7090,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress_usingCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress_usingCDict_advanced",
@@ -7924,7 +7226,59 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress_usingCDict_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      },
+      {
+        "name": "fParams",
+        "type": "ZSTD_frameParameters",
+        "required": true,
+        "description": "ZSTD_frameParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_compress_usingDict",
@@ -8019,7 +7373,65 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_compress_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "ctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_copyCCtx",
@@ -8089,7 +7501,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_copyCCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "preparedCCtx",
+        "type": "const ZSTD_CCtx*",
+        "required": true,
+        "description": "const ZSTD_CCtx*"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_copyDCtx",
@@ -8154,7 +7594,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_copyDCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "void",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "preparedDCtx",
+        "type": "const ZSTD_DCtx*",
+        "required": true,
+        "description": "const ZSTD_DCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCCtx",
@@ -8207,7 +7669,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CCtx*"
   },
   {
     "name": "ZSTD_createCCtxParams",
@@ -8260,7 +7730,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCCtxParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CCtx_params*"
   },
   {
     "name": "ZSTD_createCCtx_advanced",
@@ -8320,7 +7798,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCCtx_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CCtx*",
+    "parameters": [
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCDict",
@@ -8390,7 +7884,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CDict*",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCDict_advanced",
@@ -8475,7 +7997,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCDict_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CDict*",
+    "parameters": [
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      },
+      {
+        "name": "cParams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      },
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCDict_advanced2",
@@ -8560,7 +8128,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCDict_advanced2",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CDict*",
+    "parameters": [
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      },
+      {
+        "name": "cctxParams",
+        "type": "const ZSTD_CCtx_params*",
+        "required": true,
+        "description": "const ZSTD_CCtx_params*"
+      },
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCDict_byReference",
@@ -8630,7 +8244,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCDict_byReference",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CDict*",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_createCStream",
@@ -8683,7 +8325,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CStream*"
   },
   {
     "name": "ZSTD_createCStream_advanced",
@@ -8743,7 +8393,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createCStream_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CStream*",
+    "parameters": [
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createDCtx",
@@ -8796,7 +8462,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DCtx*"
   },
   {
     "name": "ZSTD_createDCtx_advanced",
@@ -8856,7 +8530,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDCtx_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DCtx*",
+    "parameters": [
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createDDict",
@@ -8921,7 +8611,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DDict*",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_createDDict_advanced",
@@ -9001,7 +8713,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDDict_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DDict*",
+    "parameters": [
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      },
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createDDict_byReference",
@@ -9066,7 +8818,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDDict_byReference",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DDict*",
+    "parameters": [
+      {
+        "name": "dictBuffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_createDStream",
@@ -9119,7 +8893,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DStream*"
   },
   {
     "name": "ZSTD_createDStream_advanced",
@@ -9179,7 +8961,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createDStream_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DStream*",
+    "parameters": [
+      {
+        "name": "customMem",
+        "type": "ZSTD_customMem",
+        "required": true,
+        "description": "ZSTD_customMem"
+      }
+    ]
   },
   {
     "name": "ZSTD_createThreadPool",
@@ -9239,7 +9037,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_createThreadPool",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_threadPool*",
+    "parameters": [
+      {
+        "name": "numThreads",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_dParam_getBounds",
@@ -9299,7 +9113,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_dParam_getBounds",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_bounds",
+    "parameters": [
+      {
+        "name": "dParam",
+        "type": "ZSTD_dParameter",
+        "required": true,
+        "description": "ZSTD_dParameter"
+      }
+    ]
   },
   {
     "name": "ZSTD_decodingBufferSize_min",
@@ -9364,7 +9194,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decodingBufferSize_min",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "windowSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      },
+      {
+        "name": "frameContentSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompress",
@@ -9439,7 +9291,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompress",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "compressedSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressBegin",
@@ -9499,7 +9385,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressBegin",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressBegin_usingDDict",
@@ -9564,7 +9466,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressBegin_usingDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressBegin_usingDict",
@@ -9634,7 +9558,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressBegin_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressBlock",
@@ -9714,7 +9666,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressBlock",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressBound",
@@ -9779,7 +9771,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressBound",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned long long",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressContinue",
@@ -9859,7 +9873,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressContinue",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressDCtx",
@@ -9939,7 +9993,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressDCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressStream",
@@ -10009,7 +10103,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      },
+      {
+        "name": "output",
+        "type": "ZSTD_outBuffer*",
+        "required": true,
+        "description": "ZSTD_outBuffer*"
+      },
+      {
+        "name": "input",
+        "type": "ZSTD_inBuffer*",
+        "required": true,
+        "description": "ZSTD_inBuffer*"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressStream_simpleArgs",
@@ -10099,7 +10221,59 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressStream_simpleArgs",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dstPos",
+        "type": "size_t*",
+        "required": true,
+        "description": "size_t*"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "srcPos",
+        "type": "size_t*",
+        "required": true,
+        "description": "size_t*"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompress_usingDDict",
@@ -10184,7 +10358,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompress_usingDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompress_usingDict",
@@ -10274,7 +10494,59 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompress_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      },
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_decompressionMargin",
@@ -10339,7 +10611,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_decompressionMargin",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_defaultCLevel",
@@ -10392,7 +10686,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_defaultCLevel",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "int"
   },
   {
     "name": "ZSTD_endStream",
@@ -10457,7 +10759,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_endStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "output",
+        "type": "ZSTD_outBuffer*",
+        "required": true,
+        "description": "ZSTD_outBuffer*"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCCtxSize",
@@ -10517,7 +10841,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCCtxSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "maxCompressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCCtxSize_usingCCtxParams",
@@ -10577,7 +10917,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCCtxSize_usingCCtxParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "const ZSTD_CCtx_params*",
+        "required": true,
+        "description": "const ZSTD_CCtx_params*"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCCtxSize_usingCParams",
@@ -10637,7 +10993,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCCtxSize_usingCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cParams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCDictSize",
@@ -10702,7 +11074,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCDictSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCDictSize_advanced",
@@ -10772,7 +11166,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCDictSize_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "cParams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCStreamSize",
@@ -10832,7 +11254,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCStreamSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "maxCompressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCStreamSize_usingCCtxParams",
@@ -10892,7 +11330,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCStreamSize_usingCCtxParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "const ZSTD_CCtx_params*",
+        "required": true,
+        "description": "const ZSTD_CCtx_params*"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateCStreamSize_usingCParams",
@@ -10952,7 +11406,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateCStreamSize_usingCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cParams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateDCtxSize",
@@ -11005,7 +11475,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateDCtxSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t"
   },
   {
     "name": "ZSTD_estimateDDictSize",
@@ -11070,7 +11548,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateDDictSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateDStreamSize",
@@ -11130,7 +11630,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateDStreamSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "maxWindowSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_estimateDStreamSize_fromFrame",
@@ -11195,7 +11711,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_estimateDStreamSize_fromFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_findDecompressedSize",
@@ -11260,7 +11798,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_findDecompressedSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned long long",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_findFrameCompressedSize",
@@ -11325,7 +11885,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_findFrameCompressedSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_flushStream",
@@ -11390,7 +11972,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_flushStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "output",
+        "type": "ZSTD_outBuffer*",
+        "required": true,
+        "description": "ZSTD_outBuffer*"
+      }
+    ]
   },
   {
     "name": "ZSTD_frameHeaderSize",
@@ -11455,7 +12059,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_frameHeaderSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeCCtx",
@@ -11515,7 +12141,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeCCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeCCtxParams",
@@ -11575,7 +12217,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeCCtxParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "params",
+        "type": "ZSTD_CCtx_params*",
+        "required": true,
+        "description": "ZSTD_CCtx_params*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeCDict",
@@ -11635,7 +12293,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "CDict",
+        "type": "ZSTD_CDict*",
+        "required": true,
+        "description": "ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeCStream",
@@ -11695,7 +12369,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeCStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeDCtx",
@@ -11755,7 +12445,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeDCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeDDict",
@@ -11815,7 +12521,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "ddict",
+        "type": "ZSTD_DDict*",
+        "required": true,
+        "description": "ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeDStream",
@@ -11875,7 +12597,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeDStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_freeThreadPool",
@@ -11935,7 +12673,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_freeThreadPool",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "void",
+    "parameters": [
+      {
+        "name": "pool",
+        "type": "ZSTD_threadPool*",
+        "required": true,
+        "description": "ZSTD_threadPool*"
+      }
+    ]
   },
   {
     "name": "ZSTD_generateSequences",
@@ -12015,7 +12769,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_generateSequences",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zc",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "outSeqs",
+        "type": "ZSTD_Sequence*",
+        "required": true,
+        "description": "ZSTD_Sequence*"
+      },
+      {
+        "name": "outSeqsCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getBlockSize",
@@ -12068,6 +12862,13 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getBlockSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
     }
   },
   {
@@ -12138,7 +12939,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getCParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_compressionParameters",
+    "parameters": [
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      },
+      {
+        "name": "estimatedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getDecompressedSize",
@@ -12203,7 +13032,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getDecompressedSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned long long",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getDictID_fromCDict",
@@ -12263,7 +13114,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getDictID_fromCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_getDictID_fromDDict",
@@ -12323,7 +13190,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getDictID_fromDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_getDictID_fromDict",
@@ -12388,7 +13271,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getDictID_fromDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getDictID_fromFrame",
@@ -12453,7 +13358,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getDictID_fromFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getErrorCode",
@@ -12513,7 +13440,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getErrorCode",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_ErrorCode",
+    "parameters": [
+      {
+        "name": "functionResult",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getErrorName",
@@ -12573,7 +13516,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getErrorName",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const char*",
+    "parameters": [
+      {
+        "name": "result",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getErrorString",
@@ -12633,7 +13592,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getErrorString",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const char*",
+    "parameters": [
+      {
+        "name": "code",
+        "type": "ZSTD_ErrorCode",
+        "required": true,
+        "description": "ZSTD_ErrorCode"
+      }
+    ]
   },
   {
     "name": "ZSTD_getFrameContentSize",
@@ -12698,7 +13673,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getFrameContentSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned long long",
+    "parameters": [
+      {
+        "name": "src",
+        "type": "const void",
+        "required": true,
+        "description": "const void"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getFrameHeader",
@@ -12768,7 +13765,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getFrameHeader",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zfhPtr",
+        "type": "ZSTD_FrameHeader*",
+        "required": true,
+        "description": "ZSTD_FrameHeader*"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_getFrameHeader_advanced",
@@ -12843,7 +13868,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getFrameHeader_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zfhPtr",
+        "type": "ZSTD_FrameHeader*",
+        "required": true,
+        "description": "ZSTD_FrameHeader*"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "format",
+        "type": "ZSTD_format_e",
+        "required": true,
+        "description": "ZSTD_format_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_getFrameProgression",
@@ -12903,7 +13962,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getFrameProgression",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_frameProgression",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "const ZSTD_CCtx*",
+        "required": true,
+        "description": "const ZSTD_CCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_getParams",
@@ -12973,7 +14048,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_getParams",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_parameters",
+    "parameters": [
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      },
+      {
+        "name": "estimatedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream",
@@ -13038,7 +14141,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream_advanced",
@@ -13118,7 +14243,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "params",
+        "type": "ZSTD_parameters",
+        "required": true,
+        "description": "ZSTD_parameters"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream_srcSize",
@@ -13188,7 +14353,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream_srcSize",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream_usingCDict",
@@ -13253,7 +14446,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream_usingCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream_usingCDict_advanced",
@@ -13328,7 +14543,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream_usingCDict_advanced",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      },
+      {
+        "name": "fParams",
+        "type": "ZSTD_frameParameters",
+        "required": true,
+        "description": "ZSTD_frameParameters"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_initCStream_usingDict",
@@ -13403,7 +14652,41 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initCStream_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "compressionLevel",
+        "type": "int",
+        "required": true,
+        "description": "int"
+      }
+    ]
   },
   {
     "name": "ZSTD_initDStream",
@@ -13463,7 +14746,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initDStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_initDStream_usingDDict",
@@ -13528,7 +14827,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initDStream_usingDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      },
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_initDStream_usingDict",
@@ -13598,7 +14919,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initDStream_usingDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticCCtx",
@@ -13663,7 +15012,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticCCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CCtx*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticCDict",
@@ -13753,7 +15124,59 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticCDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const ZSTD_CDict*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      },
+      {
+        "name": "cParams",
+        "type": "ZSTD_compressionParameters",
+        "required": true,
+        "description": "ZSTD_compressionParameters"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticCStream",
@@ -13818,7 +15241,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticCStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_CStream*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticDCtx",
@@ -13883,7 +15328,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticDCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DCtx*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticDDict",
@@ -13968,7 +15435,53 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticDDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const ZSTD_DDict*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dict",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "dictSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "dictLoadMethod",
+        "type": "ZSTD_dictLoadMethod_e",
+        "required": true,
+        "description": "ZSTD_dictLoadMethod_e"
+      },
+      {
+        "name": "dictContentType",
+        "type": "ZSTD_dictContentType_e",
+        "required": true,
+        "description": "ZSTD_dictContentType_e"
+      }
+    ]
   },
   {
     "name": "ZSTD_initStaticDStream",
@@ -14033,7 +15546,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_initStaticDStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "ZSTD_DStream*",
+    "parameters": [
+      {
+        "name": "workspace",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "workspaceSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_insertBlock",
@@ -14086,6 +15621,13 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_insertBlock",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
     }
   },
   {
@@ -14146,7 +15688,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_isError",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "result",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_isFrame",
@@ -14211,7 +15769,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_isFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "buffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "size",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_isSkippableFrame",
@@ -14276,7 +15856,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_isSkippableFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned",
+    "parameters": [
+      {
+        "name": "buffer",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "size",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_maxCLevel",
@@ -14329,7 +15931,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_maxCLevel",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "int"
   },
   {
     "name": "ZSTD_mergeBlockDelimiters",
@@ -14394,7 +16004,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_mergeBlockDelimiters",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "sequences",
+        "type": "ZSTD_Sequence*",
+        "required": true,
+        "description": "ZSTD_Sequence*"
+      },
+      {
+        "name": "seqsSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_minCLevel",
@@ -14447,7 +16079,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_minCLevel",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "int"
   },
   {
     "name": "ZSTD_nextInputType",
@@ -14500,6 +16140,13 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_nextInputType",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
     }
   },
   {
@@ -14560,7 +16207,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_nextSrcSizeToDecompress",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "ZSTD_DCtx*",
+        "required": true,
+        "description": "ZSTD_DCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_readSkippableFrame",
@@ -14640,7 +16303,47 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_readSkippableFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "magicVariant",
+        "type": "unsigned*",
+        "required": true,
+        "description": "unsigned*"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_registerSequenceProducer",
@@ -14710,7 +16413,35 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_registerSequenceProducer",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "void",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      },
+      {
+        "name": "sequenceProducerState",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "sequenceProducer",
+        "type": "ZSTD_sequenceProducer_F",
+        "required": true,
+        "description": "ZSTD_sequenceProducer_F"
+      }
+    ]
   },
   {
     "name": "ZSTD_resetCStream",
@@ -14775,7 +16506,29 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_resetCStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "ZSTD_CStream*",
+        "required": true,
+        "description": "ZSTD_CStream*"
+      },
+      {
+        "name": "pledgedSrcSize",
+        "type": "unsigned long long",
+        "required": true,
+        "description": "unsigned long long"
+      }
+    ]
   },
   {
     "name": "ZSTD_resetDStream",
@@ -14835,7 +16588,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_resetDStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "ZSTD_DStream*",
+        "required": true,
+        "description": "ZSTD_DStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sequenceBound",
@@ -14895,7 +16664,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sequenceBound",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_CCtx",
@@ -14955,7 +16740,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_CCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "const ZSTD_CCtx*",
+        "required": true,
+        "description": "const ZSTD_CCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_CDict",
@@ -15015,7 +16816,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_CDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cdict",
+        "type": "const ZSTD_CDict*",
+        "required": true,
+        "description": "const ZSTD_CDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_CStream",
@@ -15075,7 +16892,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_CStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zcs",
+        "type": "const ZSTD_CStream*",
+        "required": true,
+        "description": "const ZSTD_CStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_DCtx",
@@ -15135,7 +16968,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_DCtx",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dctx",
+        "type": "const ZSTD_DCtx*",
+        "required": true,
+        "description": "const ZSTD_DCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_DDict",
@@ -15195,7 +17044,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_DDict",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "ddict",
+        "type": "const ZSTD_DDict*",
+        "required": true,
+        "description": "const ZSTD_DDict*"
+      }
+    ]
   },
   {
     "name": "ZSTD_sizeof_DStream",
@@ -15255,7 +17120,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_sizeof_DStream",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "zds",
+        "type": "const ZSTD_DStream*",
+        "required": true,
+        "description": "const ZSTD_DStream*"
+      }
+    ]
   },
   {
     "name": "ZSTD_toFlushNow",
@@ -15315,7 +17196,23 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_toFlushNow",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "cctx",
+        "type": "ZSTD_CCtx*",
+        "required": true,
+        "description": "ZSTD_CCtx*"
+      }
+    ]
   },
   {
     "name": "ZSTD_versionNumber",
@@ -15368,7 +17265,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_versionNumber",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "unsigned"
   },
   {
     "name": "ZSTD_versionString",
@@ -15421,7 +17326,15 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_versionString",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "const char*"
   },
   {
     "name": "ZSTD_writeSkippableFrame",
@@ -15501,11 +17414,75 @@ INVOCABLES = json.loads(r"""[
     "metadata": {
       "is_signed": false,
       "publisher": null
-    }
+    },
+    "execution": {
+      "method": "dll_import",
+      "dll_path": "C:\\Users\\evanw\\Downloads\\capstone_project\\mcp-factory\\tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+      "function_name": "ZSTD_writeSkippableFrame",
+      "calling_convention": "stdcall",
+      "charset": "ansi"
+    },
+    "return_type": "size_t",
+    "parameters": [
+      {
+        "name": "dst",
+        "type": "void*",
+        "required": true,
+        "description": "void*"
+      },
+      {
+        "name": "dstCapacity",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "src",
+        "type": "const void*",
+        "required": true,
+        "description": "const void*"
+      },
+      {
+        "name": "srcSize",
+        "type": "size_t",
+        "required": true,
+        "description": "size_t"
+      },
+      {
+        "name": "magicVariant",
+        "type": "unsigned",
+        "required": true,
+        "description": "unsigned"
+      }
+    ]
   }
 ]""")
 
 INVOCABLE_MAP = {inv["name"]: inv for inv in INVOCABLES}
+
+
+_C_TO_JSON_TYPE = {
+    "int": "integer", "unsigned": "integer", "unsigned int": "integer",
+    "long": "integer", "unsigned long": "integer", "size_t": "integer",
+    "uint32_t": "integer", "uint64_t": "integer", "int32_t": "integer",
+    "int64_t": "integer", "short": "integer", "unsigned short": "integer",
+    "float": "number", "double": "number",
+    "bool": "boolean",
+}
+
+
+def _c_type_to_json_type(c_type: str) -> str:
+    """Map a C type string to the closest JSON schema primitive type."""
+    t = c_type.lower().strip().rstrip("*").strip()
+    if t in _C_TO_JSON_TYPE:
+        return _C_TO_JSON_TYPE[t]
+    # pointer / char* / string variants → string
+    if "char" in t or "string" in t or "str" == t:
+        return "string"
+    # anything containing 'int' or 'long' → integer
+    if "int" in t or "long" in t:
+        return "integer"
+    return "string"
 
 
 def _build_openai_functions():
@@ -15515,9 +17492,10 @@ def _build_openai_functions():
         props = {}
         required = []
         for p in inv.get("parameters", []):
+            json_type = _c_type_to_json_type(p.get("type", "string"))
             props[p["name"]] = {
-                "type": "string",
-                "description": p.get("description", ""),
+                "type": json_type,
+                "description": p.get("description", p.get("type", "")),
             }
             if p.get("required", False):
                 required.append(p["name"])
@@ -15525,7 +17503,7 @@ def _build_openai_functions():
             "type": "function",
             "function": {
                 "name": inv["name"],
-                "description": inv.get("description") or f"Invoke {inv['name']} from test-component",
+                "description": inv.get("description") or f"Invoke {inv['name']} from zstd",
                 "parameters": {
                     "type": "object",
                     "properties": props,
@@ -15539,29 +17517,191 @@ def _build_openai_functions():
 OPENAI_FUNCTIONS = _build_openai_functions()
 
 
+# ── Semantic tool retrieval ─────────────────────────────────────────────────
+# Lazily embeds all tool descriptions on first chat request, then returns the
+# top-K tools most semantically relevant to the user's message.  This keeps
+# every binary's full export list discoverable while respecting OpenAI's
+# 128-tool hard cap.  Falls back to OPENAI_FUNCTIONS[:128] on any error.
+_TOOL_EMBED_CACHE: list = []
+_TOOL_EMBED_LOCK  = threading.Lock()
+_TOOL_EMBED_K     = 60   # tools sent to OpenAI per request
+
+
+def _retrieve_tools(user_message: str, client, k: int = _TOOL_EMBED_K) -> list:
+    """Return the top-k tools most relevant to user_message (semantic search)."""
+    global _TOOL_EMBED_CACHE
+    if not OPENAI_FUNCTIONS:
+        return []
+    if len(OPENAI_FUNCTIONS) <= k:
+        return OPENAI_FUNCTIONS  # small enough — no retrieval needed
+    try:
+        import math
+
+        def _norm(v: list) -> list:
+            mag = math.sqrt(sum(x * x for x in v))
+            return [x / mag for x in v] if mag else v
+
+        def _dot(a: list, b: list) -> float:
+            return sum(x * y for x, y in zip(a, b))
+
+        with _TOOL_EMBED_LOCK:
+            if not _TOOL_EMBED_CACHE:
+                texts = [
+                    f"{fn['function']['name']}: {fn['function']['description']}"
+                    for fn in OPENAI_FUNCTIONS
+                ]
+                resp = client.embeddings.create(
+                    model="text-embedding-3-small", input=texts
+                )
+                _TOOL_EMBED_CACHE[:] = [
+                    _norm(item.embedding)
+                    for item in sorted(resp.data, key=lambda x: x.index)
+                ]
+
+        q_resp = client.embeddings.create(
+            model="text-embedding-3-small", input=[user_message]
+        )
+        q = _norm(q_resp.data[0].embedding)
+        scores = [(_dot(q, vec), i) for i, vec in enumerate(_TOOL_EMBED_CACHE)]
+        scores.sort(reverse=True)
+        return [OPENAI_FUNCTIONS[i] for _, i in scores[:k]]
+    except Exception:
+        return OPENAI_FUNCTIONS[:128]  # graceful fallback
+
+
 # ── Execution helpers ───────────────────────────────────────────────────────
 
 def _execute_tool(name: str, args: dict) -> str:
     inv = INVOCABLE_MAP.get(name)
     if not inv:
         return f"Unknown tool: {name}"
-    execution = inv.get("execution", {})
+    # Support both flat {"execution": {...}} and rich MCP {"mcp": {"execution": {...}}}
+    execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method = execution.get("method", "")
     if method == "dll_import":
-        return _execute_dll(execution, args)
+        return _execute_dll(inv, execution, args)
+    if method == "gui_action":
+        return _execute_gui(execution, name, args)
     return _execute_cli(execution, name, args)
 
 
-def _execute_dll(execution: dict, args: dict) -> str:
-    dll_path = execution.get("dll_path", "")
+# C type map used by _execute_dll
+_CTYPES_RESTYPE = {
+    "void":           None,
+    "bool":           ctypes.c_bool,
+    "int":            ctypes.c_int,
+    "unsigned":       ctypes.c_uint,
+    "unsigned int":   ctypes.c_uint,
+    "long":           ctypes.c_long,
+    "unsigned long":  ctypes.c_ulong,
+    "size_t":         ctypes.c_size_t,
+    "float":          ctypes.c_float,
+    "double":         ctypes.c_double,
+    "char*":          ctypes.c_char_p,
+    "const char*":    ctypes.c_char_p,
+    "char *":         ctypes.c_char_p,
+    "const char *":   ctypes.c_char_p,
+}
+_CTYPES_ARGTYPE = {
+    "int":            ctypes.c_int,
+    "unsigned":       ctypes.c_uint,
+    "unsigned int":   ctypes.c_uint,
+    "long":           ctypes.c_long,
+    "unsigned long":  ctypes.c_ulong,
+    "size_t":         ctypes.c_size_t,
+    "float":          ctypes.c_float,
+    "double":         ctypes.c_double,
+    "bool":           ctypes.c_bool,
+    "string":         ctypes.c_char_p,
+    "str":            ctypes.c_char_p,
+    "char*":          ctypes.c_char_p,
+    "const char*":    ctypes.c_char_p,
+    "char *":         ctypes.c_char_p,
+    "const char *":   ctypes.c_char_p,
+}
+
+
+def _resolve_dll_path(raw: str) -> str:
+    """Return an absolute path for *raw*, searching likely anchors."""
+    from pathlib import Path as _P
+    p = _P(raw)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    # server lives at generated/<component>/server.py → project root is 2 dirs up
+    project_root = _P(__file__).resolve().parent.parent.parent
+    candidate = project_root / raw
+    if candidate.exists():
+        return str(candidate)
+    # also try relative to server's own directory
+    local = _P(__file__).resolve().parent / raw
+    if local.exists():
+        return str(local)
+    return raw  # best-effort; let ctypes give the real error
+
+
+def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
+    dll_path  = _resolve_dll_path(execution.get("dll_path", ""))
     func_name = execution.get("function_name", "")
+
+    # Return type: flat "return_type" field takes priority; fall back to
+    # signature.return_type from the rich MCP schema.
+    ret_str = (
+        inv.get("return_type")
+        or (inv.get("signature") or {}).get("return_type", "unknown")
+        or "unknown"
+    ).strip()
+    restype = _CTYPES_RESTYPE.get(ret_str.lower(), ctypes.c_size_t)
+
+    # Parameter list: flat "parameters" list or parsed from signature string
+    params = list(inv.get("parameters") or [])
+    if not params:
+        sig_str = (inv.get("signature") or {}).get("parameters", "")
+        if sig_str:
+            for chunk in sig_str.split(","):
+                tokens = chunk.strip().split()
+                if len(tokens) >= 2:
+                    # e.g. ["const", "char*", "buf"] or ["size_t", "n"]
+                    raw_type = " ".join(tokens[:-1]).lower().strip("*").rstrip()
+                    pname    = tokens[-1].lstrip("*")
+                    params.append({"name": pname, "type": raw_type})
+
     try:
         lib = ctypes.CDLL(dll_path)
-        fn = getattr(lib, func_name)
-        fn.restype = ctypes.c_size_t
-        # Pass positional string args if any were supplied.
-        c_args = [ctypes.c_char_p(v.encode()) for v in args.values() if isinstance(v, str)]
-        result = fn(*c_args) if c_args else fn()
+        fn  = getattr(lib, func_name)
+        fn.restype = restype
+
+        # Build ctypes arg list from the named args dict
+        c_args = []
+        if params and args:
+            for p in params:
+                pname = p.get("name", "")
+                ptype = p.get("type", "string").lower().strip("*").rstrip()
+                val   = args.get(pname)
+                if val is None:
+                    continue
+                atype = _CTYPES_ARGTYPE.get(ptype, ctypes.c_char_p)
+                if atype == ctypes.c_char_p:
+                    c_args.append(ctypes.c_char_p(str(val).encode()))
+                else:
+                    c_args.append(atype(int(val)))
+        elif args:
+            # No type metadata — guess from Python value type
+            for v in args.values():
+                if isinstance(v, bool):
+                    c_args.append(ctypes.c_bool(v))
+                elif isinstance(v, int):
+                    c_args.append(ctypes.c_size_t(v))
+                elif isinstance(v, float):
+                    c_args.append(ctypes.c_double(v))
+                elif isinstance(v, str):
+                    c_args.append(ctypes.c_char_p(v.encode()))
+
+        result = fn(*c_args)
+
+        # Decode bytes result from char* functions
+        if restype == ctypes.c_char_p:
+            if isinstance(result, bytes):
+                return f"Returned: {result.decode(errors='replace')}"
         return f"Returned: {result}"
     except Exception as exc:
         return f"DLL call error: {exc}"
@@ -15598,6 +17738,324 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
         return f"CLI error: {exc}"
 
 
+# ── GUI app state (persistent across HTTP requests) ─────────────────────────
+# A single-user demo stores one live pywinauto Application per exe_path.
+# The app stays alive between calls so "type hello" → "save as test.txt"
+# works as two separate HTTP requests against the same window.
+
+_GUI_APP_LOCK = threading.Lock()
+_GUI_APP_INSTANCES: dict = {}  # exe_path -> (Application, main_window)
+
+
+def _ensure_gui_app(exe_path: str):
+    """Return (app, win) for exe_path, launching the app if not already running.
+
+    Tries the win32 backend first (classic Win32 apps).  If no window is found,
+    automatically retries with the uia backend (WinUI3 / Win11 apps like
+    Notepad 10.x).
+    """
+    import time
+    import subprocess
+    import re
+    from pathlib import Path
+    try:
+        from pywinauto.application import Application  # type: ignore
+    except ImportError:
+        raise RuntimeError(
+            "pywinauto is not installed. "
+            "Run: pip install pywinauto"
+        )
+
+    with _GUI_APP_LOCK:
+        entry = _GUI_APP_INSTANCES.get(exe_path)
+        if entry is not None:
+            app, win, backend = entry
+            try:
+                win.exists()
+                return app, win
+            except Exception:
+                _GUI_APP_INSTANCES.pop(exe_path, None)
+
+        last_exc = None
+
+        # ── Attempt A: win32 backend (classic Win32 apps) ─────────────────
+        # Run inside a thread so a hung top_window() gets a hard deadline.
+        # STARTUPINFO SW_SHOWMINNOACTIVE keeps the window minimised in taskbar.
+        import concurrent.futures as _cf
+
+        def _launch_win32():
+            _app = Application(backend="win32")
+            si = subprocess.STARTUPINFO()
+            si.dwFlags = 0x00000001    # STARTF_USESHOWWINDOW
+            si.wShowWindow = 7         # SW_SHOWMINNOACTIVE
+            _proc = subprocess.Popen([exe_path], startupinfo=si)
+            time.sleep(1.8)
+            _app = Application(backend="win32").connect(process=_proc.pid, timeout=3)
+            _win = _app.top_window()
+            _win.handle  # raises immediately if no window under this PID
+            return _app, _win
+
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(_launch_win32)
+            try:
+                app, win = _fut.result(timeout=7)
+                _GUI_APP_INSTANCES[exe_path] = (app, win, "win32")
+                return app, win
+            except Exception as exc:
+                last_exc = exc  # win32 failed — fall through to UIA
+
+        # ── Attempt B: UIA + shell-launch (MSIX / WinUI3 apps) ───────────
+        # Win11 Notepad (and modern Calculator) use MSIX stubs that exit
+        # immediately — pywinauto loses the PID.  Strategy:
+        #
+        #   1. Snapshot existing top-level HWNDs with win32gui (preferred).
+        #   2. Shell-launch so Windows resolves the MSIX package.
+        #   3. Wait for the real process to create its window.
+        #   4. Diff HWNDs → the new window IS the app; connect by handle.
+        #
+        # This bypasses all title/path guessing and works regardless of
+        # what title or process-name Win11 Notepad registers.
+        # Falls back to title-pattern loop if win32gui is unavailable.
+        try:
+            # ── B1: HWND-diff via win32gui (reliable) ─────────────────────
+            try:
+                import win32gui as _w32gui  # type: ignore
+
+                def _snap():
+                    _hwnds: set = set()
+                    def _cb(h, _):
+                        if _w32gui.IsWindowVisible(h) and _w32gui.GetWindowText(h):
+                            _hwnds.add(h)
+                    _w32gui.EnumWindows(_cb, None)
+                    return _hwnds
+
+                before = _snap()
+                subprocess.Popen(f'start "" "{exe_path}"', shell=True)
+                time.sleep(4.0)
+                after = _snap()
+                new_hwnds = after - before
+                if not new_hwnds:
+                    raise RuntimeError(
+                        "No new top-level windows appeared after launching "
+                        f"{exe_path!r} — HWND diff came up empty"
+                    )
+                hwnd = next(iter(new_hwnds))
+                app = Application(backend="uia").connect(handle=hwnd, timeout=5)
+            except ImportError:
+                # win32gui not available — fall back to title patterns
+                subprocess.Popen(f'start "" "{exe_path}"', shell=True)
+                time.sleep(3.5)
+                exe_stem = Path(exe_path).stem
+                app = None
+                for connect_kw in [
+                    {"path": exe_path},
+                    {"title_re": f"(?i).*{re.escape(exe_stem)}.*"},
+                    {"title_re": "(?i).*Untitled.*"},
+                    {"title_re": "(?i).*New Tab.*"},
+                ]:
+                    try:
+                        app = Application(backend="uia").connect(timeout=5, **connect_kw)
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                if app is None:
+                    raise RuntimeError(
+                        f"UIA connect failed after shell-launch: {last_exc}"
+                    )
+
+            win = app.top_window()
+            _GUI_APP_INSTANCES[exe_path] = (app, win, "uia")
+            return app, win
+        except Exception as exc:
+            last_exc = exc
+
+        raise RuntimeError(
+            f"Could not start GUI app {exe_path!r}: {last_exc}"
+        )
+
+
+def _execute_gui(execution: dict, name: str, args: dict) -> str:
+    """Execute a GUI action against a live pywinauto-controlled window.
+
+    Supported action_type values:
+        menu_click  - navigate a menu path, e.g. ["File", "Save As"]
+        type_text   - type text into the active edit control
+        get_text    - return text content of the main edit control
+        save_as     - open File→Save As dialog and save with given filename
+        close_app   - kill the application process
+    """
+    import time
+    exe_path = execution.get("exe_path", "")
+    action_type = execution.get("action_type", "menu_click")
+    menu_path = execution.get("menu_path", [])
+
+    try:
+        app, win = _ensure_gui_app(exe_path)
+    except Exception as exc:
+        return f"GUI launch error: {exc}"
+
+    try:
+        # ── type_text ────────────────────────────────────────────────────────
+        if action_type == "type_text":
+            text = args.get("text", "")
+            win.set_focus()
+            typed = False
+            # Try progressively broader strategies to reach the edit control
+            for class_name in ("RichEditD2DPT", "Edit", "RichEdit20W", "RICHEDIT50W"):
+                try:
+                    edit = win.child_window(class_name=class_name)
+                    edit.set_focus()
+                    edit.type_keys(text, with_spaces=True)
+                    typed = True
+                    break
+                except Exception:
+                    pass
+            if not typed:
+                # UIA fallback — find Document or text area by control type
+                try:
+                    doc = win.child_window(control_type="Document")
+                    doc.set_focus()
+                    doc.type_keys(text, with_spaces=True)
+                    typed = True
+                except Exception:
+                    pass
+            if not typed:
+                # Last resort: type into the top-level window
+                win.type_keys(text, with_spaces=True)
+            return f"Typed: {repr(text)}"
+
+        # ── get_text ─────────────────────────────────────────────────────────
+        elif action_type == "get_text":
+            for class_name in ("RichEditD2DPT", "Edit", "RichEdit20W", "RICHEDIT50W"):
+                try:
+                    edit = win.child_window(class_name=class_name)
+                    return edit.window_text()
+                except Exception:
+                    pass
+            try:
+                doc = win.child_window(control_type="Document")
+                return doc.window_text()
+            except Exception:
+                pass
+            return win.window_text()
+
+        # ── save_as ──────────────────────────────────────────────────────────
+        elif action_type == "save_as":
+            filename = (
+                args.get("filename")
+                or args.get("name")
+                or args.get("file")
+                or "output.txt"
+            )
+            win.set_focus()
+            time.sleep(0.2)
+
+            # Trigger Save As — try multiple methods in order
+            triggered = False
+            for _trigger in (
+                lambda: win.menu_select("File->Save As"),       # classic Win32
+                lambda: win.type_keys("^+s"),                   # Ctrl+Shift+S (Win11 Notepad)
+                lambda: win.type_keys("%fa"),                   # Alt+F A
+                lambda: win.type_keys("{VK_MENU}fa"),           # same via VK
+            ):
+                try:
+                    _trigger()
+                    triggered = True
+                    break
+                except Exception:
+                    pass
+            if not triggered:
+                return "Could not trigger Save As dialog"
+
+            time.sleep(1.2)  # Wait for the shell dialog to appear
+
+            # Locate the Save As dialog — try multiple title patterns
+            dlg = None
+            for _title in ("Save As", "Save as", "Save As.*", ".*Save.*"):
+                try:
+                    dlg = app.window(title_re=_title)
+                    dlg.wait("visible", timeout=4)
+                    break
+                except Exception:
+                    dlg = None
+
+            if dlg is None:
+                try:
+                    dlg = app.top_window()
+                except Exception as exc:
+                    return f"Save As dialog not found: {exc}"
+
+            try:
+                fn_ctrl = None
+                for _lookup in (
+                    lambda: dlg.child_window(title="File name:", control_type="Edit"),
+                    lambda: dlg.child_window(class_name="Edit", found_index=0),
+                    lambda: dlg.child_window(control_type="ComboBox").child_window(class_name="Edit"),
+                    lambda: dlg.child_window(auto_id="1001"),
+                ):
+                    try:
+                        fn_ctrl = _lookup()
+                        fn_ctrl.wrapper_object()
+                        break
+                    except Exception:
+                        fn_ctrl = None
+
+                if fn_ctrl is not None:
+                    fn_ctrl.set_focus()
+                    fn_ctrl.set_text("")
+                    fn_ctrl.type_keys(filename, with_spaces=True)
+                else:
+                    import pywinauto.keyboard as _kb  # type: ignore
+                    _kb.send_keys(filename)
+
+                time.sleep(0.3)
+                try:
+                    dlg.child_window(title="Save", control_type="Button").click()
+                except Exception:
+                    try:
+                        dlg.child_window(title_re="Save.*", control_type="Button").click()
+                    except Exception:
+                        import pywinauto.keyboard as _kb  # type: ignore
+                        _kb.send_keys("{ENTER}")
+
+                time.sleep(0.6)
+                return f"Saved as: {filename}"
+            except Exception as dlg_exc:
+                return f"Save As dialog interaction error: {dlg_exc}"
+
+        # ── close_app ────────────────────────────────────────────────────────
+        elif action_type == "close_app":
+            with _GUI_APP_LOCK:
+                _GUI_APP_INSTANCES.pop(exe_path, None)
+            try:
+                app.kill()
+            except Exception:
+                pass
+            return "Application closed"
+
+        # ── menu_click ───────────────────────────────────────────────────────
+        elif action_type == "menu_click":
+            if not menu_path:
+                return "No menu_path specified for menu_click action"
+            try:
+                menu_str = "->".join(menu_path)  # pywinauto separator
+                win.menu_select(menu_str)
+                time.sleep(0.3)
+                sep = " -> "
+                return f"Clicked menu: {sep.join(menu_path)}"
+            except Exception as menu_exc:
+                return f"Menu click error for {menu_path}: {menu_exc}"
+
+        else:
+            return f"Unknown GUI action_type: {action_type!r}"
+
+    except Exception as exc:
+        # If something went wrong (window died, etc.) clear the cached instance
+        with _GUI_APP_LOCK:
+            _GUI_APP_INSTANCES.pop(exe_path, None)
+        return f"GUI action error ({action_type}): {exc}"
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -15629,12 +18087,12 @@ def chat():
 
     client = OpenAI(
         api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL") or None,
+        base_url=os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1",
     )
     model = os.getenv("OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
     system_prompt = (
-        "You are a helpful assistant with access to binary tools from test-component. "
+        "You are a helpful assistant with access to binary tools from zstd. "
         "When a user asks you to call or test a function, use the provided tools. "
         "Explain what the tool does and report its output clearly."
     )
@@ -15645,11 +18103,12 @@ def chat():
         + [{"role": "user", "content": user_message}]
     )
 
+    _tools = _retrieve_tools(user_message, client) or None
     response = client.chat.completions.create(
         model=model,
         messages=messages,
-        tools=OPENAI_FUNCTIONS or None,
-        tool_choice="auto" if OPENAI_FUNCTIONS else "none",
+        tools=_tools or None,
+        tool_choice="auto" if _tools else "none",
     )
 
     msg = response.choices[0].message
@@ -15702,4 +18161,4 @@ def download_invocables():
 
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    app.run(port=5000, debug=False)

@@ -1,23 +1,4 @@
-"""
-section4_generate_server.py
-Generates a Flask-based MCP server with /tools, /invoke, and /chat endpoints
-from a selected-invocables.json file. The /chat endpoint uses OpenAI function
-calling (compatible with api.openai.com and Azure OpenAI via .env variables).
-"""
-
-import json
-import os
-import textwrap
-
-INPUT_PATH = os.path.join("artifacts", "selected-invocables.json")
-OUTPUT_BASE = "generated"
-
-# ---------------------------------------------------------------------------
-# Server template — placeholders are replaced by _inject() below.
-# __COMPONENT_NAME__  → component name string (no quotes, used in comments)
-# __INVOCABLES_JSON__ → JSON-serialised list of invocable dicts
-# ---------------------------------------------------------------------------
-SERVER_TEMPLATE = r'''# Generated MCP server — __COMPONENT_NAME__
+# Generated MCP server — mcp-calc
 # Run:  pip install -r requirements.txt  &&  cp .env.example .env  (fill values)
 #       python server.py
 
@@ -42,7 +23,98 @@ if not os.environ.get("OPENAI_BASE_URL"):
 app = Flask(__name__, static_folder="static")
 
 # ── Tool registry (injected by generator) ──────────────────────────────────
-INVOCABLES = json.loads(r"""__INVOCABLES_JSON__""")
+INVOCABLES = json.loads(r"""[
+  {
+    "name": "calc",
+    "kind": "cli",
+    "confidence": "low",
+    "description": "Executable file (no help output detected)",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "subprocess",
+      "executable_path": "C:\\Windows\\System32\\calc.exe",
+      "arg_style": "flag"
+    }
+  },
+  {
+    "name": "type_text",
+    "kind": "gui_action",
+    "confidence": "high",
+    "description": "Type the given text into the active focused control (e.g. the text editor area of Notepad). Preserves spaces and newlines.",
+    "return_type": "unknown",
+    "parameters": [
+      {
+        "name": "text",
+        "type": "string",
+        "required": true,
+        "description": "str"
+      }
+    ],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "type_text",
+      "menu_path": [],
+      "gui_backend": "uia"
+    }
+  },
+  {
+    "name": "save_as",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Open the File \u2192 Save As dialog and save the document with the specified filename. Supports relative and absolute paths.",
+    "return_type": "unknown",
+    "parameters": [
+      {
+        "name": "filename",
+        "type": "string",
+        "required": true,
+        "description": "str"
+      }
+    ],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "save_as",
+      "menu_path": [
+        "File",
+        "Save As"
+      ],
+      "gui_backend": "uia"
+    }
+  },
+  {
+    "name": "get_text",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Return the full text content of the main editing area (e.g. all text currently in the Notepad window).",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "get_text",
+      "menu_path": [],
+      "gui_backend": "uia"
+    }
+  },
+  {
+    "name": "close_app",
+    "kind": "gui_action",
+    "confidence": "high",
+    "description": "Close the application. Sends Alt+F4 and discards unsaved changes.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "close_app",
+      "menu_path": [],
+      "gui_backend": "uia"
+    }
+  }
+]""")
 
 INVOCABLE_MAP = {inv["name"]: inv for inv in INVOCABLES}
 
@@ -89,7 +161,7 @@ def _build_openai_functions():
             "type": "function",
             "function": {
                 "name": inv["name"],
-                "description": inv.get("description") or f"Invoke {inv['name']} from __COMPONENT_NAME__",
+                "description": inv.get("description") or f"Invoke {inv['name']} from mcp-calc",
                 "parameters": {
                     "type": "object",
                     "properties": props,
@@ -301,32 +373,15 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
     )
     if not target:
         return f"CLI error: no executable path configured for '{name}'"
-    # If the invocable name matches the exe stem this is a "launch the app"
-    # invocable (e.g. calc, notepad).  Run it with Popen so its GUI window
-    # is NOT suppressed, and don't pass the name as a spurious CLI argument.
     from pathlib import Path as _Path
     exe_stem = _Path(target).stem.lower()
     if exe_stem == name.lower():
-        # Route through _ensure_gui_app so the window is cached immediately;
-        # subsequent button_click calls will reuse it instead of re-launching.
-        # Peek at sibling invocables to detect WinUI3/MSIX apps (gui_backend=uia)
-        # so _ensure_gui_app can skip the win32 Attempt A that would open a
-        # wasted extra window before failing over to UIA.
-        _preferred = ""
-        for _inv in INVOCABLES:
-            _exec = _inv.get("execution") or {}
-            if (_exec.get("exe_path", "").lower() == target.lower()
-                    and _exec.get("gui_backend") == "uia"):
-                _preferred = "uia"
-                break
         try:
-            _ensure_gui_app(target, preferred_backend=_preferred)
+            _ensure_gui_app(target)
             return f"Launched {_Path(target).name}"
         except Exception as exc:
             return f"CLI error: {exc}"
-    # Standard CLI invocation: target_exe subcommand [args...]
     cmd = [target, name] + [str(v) for v in args.values()]
-    # Suppress any GUI window the binary might open (Windows only).
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         r = subprocess.run(
@@ -350,16 +405,13 @@ _GUI_APP_LOCK = threading.Lock()
 _GUI_APP_INSTANCES: dict = {}  # exe_path -> (Application, main_window)
 
 
-def _ensure_gui_app(exe_path: str, preferred_backend: str = ""):
+def _ensure_gui_app(exe_path: str):
     """Return (app, win) for exe_path, launching the app if not already running.
 
     Tries the win32 backend first (classic Win32 apps).  If no window is found,
     automatically retries with the uia backend (WinUI3 / Win11 apps like
     Notepad 10.x).
-
-    Pass preferred_backend='uia' to skip the win32 attempt entirely — this
-    avoids opening a wasted extra window for MSIX/WinUI3 apps like Calculator.
-    ""
+    """
     import time
     import subprocess
     import re
@@ -385,31 +437,30 @@ def _ensure_gui_app(exe_path: str, preferred_backend: str = ""):
         last_exc = None
 
         # ── Attempt A: win32 backend (classic Win32 apps) ─────────────────
-        # Skipped for known WinUI3/MSIX apps (preferred_backend='uia') because
-        # the stub process exits immediately, causing a wasted second window.
+        # Run inside a thread so a hung top_window() gets a hard deadline.
+        # STARTUPINFO SW_SHOWMINNOACTIVE keeps the window minimised in taskbar.
         import concurrent.futures as _cf
 
-        if preferred_backend != "uia":
-            def _launch_win32():
-                _app = Application(backend="win32")
-                si = subprocess.STARTUPINFO()
-                si.dwFlags = 0x00000001    # STARTF_USESHOWWINDOW
-                si.wShowWindow = 7         # SW_SHOWMINNOACTIVE
-                _proc = subprocess.Popen([exe_path], startupinfo=si)
-                time.sleep(1.8)
-                _app = Application(backend="win32").connect(process=_proc.pid, timeout=3)
-                _win = _app.top_window()
-                _win.handle  # raises immediately if no window under this PID
-                return _app, _win
+        def _launch_win32():
+            _app = Application(backend="win32")
+            si = subprocess.STARTUPINFO()
+            si.dwFlags = 0x00000001    # STARTF_USESHOWWINDOW
+            si.wShowWindow = 7         # SW_SHOWMINNOACTIVE
+            _proc = subprocess.Popen([exe_path], startupinfo=si)
+            time.sleep(1.8)
+            _app = Application(backend="win32").connect(process=_proc.pid, timeout=3)
+            _win = _app.top_window()
+            _win.handle  # raises immediately if no window under this PID
+            return _app, _win
 
-            with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                _fut = _pool.submit(_launch_win32)
-                try:
-                    app, win = _fut.result(timeout=7)
-                    _GUI_APP_INSTANCES[exe_path] = (app, win, "win32")
-                    return app, win
-                except Exception as exc:
-                    last_exc = exc  # win32 failed — fall through to UIA
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(_launch_win32)
+            try:
+                app, win = _fut.result(timeout=7)
+                _GUI_APP_INSTANCES[exe_path] = (app, win, "win32")
+                return app, win
+            except Exception as exc:
+                last_exc = exc  # win32 failed — fall through to UIA
 
         # ── Attempt B: UIA + shell-launch (MSIX / WinUI3 apps) ───────────
         # Win11 Notepad (and modern Calculator) use MSIX stubs that exit
@@ -491,7 +542,6 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
         type_text       - type text into the active edit control
         get_text        - return text content of the main edit control
         save_as         - open File→Save As dialog and save with given filename
-        open_file       - open File→Open dialog and load a specific filename
         close_app       - kill the application process
     """
     import re
@@ -550,85 +600,9 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
                 pass
             return win.window_text()
 
-        # ── open_file ────────────────────────────────────────────────────────
-        elif action_type == "open_file":
-            filename = (
-                args.get("filename")
-                or args.get("name")
-                or args.get("file")
-                or ""
-            )
-            if not filename:
-                return "open_file requires a filename argument"
-            win.set_focus()
-            time.sleep(0.2)
-            # Trigger File > Open
-            triggered = False
-            for _trigger in (
-                lambda: win.menu_select("File->Open"),
-                lambda: win.type_keys("^o"),
-                lambda: win.type_keys("%fo"),
-            ):
-                try:
-                    _trigger()
-                    triggered = True
-                    break
-                except Exception:
-                    pass
-            if not triggered:
-                return "Could not trigger Open dialog"
-            time.sleep(1.2)
-            # Locate the Open dialog
-            dlg = None
-            for _title in ("Open", "Open.*", ".*Open.*"):
-                try:
-                    dlg = app.window(title_re=_title)
-                    dlg.wait("visible", timeout=4)
-                    break
-                except Exception:
-                    dlg = None
-            if dlg is None:
-                try:
-                    dlg = app.top_window()
-                except Exception as exc:
-                    return f"Open dialog not found: {exc}"
-            try:
-                fn_ctrl = None
-                for _lookup in (
-                    lambda: dlg.child_window(title="File name:", control_type="Edit"),
-                    lambda: dlg.child_window(class_name="Edit", found_index=0),
-                    lambda: dlg.child_window(control_type="ComboBox").child_window(class_name="Edit"),
-                    lambda: dlg.child_window(auto_id="1001"),
-                ):
-                    try:
-                        fn_ctrl = _lookup()
-                        fn_ctrl.wrapper_object()
-                        break
-                    except Exception:
-                        fn_ctrl = None
-                if fn_ctrl is not None:
-                    fn_ctrl.set_focus()
-                    fn_ctrl.set_text("")
-                    fn_ctrl.type_keys(filename, with_spaces=True)
-                else:
-                    import pywinauto.keyboard as _kb  # type: ignore
-                    _kb.send_keys(filename)
-                time.sleep(0.3)
-                try:
-                    dlg.child_window(title="Open", control_type="Button").click()
-                except Exception:
-                    try:
-                        dlg.child_window(title_re="Open.*", control_type="Button").click()
-                    except Exception:
-                        import pywinauto.keyboard as _kb  # type: ignore
-                        _kb.send_keys("{ENTER}")
-                time.sleep(0.8)
-                return f"Opened file: {filename}"
-            except Exception as dlg_exc:
-                return f"Open dialog interaction error: {dlg_exc}"
-
         # ── save_as ──────────────────────────────────────────────────────────
-        elif action_type == "save_as":            filename = (
+        elif action_type == "save_as":
+            filename = (
                 args.get("filename")
                 or args.get("name")
                 or args.get("file")
@@ -849,7 +823,7 @@ def chat():
     model = os.getenv("OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
     system_prompt = (
-        "You are a helpful assistant with access to binary tools from __COMPONENT_NAME__. "
+        "You are a helpful assistant with access to binary tools from mcp-calc. "
         "When a user asks you to call or test a function, use the provided tools. "
         "Explain what the tool does and report its output clearly."
     )
@@ -919,264 +893,3 @@ def download_invocables():
 
 if __name__ == "__main__":
     app.run(port=5000, debug=False)
-'''
-
-# ---------------------------------------------------------------------------
-# Chat UI template
-# ---------------------------------------------------------------------------
-HTML_TEMPLATE = r'''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP Factory — __COMPONENT_NAME__</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --accent: #58a6ff; --user-bg: #1f6feb; --tool-bg: #1a3a1a;
-    --text: #c9d1d9; --muted: #8b949e; --error: #f85149;
-    --radius: 10px; --font: system-ui, -apple-system, sans-serif;
-  }
-  body { background: var(--bg); color: var(--text); font-family: var(--font);
-         display: flex; flex-direction: column; height: 100dvh; }
-  header { background: var(--surface); border-bottom: 1px solid var(--border);
-           padding: 12px 20px; display: flex; align-items: center;
-           justify-content: space-between; flex-shrink: 0; }
-  header h1 { font-size: 1rem; font-weight: 600; color: var(--accent); }
-  header span { font-size: .8rem; color: var(--muted); }
-  #download-btn {
-    background: var(--surface); border: 1px solid var(--border); color: var(--accent);
-    padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: .8rem;
-    text-decoration: none; transition: background .15s;
-  }
-  #download-btn:hover { background: var(--border); }
-  #chat-window { flex: 1; overflow-y: auto; padding: 20px;
-                 display: flex; flex-direction: column; gap: 12px; }
-  .bubble { max-width: 75%; padding: 10px 14px; border-radius: var(--radius);
-            line-height: 1.5; font-size: .9rem; white-space: pre-wrap; word-break: break-word; }
-  .bubble.user { background: var(--user-bg); align-self: flex-end;
-                 border-bottom-right-radius: 3px; }
-  .bubble.assistant { background: var(--surface); border: 1px solid var(--border);
-                       align-self: flex-start; border-bottom-left-radius: 3px; }
-  .bubble.error { background: #2d1117; border: 1px solid var(--error);
-                   color: var(--error); align-self: flex-start; }
-  .tool-block { background: var(--tool-bg); border: 1px solid #2e5c2e;
-                border-radius: var(--radius); padding: 10px 14px; font-size: .8rem;
-                align-self: flex-start; max-width: 75%; }
-  .tool-block .tool-name { color: #3fb950; font-weight: 600; margin-bottom: 4px; }
-  .tool-block .tool-args { color: var(--muted); margin-bottom: 4px; }
-  .tool-block .tool-result { color: var(--text); white-space: pre-wrap; word-break: break-word; }
-  .typing { align-self: flex-start; color: var(--muted); font-size: .85rem;
-            padding: 6px 14px; animation: blink .9s infinite; }
-  @keyframes blink { 0%,100% { opacity:.4 } 50% { opacity:1 } }
-  footer { background: var(--surface); border-top: 1px solid var(--border);
-           padding: 12px 16px; display: flex; gap: 10px; flex-shrink: 0; }
-  #msg-input { flex: 1; background: var(--bg); border: 1px solid var(--border);
-               color: var(--text); border-radius: 8px; padding: 10px 14px;
-               font-size: .9rem; resize: none; height: 44px; line-height: 1.4;
-               outline: none; transition: border .15s; }
-  #msg-input:focus { border-color: var(--accent); }
-  #send-btn { background: var(--accent); color: #000; border: none; border-radius: 8px;
-              padding: 0 20px; font-size: .9rem; font-weight: 600; cursor: pointer;
-              transition: opacity .15s; }
-  #send-btn:disabled { opacity: .4; cursor: not-allowed; }
-  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>MCP Factory &mdash; __COMPONENT_NAME__</h1>
-  <div style="display:flex;align-items:center;gap:16px">
-    <span id="model-label">model: gpt-4o-mini</span>
-    <a id="download-btn" href="/download/invocables" download="selected-invocables.json">
-      &#8595; Download invocables.json
-    </a>
-  </div>
-</header>
-<div id="chat-window">
-  <div class="bubble assistant">
-    Hi! I have access to the tools exported by <strong>__COMPONENT_NAME__</strong>.
-    Ask me to call a function, describe what one does, or list available tools.
-  </div>
-</div>
-<footer>
-  <textarea id="msg-input" placeholder="Ask me to call a function…" rows="1"></textarea>
-  <button id="send-btn">Send</button>
-</footer>
-
-<script>
-  const chatWindow = document.getElementById('chat-window');
-  const msgInput   = document.getElementById('msg-input');
-  const sendBtn    = document.getElementById('send-btn');
-  let history = [];
-
-  function scrollToBottom() {
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-  }
-
-  function appendBubble(cls, text) {
-    const d = document.createElement('div');
-    d.className = `bubble ${cls}`;
-    d.textContent = text;
-    chatWindow.appendChild(d);
-    scrollToBottom();
-    return d;
-  }
-
-  function appendToolBlock(t) {
-    const d = document.createElement('div');
-    d.className = 'tool-block';
-    const argsStr = Object.keys(t.args || {}).length
-      ? JSON.stringify(t.args, null, 2) : '(no args)';
-    d.innerHTML =
-      `<div class="tool-name">&#10551; ${t.name}</div>` +
-      `<div class="tool-args">args: ${argsStr}</div>` +
-      `<div class="tool-result">${t.result}</div>`;
-    chatWindow.appendChild(d);
-    scrollToBottom();
-  }
-
-  function setLoading(v) {
-    sendBtn.disabled = v;
-    msgInput.disabled = v;
-  }
-
-  async function sendMessage() {
-    const text = msgInput.value.trim();
-    if (!text) return;
-    msgInput.value = '';
-    msgInput.style.height = '44px';
-
-    appendBubble('user', text);
-    setLoading(true);
-
-    const typing = document.createElement('div');
-    typing.className = 'typing';
-    typing.textContent = 'Thinking…';
-    chatWindow.appendChild(typing);
-    scrollToBottom();
-
-    try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history }),
-      });
-      const data = await res.json();
-      chatWindow.removeChild(typing);
-
-      if (data.error) {
-        appendBubble('error', 'Error: ' + data.error);
-      } else {
-        (data.tool_outputs || []).forEach(t => appendToolBlock(t));
-        appendBubble('assistant', data.reply);
-        history = data.updated_history || history;
-      }
-    } catch (err) {
-      chatWindow.removeChild(typing);
-      appendBubble('error', 'Network error: ' + err.message);
-    }
-
-    setLoading(false);
-    msgInput.focus();
-  }
-
-  sendBtn.addEventListener('click', sendMessage);
-  msgInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  });
-  msgInput.addEventListener('input', () => {
-    msgInput.style.height = 'auto';
-    msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
-  });
-
-  // Fetch and display model from server env
-  fetch('/tools').then(r => r.json()).then(tools => {
-    document.getElementById('model-label').textContent =
-      `${tools.length} tools loaded`;
-  }).catch(() => {});
-</script>
-</body>
-</html>
-'''
-
-ENV_EXAMPLE = """\
-# Copy to .env and fill in your credentials.
-# Works with both api.openai.com (set OPENAI_BASE_URL=) and Azure OpenAI.
-
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=
-OPENAI_DEPLOYMENT=gpt-4o-mini
-"""
-
-REQUIREMENTS = """\
-flask>=3.0
-openai>=1.0
-python-dotenv>=1.0
-"""
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _inject(template: str, component_name: str, invocables_json: str) -> str:
-    """Replace all placeholder tokens in a template string."""
-    return (
-        template
-        .replace("__COMPONENT_NAME__", component_name)
-        .replace("__INVOCABLES_JSON__", invocables_json)
-    )
-
-
-def _write(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    print(f"  wrote {path}")
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main():
-    if not os.path.exists(INPUT_PATH):
-        raise FileNotFoundError(f"Missing {INPUT_PATH}")
-
-    with open(INPUT_PATH, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-
-    component_name = data["component_name"]
-    invocables = data["selected_invocables"]
-
-    project_path = os.path.join(OUTPUT_BASE, component_name)
-    static_path = os.path.join(project_path, "static")
-    os.makedirs(static_path, exist_ok=True)
-
-    invocables_json = json.dumps(invocables, indent=2)
-
-    print(f"Generating MCP server for '{component_name}' ({len(invocables)} tools) …")
-
-    _write(
-        os.path.join(project_path, "server.py"),
-        _inject(SERVER_TEMPLATE, component_name, invocables_json),
-    )
-    _write(
-        os.path.join(static_path, "index.html"),
-        _inject(HTML_TEMPLATE, component_name, invocables_json),
-    )
-    _write(os.path.join(project_path, "requirements.txt"), REQUIREMENTS)
-    _write(os.path.join(project_path, ".env.example"), ENV_EXAMPLE)
-
-    print(f"\nDone!  cd {project_path}")
-    print("  pip install -r requirements.txt")
-    print("  cp .env.example .env   # then fill in your API key")
-    print("  python server.py")
-    print("  open http://localhost:5000")
-
-
-if __name__ == "__main__":
-    main()

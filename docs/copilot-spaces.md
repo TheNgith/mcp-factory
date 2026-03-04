@@ -59,6 +59,10 @@
 - 2026-01-20: 8-Module Refactoring + CLI Orchestration
 - 2026-01-20: Production Polish + Developer Experience
 - 2026-01-21: Confidence Scoring + Frictionless Setup (12 commits)
+- 2026-02-22: §2.a Directory Walk — Installed-Instance Target
+- 2026-02-22: Mac Compatibility Guide + Windows Unicode Fix
+- 2026-02-27: §4 /chat Endpoint + §5 Chat UI + CREATE_NO_WINDOW Suppression
+- 2026-03-04: GUI Pipeline Fixes — Exe Launch, UIA-First Backend, Open-File Action
 
 ---
 
@@ -142,7 +146,12 @@
 **Current ADRs:**
 - **ADR-0001:** Initial Scope (project boundaries)
 - **ADR-0002:** Modular Analyzer Architecture (8-module design)
-- **ADR-0003:** Frictionless UX & Confidence Analysis (new, 2026-01-21)
+- **ADR-0003:** Frictionless UX & Confidence Analysis
+- **ADR-0004:** JSON Output Schema v2.0 & Production Validation
+- **ADR-0005:** Hybrid Analysis & Artifact Hygiene
+- **ADR-0006:** Spec Gap Closure — Legacy Protocol Analyzers
+- **ADR-0007:** Directory Scan — §2.a Installed-Instance Target
+- **ADR-0008:** GUI Pipeline — Exe Launch, UIA-First Backend, Open-File Action
 
 ---
 
