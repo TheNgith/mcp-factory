@@ -51,6 +51,13 @@ class Invocable:
     type_name: Optional[str] = None
     is_static: Optional[bool] = None
     clsid: Optional[str] = None
+
+    # GUI-specific fields (pywinauto)
+    gui_menu_path: Optional[List[str]] = None   # e.g. ["File", "Save As"]
+    gui_action_type: Optional[str] = None       # "menu_click" | "keyboard_shortcut" | "button_click" | "type_text" | "save_as" | "get_text" | "close_app"
+    gui_backend: Optional[str] = None           # "win32" (classic) | "uia" (WinUI3/MSIX) — detected at discovery time
+    gui_kb_shortcut: Optional[str] = None       # e.g. "^n" — keyboard fallback for WinUI3 apps that lack Win32 menus
+    gui_button_name: Optional[str] = None       # e.g. "7", "÷" — UIA button label for button_click actions
     
     def to_dict(self) -> dict:
         """Convert Invocable to flat MCP-compatible JSON dict."""
@@ -413,6 +420,22 @@ class Invocable:
                 "script_path": self.dll_path,
                 "example": f"cmd /c \"{self.dll_path}\"",
             }
+
+        elif self.source_type == "gui_action":
+            meta: dict = {
+                "method": "gui_action",
+                "exe_path": self.dll_path or "",
+                "action_type": self.gui_action_type or "menu_click",
+                "menu_path": self.gui_menu_path or [],
+                "gui_backend": self.gui_backend or "win32",
+            }
+            if self.gui_kb_shortcut:
+                meta["kb_shortcut"] = self.gui_kb_shortcut
+            if self.gui_action_type == "keyboard_shortcut" and self.gui_kb_shortcut:
+                meta["keys"] = self.gui_kb_shortcut
+            if self.gui_button_name is not None:
+                meta["button_name"] = self.gui_button_name
+            return meta
 
         elif self.source_type in ("sql_procedure", "sql_function", "sql_view",
                                    "sql_table", "sql_trigger"):

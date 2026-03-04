@@ -24,6 +24,7 @@ from com_scan import scan_com_registry, com_objects_to_invocables
 from import_analyzer import analyze_imports, format_capabilities_summary
 from rpc_analyzer import analyze_rpc, rpc_to_invocables, format_rpc_summary
 from cli_analyzer import analyze_cli
+from gui_analyzer import analyze_gui, PYWINAUTO_AVAILABLE
 from script_analyzer import analyze_script
 from sql_analyzer import analyze_sql
 from js_analyzer import analyze_js
@@ -40,6 +41,7 @@ ANALYZER_REGISTRY = {
     'dotnet':   {'name': '.NET Assembly Analyzer',  'enabled': True},
     'com':      {'name': 'COM Registry Analyzer',   'enabled': True},
     'cli':      {'name': 'CLI Tool Analyzer',        'enabled': True},
+    'gui':      {'name': 'GUI App Analyzer (pywinauto)', 'enabled': True},
     'script':   {'name': 'Script Analyzer',          'enabled': True},
     'sql':      {'name': 'SQL Analyzer',             'enabled': True},
     'js':       {'name': 'JavaScript Analyzer',      'enabled': True},
@@ -683,48 +685,89 @@ def analyze_scripting_language(target: Path, out_dir: Path, base_name: str,
 
 
 def analyze_cli_tool(exe_path: Path, out_dir: Path, base_name: str, args) -> int:
-    """CLI tool analysis pipeline."""
+    """CLI + GUI tool analysis pipeline.
+
+    Runs CLI help-flag scraping first, then (when pywinauto is available)
+    launches the EXE to walk its menu bar and collect GUI invocables.
+    Both result sets are written to separate MCP JSON artifacts and a
+    combined Markdown summary.
+    """
+    # ── Phase 1: CLI help output ───────────────────────────────────────────
     with Spinner("Analyzing CLI capabilities"):
         logger.info(f"Analyzing CLI tool: {exe_path}")
-        # Run CLI analysis
-        invocables = analyze_cli(exe_path)
-    
-    if not invocables:
-        logger.warning(f"No CLI capabilities detected for {exe_path.name}")
-        print(f"\nNo CLI help output detected (might be GUI application)")
-    else:
-        logger.info(f"Found {len(invocables)} CLI interactions")
+        cli_invocables = analyze_cli(exe_path)
 
-    # Write Markdown output
+    if not cli_invocables:
+        logger.warning(f"No CLI capabilities detected for {exe_path.name}")
+        print(f"\nNo CLI help output detected (likely a GUI-only application)")
+    else:
+        logger.info(f"Found {len(cli_invocables)} CLI interactions")
+
+    # ── Phase 2: GUI menu walk (pywinauto) ─────────────────────────────────
+    gui_invocables = []
+    if PYWINAUTO_AVAILABLE:
+        with Spinner("Analyzing GUI capabilities (pywinauto)"):
+            gui_invocables = analyze_gui(exe_path)
+        if gui_invocables:
+            logger.info(f"Found {len(gui_invocables)} GUI actions in {exe_path.name}")
+            # Write dedicated GUI MCP JSON
+            gui_json = out_dir / f"{base_name}_gui_mcp.json"
+            write_invocables_json(
+                gui_json,
+                gui_invocables,
+                dll_path=exe_path,
+                tier=4,
+                schema_version="2.0.0",
+            )
+            print(f"GUI MCP JSON: {gui_json}")
+        else:
+            logger.info("No GUI actions found (non-Win32 or UWP app?)")
+    else:
+        print("\n[gui_analyzer] pywinauto not installed — skipping GUI analysis.")
+        print("  Install with:  pip install pywinauto")
+
+    # ── Combined Markdown output ───────────────────────────────────────────
+    all_invocables = cli_invocables + gui_invocables
     tier4_md = out_dir / f"{base_name}_cli_help.md"
     with open(tier4_md, 'w', encoding='utf-8') as f:
-        f.write(f"# CLI Analysis: {exe_path.name}\n\n")
-        f.write(f"Total commands detected: {len(invocables)}\n\n")
-        
-        for inv in invocables:
-            f.write(f"## {inv.name}\n\n")
-            f.write(f"**Usage:** `{inv.signature}`\n\n")
-            if inv.doc_comment:
-                f.write(f"**Description:**\n\n{inv.doc_comment}\n\n")
-            if inv.parameters:
-                f.write(f"**Parameters detected:**\n\n{inv.parameters}\n\n")
+        f.write(f"# CLI/GUI Analysis: {exe_path.name}\n\n")
+        f.write(f"CLI commands detected: {len(cli_invocables)}\n")
+        f.write(f"GUI actions detected:  {len(gui_invocables)}\n\n")
 
-    # Write MCP JSON
+        if cli_invocables:
+            f.write("## CLI Capabilities\n\n")
+            for inv in cli_invocables:
+                f.write(f"### {inv.name}\n\n")
+                f.write(f"**Usage:** `{inv.signature}`\n\n")
+                if inv.doc_comment:
+                    f.write(f"**Description:**\n\n{inv.doc_comment}\n\n")
+                if inv.parameters:
+                    f.write(f"**Parameters detected:**\n\n{inv.parameters}\n\n")
+
+        if gui_invocables:
+            f.write("## GUI Capabilities\n\n")
+            for inv in gui_invocables:
+                f.write(f"### {inv.name}\n\n")
+                f.write(f"**Action:** `{inv.signature}`\n\n")
+                if inv.doc_comment:
+                    f.write(f"**Description:** {inv.doc_comment}\n\n")
+
+    # ── CLI MCP JSON (CLI invocables only, keeps original naming convention) ─
     tier4_json = out_dir / f"{base_name}_cli_mcp.json"
     write_invocables_json(
         tier4_json,
-        invocables,
+        cli_invocables,
         dll_path=exe_path,
         tier=4,
-        schema_version="2.0.0"
+        schema_version="2.0.0",
     )
-    
+
     logger.info(f"Results written to {out_dir}")
-    print(f"\nCLI Analysis Complete")
-    print(f"Commands found: {len(invocables)}")
-    print(f"Markdown: {tier4_md}")
-    print(f"MCP JSON: {tier4_json}")
-    
+    print(f"\nCLI/GUI Analysis Complete")
+    print(f"CLI commands: {len(cli_invocables)}  |  GUI actions: {len(gui_invocables)}")
+    print(f"Markdown:     {tier4_md}")
+    print(f"CLI MCP JSON: {tier4_json}")
+
     return 0
 
 

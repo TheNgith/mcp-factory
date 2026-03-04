@@ -474,11 +474,51 @@ def run_ui(data: dict, description: Optional[str], out_path: Path) -> None:
         refresh()
 
     # ── confirm ───────────────────────────────────────────────────────────────
-    # Strip internal UI fields before writing output
-    selected_inv = [
-        {k: v for k, v in inv.items() if not k.startswith("_")}
-        for inv, sel in zip(invocables, selected) if sel
-    ]
+    # Strip internal UI fields before writing output, and normalize rich-format
+    # invocables (schema v2.0 from discovery) into the flat format the generator
+    # and _execute_dll expect.
+    def _normalize(inv: dict) -> dict:
+        out = {k: v for k, v in inv.items() if not k.startswith("_")}
+
+        # ── execution ──────────────────────────────────────────────────────
+        # Rich format stores execution inside mcp.execution; flat format has
+        # it at the top level.  Hoist if needed.
+        if "execution" not in out and "mcp" in out:
+            mcp_exec = (out.get("mcp") or {}).get("execution")
+            if mcp_exec:
+                out["execution"] = mcp_exec
+
+        # ── return_type ────────────────────────────────────────────────────
+        # Prefer signature.return_type over a stale "unknown" top-level value.
+        sig = out.get("signature") or {}
+        sig_ret = sig.get("return_type", "")
+        if sig_ret and (not out.get("return_type") or out.get("return_type") == "unknown"):
+            out["return_type"] = sig_ret
+
+        # ── parameters ────────────────────────────────────────────────────
+        # If parameters list is empty but signature has a parameter string,
+        # parse it into the flat [{name, type, required, description}] form.
+        if not out.get("parameters") and sig.get("parameters"):
+            parsed = []
+            for chunk in sig["parameters"].split(","):
+                tokens = chunk.strip().split()
+                if len(tokens) >= 2:
+                    raw_type = " ".join(tokens[:-1]).strip()
+                    pname    = tokens[-1].lstrip("*")
+                    parsed.append({
+                        "name": pname,
+                        "type": raw_type,
+                        "required": True,
+                        "description": raw_type,
+                    })
+            if parsed:
+                out["parameters"] = parsed
+
+        # ── clean up rich-only fields to keep the output tidy ─────────────
+        # Keep signature/mcp for traceability but they won't confuse anything.
+        return out
+
+    selected_inv = [_normalize(inv) for inv, sel in zip(invocables, selected) if sel]
     n_sel = len(selected_inv)
 
     if n_sel == 0:

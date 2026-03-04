@@ -1,5 +1,6 @@
 pefile>=2023.2.7
 pywin32>=306; sys_platform == 'win32'
+pywinauto>=0.6.8; sys_platform == 'win32'
 PyYAML>=6.0
 rich>=13.0.0
 openai>=1.0
