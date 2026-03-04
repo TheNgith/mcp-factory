@@ -9,7 +9,7 @@
 
 | Role | Member | GitHub |
 |------|--------|--------|
-| Sections 2-3 | Evan King | [@evanking12](https://github.com/evanking12) |
+| Lead & Sections 2-3 | Evan King | [@evanking12](https://github.com/evanking12) |
 | Section 4 (MCP Generation) | Layalie AbuOleim | [@abuoleim1](https://github.com/abuoleim1) |
 | Section 4 (MCP Generation) | Caden Spokas | [@bustlingbungus](https://github.com/bustlingbungus) |
 | Section 5 (Verification) | Thinh Nguyen | [@TheNgith](https://github.com/TheNgith) |
@@ -18,7 +18,9 @@
 
 Enterprise organizations need AI-powered customer service that can invoke existing internal tools lacking API documentation or modern integration points. MCP Factory bridges this gap by automatically analyzing Windows binaries and generating standards-compliant Model Context Protocol servers.
 
-## Current Status
+## Current Status — Week 8 / 16
+
+> **Summary:** Discovery (§2-3) complete. MCP server generation (§4) demo-ready with working Calculator and Notepad end-to-end. Verification UI (§5) in progress. Azure deployment (§6) blocked pending sponsor credential access.
 
 - [x] **Sections 2-3: Hybrid Discovery Engine** - **COMPLETE — Full Spec Coverage**
   - ✅ **Hybrid Analysis**: Multi-paradigm routing (`shell32.dll` → COM + Native exports)
@@ -38,8 +40,8 @@ Enterprise organizations need AI-powered customer service that can invoke existi
   - ✅ **GUI automation** — pywinauto UIA backend drives real app windows; supports button clicks, text input, save/open dialogs, menu navigation
   - ✅ **App-type detection** — Win32 vs WinUI3/MSIX detected at scan time; MSIX apps use HWND-diff launch (no duplicate windows)
   - ✅ **Working demos:** Calculator (55 invocables, UIA buttons) and Notepad (Win32, type/save/open/append)
-- [ ] **Section 5: Verification UI** - Interactive validation
-- [ ] **Section 6: Deployment** - Azure integration
+- [ ] **Section 5: Verification UI** - Interactive validation in progress (Thinh Nguyen)
+- [ ] **Section 6: Deployment** - Azure integration — **blocked:** awaiting Azure subscription credentials from Microsoft sponsor (escalated week 8)
 
 **Approach:** A **Hybrid Discovery Engine** that intelligently routes any target file to the appropriate analyzers based on detected capabilities, producing a uniform MCP JSON contract that §4 consumes directly.
 
