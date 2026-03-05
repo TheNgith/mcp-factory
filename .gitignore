@@ -1,5 +1,9 @@
 # Output directories
 artifacts/
+!artifacts/zstd_zstd_exports_mcp.json
+!artifacts/zstd_exports_mcp.json
+!artifacts/selected-invocables.json
+!artifacts/discovery-output.json
 mcp_dumpbin_out/
 tests/fixtures/vcpkg_installed/
 

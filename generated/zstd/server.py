@@ -18093,8 +18093,8 @@ def chat():
 
     system_prompt = (
         "You are a helpful assistant with access to binary tools from zstd. "
-        "When a user asks you to call or test a function, use the provided tools. "
-        "Explain what the tool does and report its output clearly."
+        "When a user asks you to perform a multi-step task, issue as many tool calls as possible in a single response — only wait for results when a later step strictly depends on the output of an earlier one. "
+        "Explain what each tool does and report results clearly."
     )
 
     messages = (

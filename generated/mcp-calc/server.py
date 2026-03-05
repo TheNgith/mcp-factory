@@ -38,6 +38,806 @@ INVOCABLES = json.loads(r"""[
     }
   },
   {
+    "name": "press_minimize_calculator",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Minimize Calculator' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Minimize Calculator"
+    }
+  },
+  {
+    "name": "press_maximize_calculator",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Maximize Calculator' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Maximize Calculator"
+    }
+  },
+  {
+    "name": "press_close_calculator",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Close Calculator' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Close Calculator"
+    }
+  },
+  {
+    "name": "press_open_navigation",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Open Navigation' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Open Navigation"
+    }
+  },
+  {
+    "name": "press_open_history_flyout",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Open history flyout' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Open history flyout"
+    }
+  },
+  {
+    "name": "press_degrees_toggle",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Degrees toggle' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Degrees toggle"
+    }
+  },
+  {
+    "name": "press_scientific_notation",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Scientific notation' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Scientific notation"
+    }
+  },
+  {
+    "name": "press_clear_all_memory",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Clear all memory' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Clear all memory"
+    }
+  },
+  {
+    "name": "press_memory_recall",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Memory recall' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Memory recall"
+    }
+  },
+  {
+    "name": "press_memory_add",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Memory add' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Memory add"
+    }
+  },
+  {
+    "name": "press_memory_subtract",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Memory subtract' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Memory subtract"
+    }
+  },
+  {
+    "name": "press_memory_store",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Memory store' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Memory store"
+    }
+  },
+  {
+    "name": "press_open_memory_flyout",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Open memory flyout' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Open memory flyout"
+    }
+  },
+  {
+    "name": "press_trigonometry",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Trigonometry' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Trigonometry"
+    }
+  },
+  {
+    "name": "press_functions",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Functions' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Functions"
+    }
+  },
+  {
+    "name": "press_inverse_function",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Inverse function' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Inverse function"
+    }
+  },
+  {
+    "name": "press_pi",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Pi' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Pi"
+    }
+  },
+  {
+    "name": "press_euler_s_number",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Euler's number' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Euler's number"
+    }
+  },
+  {
+    "name": "press_clear",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Clear' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Clear"
+    }
+  },
+  {
+    "name": "press_backspace",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Backspace' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Backspace"
+    }
+  },
+  {
+    "name": "press_square",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Square' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Square"
+    }
+  },
+  {
+    "name": "press_square_root",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Square root' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Square root"
+    }
+  },
+  {
+    "name": "press_x_to_the_exponent",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the ''X' to the exponent' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "'X' to the exponent"
+    }
+  },
+  {
+    "name": "press_ten_to_the_exponent",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Ten to the exponent' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Ten to the exponent"
+    }
+  },
+  {
+    "name": "press_log",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Log' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Log"
+    }
+  },
+  {
+    "name": "press_natural_log",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Natural log' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Natural log"
+    }
+  },
+  {
+    "name": "press_reciprocal",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Reciprocal' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Reciprocal"
+    }
+  },
+  {
+    "name": "press_absolute_value",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Absolute value' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Absolute value"
+    }
+  },
+  {
+    "name": "press_exponential",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Exponential' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Exponential"
+    }
+  },
+  {
+    "name": "press_modulo",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Modulo' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Modulo"
+    }
+  },
+  {
+    "name": "press_left_parenthesis",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Left parenthesis' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Left parenthesis"
+    }
+  },
+  {
+    "name": "press_right_parenthesis",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Right parenthesis' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Right parenthesis"
+    }
+  },
+  {
+    "name": "press_factorial",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Factorial' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Factorial"
+    }
+  },
+  {
+    "name": "press_divide_by",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Divide by' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Divide by"
+    }
+  },
+  {
+    "name": "press_multiply_by",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Multiply by' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Multiply by"
+    }
+  },
+  {
+    "name": "press_minus",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Minus' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Minus"
+    }
+  },
+  {
+    "name": "press_plus",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Plus' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Plus"
+    }
+  },
+  {
+    "name": "press_equals",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Equals' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Equals"
+    }
+  },
+  {
+    "name": "press_positive_negative",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Positive negative' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Positive negative"
+    }
+  },
+  {
+    "name": "press_zero",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Zero' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Zero"
+    }
+  },
+  {
+    "name": "press_one",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'One' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "One"
+    }
+  },
+  {
+    "name": "press_two",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Two' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Two"
+    }
+  },
+  {
+    "name": "press_three",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Three' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Three"
+    }
+  },
+  {
+    "name": "press_four",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Four' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Four"
+    }
+  },
+  {
+    "name": "press_five",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Five' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Five"
+    }
+  },
+  {
+    "name": "press_six",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Six' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Six"
+    }
+  },
+  {
+    "name": "press_seven",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Seven' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Seven"
+    }
+  },
+  {
+    "name": "press_eight",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Eight' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Eight"
+    }
+  },
+  {
+    "name": "press_nine",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Nine' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Nine"
+    }
+  },
+  {
+    "name": "press_decimal_separator",
+    "kind": "gui_action",
+    "confidence": "medium",
+    "description": "Click the 'Decimal separator' button in the application.",
+    "return_type": "unknown",
+    "parameters": [],
+    "execution": {
+      "method": "gui_action",
+      "exe_path": "C:\\Windows\\System32\\calc.exe",
+      "action_type": "button_click",
+      "menu_path": [],
+      "gui_backend": "uia",
+      "button_name": "Decimal separator"
+    }
+  },
+  {
     "name": "type_text",
     "kind": "gui_action",
     "confidence": "high",
@@ -373,15 +1173,32 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
     )
     if not target:
         return f"CLI error: no executable path configured for '{name}'"
+    # If the invocable name matches the exe stem this is a "launch the app"
+    # invocable (e.g. calc, notepad).  Run it with Popen so its GUI window
+    # is NOT suppressed, and don't pass the name as a spurious CLI argument.
     from pathlib import Path as _Path
     exe_stem = _Path(target).stem.lower()
     if exe_stem == name.lower():
+        # Route through _ensure_gui_app so the window is cached immediately;
+        # subsequent button_click calls will reuse it instead of re-launching.
+        # Peek at sibling invocables to detect WinUI3/MSIX apps (gui_backend=uia)
+        # so _ensure_gui_app can skip the win32 Attempt A that would open a
+        # wasted extra window before failing over to UIA.
+        _preferred = ""
+        for _inv in INVOCABLES:
+            _exec = _inv.get("execution") or {}
+            if (_exec.get("exe_path", "").lower() == target.lower()
+                    and _exec.get("gui_backend") == "uia"):
+                _preferred = "uia"
+                break
         try:
-            _ensure_gui_app(target)
+            _ensure_gui_app(target, preferred_backend=_preferred)
             return f"Launched {_Path(target).name}"
         except Exception as exc:
             return f"CLI error: {exc}"
+    # Standard CLI invocation: target_exe subcommand [args...]
     cmd = [target, name] + [str(v) for v in args.values()]
+    # Suppress any GUI window the binary might open (Windows only).
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         r = subprocess.run(
@@ -405,12 +1222,15 @@ _GUI_APP_LOCK = threading.Lock()
 _GUI_APP_INSTANCES: dict = {}  # exe_path -> (Application, main_window)
 
 
-def _ensure_gui_app(exe_path: str):
+def _ensure_gui_app(exe_path: str, preferred_backend: str = ""):
     """Return (app, win) for exe_path, launching the app if not already running.
 
     Tries the win32 backend first (classic Win32 apps).  If no window is found,
     automatically retries with the uia backend (WinUI3 / Win11 apps like
     Notepad 10.x).
+
+    Pass preferred_backend='uia' to skip the win32 attempt entirely — this
+    avoids opening a wasted extra window for MSIX/WinUI3 apps like Calculator.
     """
     import time
     import subprocess
@@ -437,30 +1257,31 @@ def _ensure_gui_app(exe_path: str):
         last_exc = None
 
         # ── Attempt A: win32 backend (classic Win32 apps) ─────────────────
-        # Run inside a thread so a hung top_window() gets a hard deadline.
-        # STARTUPINFO SW_SHOWMINNOACTIVE keeps the window minimised in taskbar.
+        # Skipped for known WinUI3/MSIX apps (preferred_backend='uia') because
+        # the stub process exits immediately, causing a wasted second window.
         import concurrent.futures as _cf
 
-        def _launch_win32():
-            _app = Application(backend="win32")
-            si = subprocess.STARTUPINFO()
-            si.dwFlags = 0x00000001    # STARTF_USESHOWWINDOW
-            si.wShowWindow = 7         # SW_SHOWMINNOACTIVE
-            _proc = subprocess.Popen([exe_path], startupinfo=si)
-            time.sleep(1.8)
-            _app = Application(backend="win32").connect(process=_proc.pid, timeout=3)
-            _win = _app.top_window()
-            _win.handle  # raises immediately if no window under this PID
-            return _app, _win
+        if preferred_backend != "uia":
+            def _launch_win32():
+                _app = Application(backend="win32")
+                si = subprocess.STARTUPINFO()
+                si.dwFlags = 0x00000001    # STARTF_USESHOWWINDOW
+                si.wShowWindow = 7         # SW_SHOWMINNOACTIVE
+                _proc = subprocess.Popen([exe_path], startupinfo=si)
+                time.sleep(1.8)
+                _app = Application(backend="win32").connect(process=_proc.pid, timeout=3)
+                _win = _app.top_window()
+                _win.handle  # raises immediately if no window under this PID
+                return _app, _win
 
-        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-            _fut = _pool.submit(_launch_win32)
-            try:
-                app, win = _fut.result(timeout=7)
-                _GUI_APP_INSTANCES[exe_path] = (app, win, "win32")
-                return app, win
-            except Exception as exc:
-                last_exc = exc  # win32 failed — fall through to UIA
+            with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                _fut = _pool.submit(_launch_win32)
+                try:
+                    app, win = _fut.result(timeout=7)
+                    _GUI_APP_INSTANCES[exe_path] = (app, win, "win32")
+                    return app, win
+                except Exception as exc:
+                    last_exc = exc  # win32 failed — fall through to UIA
 
         # ── Attempt B: UIA + shell-launch (MSIX / WinUI3 apps) ───────────
         # Win11 Notepad (and modern Calculator) use MSIX stubs that exit
@@ -541,7 +1362,8 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
         button_click    - click a named UIA Button control (e.g. Calculator)
         type_text       - type text into the active edit control
         get_text        - return text content of the main edit control
-        save_as         - open File→Save As dialog and save with given filename
+        save_as         - open File > Save As dialog and save with given filename
+        open_file       - open File > Open dialog and load a specific filename
         close_app       - kill the application process
     """
     import re
@@ -599,6 +1421,83 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
             except Exception:
                 pass
             return win.window_text()
+
+        # ── open_file ────────────────────────────────────────────────────────
+        elif action_type == "open_file":
+            filename = (
+                args.get("filename")
+                or args.get("name")
+                or args.get("file")
+                or ""
+            )
+            if not filename:
+                return "open_file requires a filename argument"
+            win.set_focus()
+            time.sleep(0.2)
+            # Trigger File > Open
+            triggered = False
+            for _trigger in (
+                lambda: win.menu_select("File->Open"),
+                lambda: win.type_keys("^o"),
+                lambda: win.type_keys("%fo"),
+            ):
+                try:
+                    _trigger()
+                    triggered = True
+                    break
+                except Exception:
+                    pass
+            if not triggered:
+                return "Could not trigger Open dialog"
+            time.sleep(1.2)
+            # Locate the Open dialog
+            dlg = None
+            for _title in ("Open", "Open.*", ".*Open.*"):
+                try:
+                    dlg = app.window(title_re=_title)
+                    dlg.wait("visible", timeout=4)
+                    break
+                except Exception:
+                    dlg = None
+            if dlg is None:
+                try:
+                    dlg = app.top_window()
+                except Exception as exc:
+                    return f"Open dialog not found: {exc}"
+            try:
+                fn_ctrl = None
+                for _lookup in (
+                    lambda: dlg.child_window(title="File name:", control_type="Edit"),
+                    lambda: dlg.child_window(class_name="Edit", found_index=0),
+                    lambda: dlg.child_window(control_type="ComboBox").child_window(class_name="Edit"),
+                    lambda: dlg.child_window(auto_id="1001"),
+                ):
+                    try:
+                        fn_ctrl = _lookup()
+                        fn_ctrl.wrapper_object()
+                        break
+                    except Exception:
+                        fn_ctrl = None
+                if fn_ctrl is not None:
+                    fn_ctrl.set_focus()
+                    fn_ctrl.set_text("")
+                    fn_ctrl.type_keys(filename, with_spaces=True)
+                else:
+                    import pywinauto.keyboard as _kb  # type: ignore
+                    _kb.send_keys(filename)
+                time.sleep(0.3)
+                try:
+                    dlg.child_window(title="Open", control_type="Button").click()
+                except Exception:
+                    try:
+                        dlg.child_window(title_re="Open.*", control_type="Button").click()
+                    except Exception:
+                        import pywinauto.keyboard as _kb  # type: ignore
+                        _kb.send_keys("{ENTER}")
+                time.sleep(0.8)
+                return f"Opened file: {filename}"
+            except Exception as dlg_exc:
+                return f"Open dialog interaction error: {dlg_exc}"
 
         # ── save_as ──────────────────────────────────────────────────────────
         elif action_type == "save_as":
@@ -824,8 +1723,8 @@ def chat():
 
     system_prompt = (
         "You are a helpful assistant with access to binary tools from mcp-calc. "
-        "When a user asks you to call or test a function, use the provided tools. "
-        "Explain what the tool does and report its output clearly."
+        "When a user asks you to perform a multi-step task, issue as many tool calls as possible in a single response — only wait for results when a later step strictly depends on the output of an earlier one. "
+        "Explain what each tool does and report results clearly."
     )
 
     messages = (

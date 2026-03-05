@@ -1,0 +1,2827 @@
+{
+  "metadata": {
+    "tier": 4,
+    "analysis_timestamp": "2026-02-22T17:38:12.729538",
+    "pipeline_version": "1.0.0",
+    "target_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+    "target_name": "zstd.dll",
+    "target_type": "dll",
+    "file_size_bytes": 658944
+  },
+  "invocables": [
+    {
+      "name": "ZDICT_addEntropyTablesFromBuffer",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_addEntropyTablesFromBuffer",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_finalizeDictionary",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_finalizeDictionary",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_getDictHeaderSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_getDictHeaderSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_getDictID",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_getDictID",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_getErrorName",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_getErrorName",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_isError",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_isError",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_optimizeTrainFromBuffer_cover",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_optimizeTrainFromBuffer_cover",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_optimizeTrainFromBuffer_fastCover",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_optimizeTrainFromBuffer_fastCover",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_trainFromBuffer",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_trainFromBuffer",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_trainFromBuffer_cover",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_trainFromBuffer_cover",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_trainFromBuffer_fastCover",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_trainFromBuffer_fastCover",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZDICT_trainFromBuffer_legacy",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZDICT_trainFromBuffer_legacy",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_getParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_getParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_init",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_init",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_init_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_init_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_registerSequenceProducer",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_registerSequenceProducer",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_reset",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_reset",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtxParams_setParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtxParams_setParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_getParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_getParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_loadDictionary",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_loadDictionary",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_loadDictionary_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_loadDictionary_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_loadDictionary_byReference",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_loadDictionary_byReference",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_refCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_refCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_refPrefix",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_refPrefix",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_refPrefix_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_refPrefix_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_refThreadPool",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_refThreadPool",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_reset",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_reset",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setFParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setFParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setParametersUsingCCtxParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setParametersUsingCCtxParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CCtx_setPledgedSrcSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CCtx_setPledgedSrcSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CStreamInSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CStreamInSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_CStreamOutSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_CStreamOutSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_getParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_getParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_loadDictionary",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_loadDictionary",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_loadDictionary_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_loadDictionary_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_loadDictionary_byReference",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_loadDictionary_byReference",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_refDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_refDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_refPrefix",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_refPrefix",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_refPrefix_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_refPrefix_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_reset",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_reset",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_setFormat",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_setFormat",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_setMaxWindowSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_setMaxWindowSize",
+        "calling_convention": "stdcall",
+        "charset": "unicode"
+      }
+    },
+    {
+      "name": "ZSTD_DCtx_setParameter",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DCtx_setParameter",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DStreamInSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DStreamInSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_DStreamOutSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_DStreamOutSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_adjustCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_adjustCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_cParam_getBounds",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_cParam_getBounds",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_checkCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_checkCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress2",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress2",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBegin",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBegin",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBegin_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBegin_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBegin_usingCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBegin_usingCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBegin_usingCDict_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBegin_usingCDict_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBegin_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBegin_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBlock",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBlock",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressBound",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressBound",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressCCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressCCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressContinue",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressContinue",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressEnd",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressEnd",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressSequences",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressSequences",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressSequencesAndLiterals",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressSequencesAndLiterals",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressStream2",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressStream2",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compressStream2_simpleArgs",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compressStream2_simpleArgs",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress_usingCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress_usingCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress_usingCDict_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress_usingCDict_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_compress_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_compress_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_copyCCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_copyCCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_copyDCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_copyDCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCCtxParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCCtxParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCCtx_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCCtx_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCDict_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCDict_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCDict_advanced2",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCDict_advanced2",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCDict_byReference",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCDict_byReference",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createCStream_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createCStream_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDCtx_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDCtx_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDDict_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDDict_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDDict_byReference",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDDict_byReference",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createDStream_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createDStream_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_createThreadPool",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_createThreadPool",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_dParam_getBounds",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_dParam_getBounds",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decodingBufferSize_min",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decodingBufferSize_min",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompress",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompress",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressBegin",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressBegin",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressBegin_usingDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressBegin_usingDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressBegin_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressBegin_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressBlock",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressBlock",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressBound",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressBound",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressContinue",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressContinue",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressDCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressDCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressStream_simpleArgs",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressStream_simpleArgs",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompress_usingDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompress_usingDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompress_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompress_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_decompressionMargin",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_decompressionMargin",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_defaultCLevel",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_defaultCLevel",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_endStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_endStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCCtxSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCCtxSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCCtxSize_usingCCtxParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCCtxSize_usingCCtxParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCCtxSize_usingCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCCtxSize_usingCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCDictSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCDictSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCDictSize_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCDictSize_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCStreamSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCStreamSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCStreamSize_usingCCtxParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCStreamSize_usingCCtxParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateCStreamSize_usingCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateCStreamSize_usingCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateDCtxSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateDCtxSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateDDictSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateDDictSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateDStreamSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateDStreamSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_estimateDStreamSize_fromFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_estimateDStreamSize_fromFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_findDecompressedSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_findDecompressedSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_findFrameCompressedSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_findFrameCompressedSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_flushStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_flushStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_frameHeaderSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_frameHeaderSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeCCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeCCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeCCtxParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeCCtxParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeCStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeCStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeDCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeDCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeDStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeDStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_freeThreadPool",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_freeThreadPool",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_generateSequences",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_generateSequences",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getBlockSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getBlockSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getCParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getCParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getDecompressedSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getDecompressedSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getDictID_fromCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getDictID_fromCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getDictID_fromDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getDictID_fromDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getDictID_fromDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getDictID_fromDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getDictID_fromFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getDictID_fromFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getErrorCode",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getErrorCode",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getErrorName",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getErrorName",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getErrorString",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getErrorString",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getFrameContentSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getFrameContentSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getFrameHeader",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getFrameHeader",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getFrameHeader_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getFrameHeader_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getFrameProgression",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getFrameProgression",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_getParams",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_getParams",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream_srcSize",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream_srcSize",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream_usingCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream_usingCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream_usingCDict_advanced",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream_usingCDict_advanced",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initCStream_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initCStream_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initDStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initDStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initDStream_usingDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initDStream_usingDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initDStream_usingDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initDStream_usingDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticCCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticCCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticCDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticCDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticCStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticCStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticDCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticDCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticDDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticDDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_initStaticDStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_initStaticDStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_insertBlock",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_insertBlock",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_isError",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_isError",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_isFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_isFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_isSkippableFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_isSkippableFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_maxCLevel",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_maxCLevel",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_mergeBlockDelimiters",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_mergeBlockDelimiters",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_minCLevel",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_minCLevel",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_nextInputType",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_nextInputType",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_nextSrcSizeToDecompress",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_nextSrcSizeToDecompress",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_readSkippableFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_readSkippableFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_registerSequenceProducer",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_registerSequenceProducer",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_resetCStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_resetCStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_resetDStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_resetDStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sequenceBound",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sequenceBound",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_CCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_CCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_CDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_CDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_CStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_CStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_DCtx",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_DCtx",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_DDict",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_DDict",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_sizeof_DStream",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_sizeof_DStream",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_toFlushNow",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_toFlushNow",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_versionNumber",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_versionNumber",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_versionString",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_versionString",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    },
+    {
+      "name": "ZSTD_writeSkippableFrame",
+      "kind": "export",
+      "confidence": "medium",
+      "description": "",
+      "return_type": "unknown",
+      "parameters": [],
+      "execution": {
+        "method": "dll_import",
+        "dll_path": "tests\\fixtures\\vcpkg_installed\\x64-windows\\bin\\zstd.dll",
+        "function_name": "ZSTD_writeSkippableFrame",
+        "calling_convention": "stdcall",
+        "charset": "ansi"
+      }
+    }
+  ],
+  "summary": {
+    "total_invocables": 187,
+    "by_source_type": {
+      "export": 187
+    },
+    "by_confidence": {
+      "medium": 187
+    }
+  }
+}

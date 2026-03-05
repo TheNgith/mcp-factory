@@ -359,7 +359,7 @@ def _ensure_gui_app(exe_path: str, preferred_backend: str = ""):
 
     Pass preferred_backend='uia' to skip the win32 attempt entirely — this
     avoids opening a wasted extra window for MSIX/WinUI3 apps like Calculator.
-    ""
+    """
     import time
     import subprocess
     import re
@@ -490,8 +490,8 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
         button_click    - click a named UIA Button control (e.g. Calculator)
         type_text       - type text into the active edit control
         get_text        - return text content of the main edit control
-        save_as         - open File→Save As dialog and save with given filename
-        open_file       - open File→Open dialog and load a specific filename
+        save_as         - open File > Save As dialog and save with given filename
+        open_file       - open File > Open dialog and load a specific filename
         close_app       - kill the application process
     """
     import re
@@ -628,7 +628,8 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
                 return f"Open dialog interaction error: {dlg_exc}"
 
         # ── save_as ──────────────────────────────────────────────────────────
-        elif action_type == "save_as":            filename = (
+        elif action_type == "save_as":
+            filename = (
                 args.get("filename")
                 or args.get("name")
                 or args.get("file")
@@ -850,8 +851,8 @@ def chat():
 
     system_prompt = (
         "You are a helpful assistant with access to binary tools from __COMPONENT_NAME__. "
-        "When a user asks you to call or test a function, use the provided tools. "
-        "Explain what the tool does and report its output clearly."
+        "When a user asks you to perform a multi-step task, issue as many tool calls as possible in a single response — only wait for results when a later step strictly depends on the output of an earlier one. "
+        "Explain what each tool does and report results clearly."
     )
 
     messages = (

@@ -1362,7 +1362,7 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
         button_click    - click a named UIA Button control (e.g. Calculator)
         type_text       - type text into the active edit control
         get_text        - return text content of the main edit control
-        save_as         - open File→Save As dialog and save with given filename
+        save_as         - open File > Save As dialog and save with given filename
         close_app       - kill the application process
     """
     import re
@@ -1645,8 +1645,8 @@ def chat():
 
     system_prompt = (
         "You are a helpful assistant with access to binary tools from calculator-test2. "
-        "When a user asks you to call or test a function, use the provided tools. "
-        "Explain what the tool does and report its output clearly."
+        "When a user asks you to perform a multi-step task, issue as many tool calls as possible in a single response — only wait for results when a later step strictly depends on the output of an earlier one. "
+        "Explain what each tool does and report results clearly."
     )
 
     messages = (
