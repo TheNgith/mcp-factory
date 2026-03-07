@@ -42,8 +42,8 @@ async def _api_key_guard(request: Request, call_next):
     """If UI_API_KEY is set, every non-health request must present it."""
     if not UI_API_KEY:
         return await call_next(request)
-    # always allow health + static assets
-    if request.url.path in ("/health", "/favicon.ico"):
+    # always allow health + static assets + Copilot Extension endpoint
+    if request.url.path in ("/health", "/favicon.ico", "/copilot"):
         return await call_next(request)
     # check header or query param
     provided = (
@@ -1012,3 +1012,13 @@ async def proxy_download(job_id: str, filename: str) -> Response:
 @app.get("/health")
 def health():
     return {"status": "ok", "pipeline_url": PIPELINE_URL}
+
+
+# ── P6: GitHub Copilot Extension agent endpoint ──────────────────────────
+# GitHub routes @mcp-factory invocations here when the app is registered
+# as a Copilot Extension.  Token verification + SSE streaming.
+@app.post("/copilot")
+async def copilot(request: Request):
+    """GitHub Copilot Extensions agent endpoint (P6)."""
+    from copilot_handler import copilot_endpoint  # type: ignore
+    return await copilot_endpoint(request)

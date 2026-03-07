@@ -91,6 +91,11 @@ OPENAI_ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
+# ── Generation module (P1: MCP SDK server emit) ───────────────────────────
+_GEN_DIR = Path(__file__).parent.parent / "src" / "generation"
+if str(_GEN_DIR) not in sys.path:
+    sys.path.insert(0, str(_GEN_DIR))
+
 # ── Azure credential (Managed Identity in ACA, DefaultAzureCredential locally) ──
 def _get_credential():
     if MANAGED_CLIENT_ID:
@@ -133,6 +138,99 @@ SRC_DISCOVERY_DIR  = Path(__file__).parent.parent / "src" / "discovery"
 # Structure: {job_id: {tool_name: invocable_dict}}
 _JOB_INVOCABLE_MAPS: dict[str, dict[str, Any]] = {}
 _JOB_MAP_LOCK = threading.Lock()
+
+# ── Async job status store (P3) ─────────────────────────────────────────────
+# status schema: {status, progress, message, result, error, created_at, updated_at}
+_JOB_STATUS: dict[str, dict[str, Any]] = {}
+_JOB_STATUS_LOCK = threading.Lock()
+
+
+def _persist_job_status(job_id: str, payload: dict) -> None:
+    """Write job status to in-memory cache AND Blob Storage."""
+    with _JOB_STATUS_LOCK:
+        _JOB_STATUS[job_id] = payload
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/status.json",
+            json.dumps(payload).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist status to Blob: %s", job_id, exc)
+
+
+def _get_job_status(job_id: str) -> dict | None:
+    """Return job status from cache; reload from Blob on cache miss."""
+    with _JOB_STATUS_LOCK:
+        result = _JOB_STATUS.get(job_id)
+    if result is not None:
+        return result
+    try:
+        data = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/status.json"))
+        with _JOB_STATUS_LOCK:
+            _JOB_STATUS[job_id] = data
+        return data
+    except Exception:
+        return None
+
+
+def _analyze_worker(
+    job_id: str,
+    tmp_path: Path,
+    hints: str,
+    original_name: str,
+    cleanup_dir: Path | None = None,
+) -> None:
+    """Background worker — runs discovery and updates job status in Blob (P3)."""
+    _persist_job_status(job_id, {
+        "status": "running",
+        "progress": 10,
+        "message": f"Discovery started for {original_name}",
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    })
+    try:
+        _persist_job_status(job_id, {
+            "status": "running",
+            "progress": 30,
+            "message": "Running binary analysis pipeline…",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        })
+        with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
+            result = _run_discovery(tmp_path, job_id, hints)
+        _persist_job_status(job_id, {
+            "status": "done",
+            "progress": 100,
+            "message": f"Analysis complete — {len(result.get('invocables', []))} invocables found",
+            "result": result,
+            "error": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        })
+    except Exception as exc:
+        logger.error("[%s] Async discovery failed: %s", job_id, exc)
+        _persist_job_status(job_id, {
+            "status": "error",
+            "progress": 0,
+            "message": "Analysis failed",
+            "result": None,
+            "error": str(exc),
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        })
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            if cleanup_dir and cleanup_dir.exists():
+                cleanup_dir.rmdir()
+        except Exception:
+            pass
 
 
 def _register_invocables(job_id: str, invocables: list[dict]) -> None:
@@ -504,6 +602,7 @@ async def analyze_path(body: dict[str, Any]):
     the server's filesystem (e.g. C:\\Program Files\\AppD\\ on a local Windows
     run, or a mounted volume path in a container).
     Body: {path: str, hints?: str}
+    Returns immediately with {job_id, status_url} — poll GET /api/jobs/{id} (P3).
     """
     path_str = (body.get("path") or "").strip()
     hints    = (body.get("hints") or "").strip()
@@ -521,15 +620,32 @@ async def analyze_path(body: dict[str, Any]):
         )
 
     job_id = str(uuid.uuid4())[:8]
-    logger.info(f"[{job_id}] Analyze installed path: {target}")
+    logger.info(f"[{job_id}] Async analyze installed path: {target}")
 
-    try:
-        result = _run_discovery(target, job_id, hints)
-    except Exception as e:
-        logger.error(f"[{job_id}] Discovery failed: {e}")
-        raise HTTPException(500, f"Analysis failed: {e}")
+    # Seed status immediately so poll endpoint returns right away
+    _persist_job_status(job_id, {
+        "status": "queued",
+        "progress": 0,
+        "message": f"Queued analysis for {target.name}",
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    })
 
-    return JSONResponse(result)
+    t = threading.Thread(
+        target=_analyze_worker,
+        args=(job_id, target, hints, target.name, None),
+        daemon=True,
+        name=f"worker-{job_id}",
+    )
+    t.start()
+
+    return JSONResponse({
+        "job_id": job_id,
+        "status": "queued",
+        "status_url": f"/api/jobs/{job_id}",
+    }, status_code=202)
 
 
 @app.post("/api/analyze")
@@ -538,7 +654,8 @@ async def analyze(
     hints: str = Form(default=""),
 ):
     """
-    Section 2-3: Accept a binary upload, run discovery, return invocables list.
+    Section 2-3: Accept a binary upload, run discovery asynchronously.
+    Returns immediately with {job_id, status_url} — poll GET /api/jobs/{id} (P3).
     """
     job_id = str(uuid.uuid4())[:8]
     suffix = Path(file.filename).suffix or ".bin"
@@ -550,33 +667,55 @@ async def analyze(
 
     logger.info(f"[{job_id}] Received {file.filename} ({len(content)} bytes)")
 
-    # Save to Blob Storage
-    _upload_to_blob(UPLOAD_CONTAINER, blob_name, content)
+    # Save to Blob Storage immediately (before spawning worker)
+    try:
+        _upload_to_blob(UPLOAD_CONTAINER, blob_name, content)
+    except Exception as exc:
+        logger.warning("[%s] Blob upload failed: %s", job_id, exc)
 
-    # Write to temp file preserving the original filename so the discovery
-    # pipeline derives a meaningful base-name (e.g. "calc" not "tmpXXX_").
+    # Write to temp file preserving the original filename
     original_name = Path(file.filename).name or f"upload{suffix}"
     tmp_dir  = Path(tempfile.mkdtemp(prefix=f"upload_{job_id}_"))
     tmp_path = tmp_dir / original_name
     tmp_path.write_bytes(content)
 
-    try:
-        with _ai_span("analyze", job_id=job_id, filename=original_name,
-                      file_size_bytes=len(content), hints=hints or ""):
-            result = _run_discovery(tmp_path, job_id, hints)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[{job_id}] Discovery failed: {e}")
-        raise HTTPException(500, f"Analysis failed: {e}")
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-            tmp_dir.rmdir()
-        except Exception:
-            pass
+    # Seed status so poll endpoint responds immediately
+    _persist_job_status(job_id, {
+        "status": "queued",
+        "progress": 0,
+        "message": f"Queued analysis for {original_name}",
+        "result": None,
+        "error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    })
 
-    return JSONResponse(result)
+    t = threading.Thread(
+        target=_analyze_worker,
+        args=(job_id, tmp_path, hints, original_name, tmp_dir),
+        daemon=True,
+        name=f"worker-{job_id}",
+    )
+    t.start()
+
+    return JSONResponse({
+        "job_id": job_id,
+        "status": "queued",
+        "status_url": f"/api/jobs/{job_id}",
+    }, status_code=202)
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    P3: Poll async job status.
+    Returns: {job_id, status, progress, message, result?, error?}
+    status ∈ {queued, running, done, error}
+    """
+    state = _get_job_status(job_id)
+    if state is None:
+        raise HTTPException(404, f"Job '{job_id}' not found")
+    return JSONResponse({"job_id": job_id, **state})
 
 
 @app.post("/api/generate")
@@ -640,6 +779,37 @@ async def generate(body: dict[str, Any]):
     schema_blob = f"{job_id}/mcp_schema.json"
     _upload_to_blob(ARTIFACT_CONTAINER, schema_blob, json.dumps(mcp_schema, indent=2).encode())
 
+    # ── P1: Generate true MCP SDK server artifacts ─────────────────────────
+    mcp_artifacts: dict = {}
+    try:
+        from section4_generate_server import generate_mcp_sdk_artifacts  # type: ignore
+        component_name = mcp_schema["component"]
+        mcp_artifacts = generate_mcp_sdk_artifacts(component_name, selected)
+        for fname, content in [
+            ("mcp_server.py",       mcp_artifacts.get("mcp_server_py", "")),
+            ("mcp.json",            mcp_artifacts.get("mcp_json", "")),
+            ("mcp_requirements.txt", mcp_artifacts.get("mcp_requirements_txt", "")),
+        ]:
+            if content:
+                _upload_to_blob(
+                    ARTIFACT_CONTAINER,
+                    f"{job_id}/{fname}",
+                    content.encode(),
+                )
+        logger.info("[%s] MCP SDK artifacts uploaded (mcp_server.py, mcp.json)", job_id)
+    except Exception as mcp_exc:
+        logger.warning("[%s] MCP SDK artifact generation failed: %s", job_id, mcp_exc)
+
+    # ── P5: Embed & index invocables in Azure AI Search ────────────────────
+    if OPENAI_ENDPOINT:
+        try:
+            from search import embed_and_index  # type: ignore
+            _oai = _openai_client()
+            embed_and_index(job_id, selected, _oai, functions=tools)
+            logger.info("[%s] AI Search indexing triggered for %d tools", job_id, len(tools))
+        except Exception as search_exc:
+            logger.warning("[%s] AI Search indexing failed (non-fatal): %s", job_id, search_exc)
+
     logger.info(
         "[%s] Generated MCP schema with %d tools",
         job_id, len(tools),
@@ -650,7 +820,13 @@ async def generate(body: dict[str, Any]):
             "component": mcp_schema.get("component", ""),
         }},
     )
-    return JSONResponse({"job_id": job_id, "schema_blob": schema_blob, "mcp_schema": mcp_schema})
+    return JSONResponse({
+        "job_id": job_id,
+        "schema_blob": schema_blob,
+        "mcp_schema": mcp_schema,
+        "mcp_server_blob": f"{job_id}/mcp_server.py" if mcp_artifacts else None,
+        "mcp_json_blob": f"{job_id}/mcp.json" if mcp_artifacts else None,
+    })
 
 
 @app.post("/api/execute")
@@ -729,14 +905,37 @@ async def chat(body: dict[str, Any]):
         _tool_calls_total = 0
         _chat_t0 = time.perf_counter()
 
+        # ── P5: Semantic tool selection ─────────────────────────────────────
+        # If the tool list is large (> 15), retrieve only the top-15 most
+        # semantically relevant tools per user turn to stay inside the GPT-4o
+        # 128-tool limit and reduce prompt tokens.
+        _AI_SEARCH_TOP_K = 15
+        _active_tools = list(tools)  # per-turn tool subset
+        _last_user_message = next(
+            (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
+            "",
+        )
+        if len(tools) > _AI_SEARCH_TOP_K and job_id and _last_user_message:
+            try:
+                from search import retrieve_tools as _retrieve_tools  # type: ignore
+                _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
+                if _semantic_tools:
+                    _active_tools = _semantic_tools
+                    logger.info(
+                        "[%s] Semantic retrieval: %d/%d tools selected",
+                        job_id, len(_active_tools), len(tools),
+                    )
+            except Exception as _se:
+                logger.warning("[%s] Semantic tool retrieval failed: %s", job_id, _se)
+
         for _round in range(MAX_TOOL_ROUNDS):
             kwargs: dict = {
                 "model": OPENAI_DEPLOYMENT,
                 "messages": conversation,
                 "temperature": 0.2,
             }
-            if tools:
-                kwargs["tools"] = tools
+            if _active_tools:
+                kwargs["tools"] = _active_tools
                 kwargs["tool_choice"] = "auto"
 
             response = client.chat.completions.create(**kwargs)

@@ -1118,6 +1118,234 @@ openai>=1.0
 python-dotenv>=1.0
 """
 
+# ---------------------------------------------------------------------------
+# MCP SDK server template (P1)
+# Emits a True MCP-protocol server using the official mcp Python SDK.
+# Supports stdio transport (VS Code Copilot, Claude Desktop) and SSE.
+# Each invocable is registered as an @mcp.tool().
+# ---------------------------------------------------------------------------
+MCP_SERVER_TEMPLATE = r'''# Generated MCP SDK server — __COMPONENT_NAME__
+# True MCP protocol (Model Context Protocol spec) — stdio + SSE transports.
+#
+# Run (stdio — VS Code / Claude Desktop):
+#   pip install -r mcp_requirements.txt
+#   python mcp_server.py
+#
+# Run (SSE — browser / HTTP client):
+#   python mcp_server.py --transport sse --port 8080
+#
+# VS Code: open mcp.json, which auto-configures Copilot Chat to use this server.
+
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Bootstrap: install mcp package if missing (useful when running generated
+# server directly on a fresh machine).
+# ---------------------------------------------------------------------------
+try:
+    from mcp.server.fastmcp import FastMCP  # type: ignore
+except ImportError:
+    import subprocess as _sp
+    _sp.check_call([sys.executable, "-m", "pip", "install", "mcp", "-q"])
+    from mcp.server.fastmcp import FastMCP  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Invocable registry (injected by generator)
+# ---------------------------------------------------------------------------
+INVOCABLES = json.loads(r"""__INVOCABLES_JSON__""")
+INVOCABLE_MAP = {inv["name"]: inv for inv in INVOCABLES}
+
+# ---------------------------------------------------------------------------
+# Type maps for ctypes dispatch
+# ---------------------------------------------------------------------------
+_CTYPES_RESTYPE = {
+    "void": None, "bool": ctypes.c_bool, "int": ctypes.c_int,
+    "unsigned": ctypes.c_uint, "unsigned int": ctypes.c_uint,
+    "long": ctypes.c_long, "unsigned long": ctypes.c_ulong,
+    "size_t": ctypes.c_size_t, "float": ctypes.c_float,
+    "double": ctypes.c_double, "char*": ctypes.c_char_p,
+    "const char*": ctypes.c_char_p, "char *": ctypes.c_char_p,
+    "const char *": ctypes.c_char_p,
+}
+_CTYPES_ARGTYPE = {
+    "int": ctypes.c_int, "unsigned": ctypes.c_uint,
+    "unsigned int": ctypes.c_uint, "long": ctypes.c_long,
+    "unsigned long": ctypes.c_ulong, "size_t": ctypes.c_size_t,
+    "float": ctypes.c_float, "double": ctypes.c_double,
+    "bool": ctypes.c_bool, "string": ctypes.c_char_p,
+    "str": ctypes.c_char_p, "char*": ctypes.c_char_p,
+    "const char*": ctypes.c_char_p, "char *": ctypes.c_char_p,
+    "const char *": ctypes.c_char_p,
+}
+
+
+def _resolve_dll_path(raw: str) -> str:
+    p = Path(raw)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    local = Path(__file__).resolve().parent / raw
+    if local.exists():
+        return str(local)
+    return raw
+
+
+def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
+    dll_path = _resolve_dll_path(execution.get("dll_path", ""))
+    func_name = execution.get("function_name", "")
+    ret_str = (inv.get("return_type") or (inv.get("signature") or {}).get("return_type", "unknown") or "unknown").strip()
+    restype = _CTYPES_RESTYPE.get(ret_str.lower(), ctypes.c_size_t)
+    params = list(inv.get("parameters") or [])
+    if not params:
+        sig_str = (inv.get("signature") or {}).get("parameters", "")
+        if sig_str:
+            for chunk in sig_str.split(","):
+                tokens = chunk.strip().split()
+                if len(tokens) >= 2:
+                    raw_type = " ".join(tokens[:-1]).lower().strip("*").rstrip()
+                    pname = tokens[-1].lstrip("*")
+                    params.append({"name": pname, "type": raw_type})
+    try:
+        lib = ctypes.CDLL(dll_path)
+        fn = getattr(lib, func_name)
+        fn.restype = restype
+        c_args = []
+        if params and args:
+            for p in params:
+                pname = p.get("name", "")
+                ptype = p.get("type", "string").lower().strip("*").rstrip()
+                val = args.get(pname)
+                if val is None:
+                    continue
+                atype = _CTYPES_ARGTYPE.get(ptype, ctypes.c_char_p)
+                c_args.append(ctypes.c_char_p(str(val).encode()) if atype == ctypes.c_char_p else atype(int(val)))
+        elif args:
+            for v in args.values():
+                if isinstance(v, bool):
+                    c_args.append(ctypes.c_bool(v))
+                elif isinstance(v, int):
+                    c_args.append(ctypes.c_size_t(v))
+                elif isinstance(v, float):
+                    c_args.append(ctypes.c_double(v))
+                elif isinstance(v, str):
+                    c_args.append(ctypes.c_char_p(v.encode()))
+        result = fn(*c_args)
+        if restype == ctypes.c_char_p and isinstance(result, bytes):
+            return f"Returned: {result.decode(errors='replace')}"
+        return f"Returned: {result}"
+    except Exception as exc:
+        return f"DLL call error: {exc}"
+
+
+def _execute_cli(execution: dict, name: str, args: dict) -> str:
+    target = execution.get("executable_path") or execution.get("target_path") or execution.get("dll_path", "")
+    if not target:
+        return f"CLI error: no executable path configured for '{name}'"
+    exe_stem = Path(target).stem.lower()
+    if exe_stem == name.lower():
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen([target], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            else:
+                subprocess.Popen([target])
+            return f"Launched {Path(target).name}"
+        except Exception as exc:
+            return f"CLI error: {exc}"
+    cmd = [target, name] + [str(v) for v in args.values()]
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, creationflags=creation_flags)
+        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+    except Exception as exc:
+        return f"CLI error: {exc}"
+
+
+def _execute_tool(inv: dict, args: dict) -> str:
+    name = inv.get("name", "")
+    execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
+    method = execution.get("method", "")
+    if method == "dll_import":
+        return _execute_dll(inv, execution, args)
+    return _execute_cli(execution, name, args)
+
+
+# ---------------------------------------------------------------------------
+# MCP server — one @mcp.tool() per invocable
+# ---------------------------------------------------------------------------
+mcp = FastMCP("__COMPONENT_NAME__")
+
+
+def _make_tool_fn(inv: dict):
+    """Return a callable suitable for FastMCP.tool() registration."""
+    _name = inv["name"]
+    _desc = (inv.get("description") or inv.get("doc") or f"Invoke {_name} from __COMPONENT_NAME__").strip()
+    _params = [p for p in (inv.get("parameters") or []) if p.get("name")]
+
+    if not _params:
+        def _tool_fn() -> str:
+            return _execute_tool(inv, {})
+    else:
+        # Build a function with explicit keyword args so FastMCP can infer the JSON schema.
+        param_list = ", ".join(f"{p['name']}: str = ''" for p in _params)
+        args_dict  = "{" + ", ".join(f'"{p["name"]}": {p["name"]}' for p in _params) + "}"
+        src = (
+            f"def _tool_fn({param_list}) -> str:\n"
+            f"    return _execute_tool(_inv, {args_dict})\n"
+        )
+        ns: dict = {"_execute_tool": _execute_tool, "_inv": inv}
+        exec(src, ns)  # noqa: S102
+        _tool_fn = ns["_tool_fn"]
+
+    _tool_fn.__name__ = _name
+    _tool_fn.__qualname__ = _name
+    _tool_fn.__doc__ = _desc
+    return _tool_fn
+
+
+for _inv in INVOCABLES:
+    _fn = _make_tool_fn(_inv)
+    mcp.tool(name=_fn.__name__, description=_fn.__doc__)(_fn)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="MCP server for __COMPONENT_NAME__")
+    parser.add_argument("--transport", default="stdio", choices=["stdio", "sse"],
+                        help="Transport type (default: stdio)")
+    parser.add_argument("--port", type=int, default=8080,
+                        help="Port for SSE transport (default: 8080)")
+    args_ns = parser.parse_args()
+    if args_ns.transport == "sse":
+        mcp.run(transport="sse", port=args_ns.port)
+    else:
+        mcp.run(transport="stdio")
+'''
+
+MCP_JSON_TEMPLATE = """\
+{
+  "servers": {
+    "__COMPONENT_NAME__": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "cwd": "${workspaceFolder}/generated/__COMPONENT_NAME__",
+      "transportType": "stdio",
+      "env": {}
+    }
+  }
+}
+"""
+
+MCP_REQUIREMENTS = """\
+mcp>=1.0
+"""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1161,6 +1389,7 @@ def main():
 
     print(f"Generating MCP server for '{component_name}' ({len(invocables)} tools) …")
 
+    # ── Legacy Flask chat-UI server (backward compat) ──────────────────────
     _write(
         os.path.join(project_path, "server.py"),
         _inject(SERVER_TEMPLATE, component_name, invocables_json),
@@ -1172,11 +1401,53 @@ def main():
     _write(os.path.join(project_path, "requirements.txt"), REQUIREMENTS)
     _write(os.path.join(project_path, ".env.example"), ENV_EXAMPLE)
 
+    # ── True MCP SDK server (P1) ───────────────────────────────────────────
+    _write(
+        os.path.join(project_path, "mcp_server.py"),
+        _inject(MCP_SERVER_TEMPLATE, component_name, invocables_json),
+    )
+    _write(os.path.join(project_path, "mcp_requirements.txt"), MCP_REQUIREMENTS)
+    _write(
+        os.path.join(project_path, "mcp.json"),
+        _inject(MCP_JSON_TEMPLATE, component_name, invocables_json),
+    )
+
     print(f"\nDone!  cd {project_path}")
+    print("  # Flask chat UI:")
     print("  pip install -r requirements.txt")
     print("  cp .env.example .env   # then fill in your API key")
     print("  python server.py")
     print("  open http://localhost:5000")
+    print()
+    print("  # True MCP SDK server (VS Code Copilot / Claude Desktop):")
+    print("  pip install -r mcp_requirements.txt")
+    print("  python mcp_server.py         # stdio transport")
+    print("  python mcp_server.py --transport sse --port 8080  # SSE transport")
+    print("  # Then in VS Code: add mcp.json to .vscode/ or workspace settings")
+
+
+# ---------------------------------------------------------------------------
+# Public API — called from api/main.py /api/generate (P1)
+# ---------------------------------------------------------------------------
+
+def generate_mcp_sdk_artifacts(
+    component_name: str,
+    invocables: list,
+    output_base: str = OUTPUT_BASE,
+) -> dict:
+    """Generate mcp_server.py + mcp.json for the given component.
+
+    Returns a dict with keys:
+        mcp_server_py  – content of mcp_server.py (str)
+        mcp_json       – content of mcp.json (str)
+        mcp_requirements_txt – content of mcp_requirements.txt (str)
+    """
+    invocables_json = json.dumps(invocables, indent=2)
+    return {
+        "mcp_server_py": _inject(MCP_SERVER_TEMPLATE, component_name, invocables_json),
+        "mcp_json": _inject(MCP_JSON_TEMPLATE, component_name, invocables_json),
+        "mcp_requirements_txt": MCP_REQUIREMENTS,
+    }
 
 
 if __name__ == "__main__":
