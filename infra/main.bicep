@@ -46,6 +46,27 @@ param pipelineImageTag string = 'latest'
 @description('Docker image tag for the UI container app.')
 param uiImageTag string = 'latest'
 
+@description('Set to true to provision the self-hosted Windows runner VM for GUI automation CI jobs.')
+param deployWindowsRunner bool = false
+
+@description('GitHub repo in owner/repo format — used to register the self-hosted runner.')
+param githubRepo string = 'evanking12/mcp-factory'
+
+@description('Ephemeral GitHub Actions runner registration token (expires 1 h). Required when deployWindowsRunner=true.')
+@secure()
+param runnerToken string = ''
+
+@description('Windows local admin password for the runner VM. Required when deployWindowsRunner=true.')
+@secure()
+param runnerVmAdminPassword string = ''
+
+@description('GUI bridge URL — HTTP address of the Windows runner VM (e.g. http://<vm-ip>:8090). Leave empty to disable.')
+param guiBridgeUrl string = ''
+
+@description('Shared secret the pipeline uses to authenticate with the GUI bridge.')
+@secure()
+param guiBridgeSecret string = ''
+
 // ---------------------------------------------------------------------------
 // Derived names — deterministic, collision-free
 // ---------------------------------------------------------------------------
@@ -325,6 +346,9 @@ module pipelineApp 'br/public:avm/res/app/container-app:0.4.1' = {
           { name: 'AZURE_OPENAI_DEPLOYMENT',        value: 'gpt-4o' }
           { name: 'AZURE_SEARCH_ENDPOINT',          value: 'https://${searchName}.search.windows.net' }
           { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.outputs.connectionString }
+          // GUI bridge — optional; leave empty to disable Windows-only analysis in cloud
+          { name: 'GUI_BRIDGE_URL',                 value: guiBridgeUrl }
+          { name: 'GUI_BRIDGE_SECRET',              value: guiBridgeSecret }
         ]
       }
     ]
@@ -382,6 +406,36 @@ module uiApp 'br/public:avm/res/app/container-app:0.4.1' = {
 }
 
 // ---------------------------------------------------------------------------
+// Azure Monitor Workbook (always deployed alongside App Insights)
+// ---------------------------------------------------------------------------
+
+module workbook 'workbook.bicep' = {
+  name:  'workbook'
+  scope: rg
+  params: {
+    location:       location
+    appInsightsId:  appInsights.outputs.resourceId
+    prefix:         prefix
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Self-hosted Windows runner VM  (opt-in: set deployWindowsRunner=true)
+// ---------------------------------------------------------------------------
+
+module runnerVm 'runner-vm.bicep' = if (deployWindowsRunner) {
+  name:  'runnerVm'
+  scope: rg
+  params: {
+    location:      location
+    prefix:        prefix
+    githubRepo:    githubRepo
+    runnerToken:   runnerToken
+    adminPassword: runnerVmAdminPassword
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 
@@ -414,3 +468,9 @@ output keyVaultUri string = kv.outputs.uri
 
 @description('Azure AI Search endpoint')
 output searchEndpoint string = 'https://${searchName}.search.windows.net'
+
+@description('Azure Portal deep-link to the MCP Factory Operations Workbook')
+output workbookUrl string = workbook.outputs.workbookUrl
+
+@description('FQDN of the self-hosted Windows runner VM (only populated when deployWindowsRunner=true)')
+output runnerFqdn string = deployWindowsRunner ? runnerVm.?outputs.runnerFqdn ?? '' : ''

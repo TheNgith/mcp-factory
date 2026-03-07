@@ -66,12 +66,52 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt -r api/requirements.txt
+        run: pip install -r requirements.txt -r api/requirements.txt -r generated/notepad/requirements.txt
 
       - name: Run pytest
-        run: pytest tests/ -v --tb=short
+        # Skip mcp_stdio tests on Linux — they require a live Windows session
+        # (pywinauto, Notepad on the desktop). Those run in the gui-tests job below.
+        run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
 
-  # ── 2. Build & push Docker images ───────────────────────────────────────────
+  # ── 2. GUI automation tests (self-hosted Windows runner) ───────────────────
+  gui-tests:
+    name: GUI automation tests (Windows)
+    runs-on: [self-hosted, windows, x64]
+    # Run in parallel with the Linux test job — no dependency between them.
+    # Only runs on push to main so we don't spin up Notepad on every PR.
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r api/requirements.txt `
+            -r generated/notepad/requirements.txt `
+            pywinauto comtypes pywin32
+        shell: pwsh
+
+      # ── pywinauto GUI tests ─────────────────────────────────────────────
+      - name: Run pywinauto UI tests
+        run: pytest test_notepad_uia.py -v --tb=short
+        shell: pwsh
+
+      # ── MCP stdio protocol tests (includes Windows GUI tool call) ───────
+      - name: Run MCP stdio protocol tests
+        run: pytest tests/test_mcp_stdio.py -v --tb=short
+        shell: pwsh
+
+      # ── End-to-end: launch MCP server, send initialize + tools/list ────
+      - name: MCP end-to-end tool call smoke test
+        run: python scripts/mcp_smoke_test.py
+        shell: pwsh
+
+  # ── 3. Build & push Docker images ───────────────────────────────────────────
   build:
     name: Build & push Docker images
     needs: test
@@ -112,7 +152,7 @@ jobs:
           docker push ${{ env.UI_IMAGE }}:${{ github.sha }}
           docker push ${{ env.UI_IMAGE }}:latest
 
-  # ── 3. Deploy to Azure Container Apps ───────────────────────────────────────
+  # ── 4. Deploy to Azure Container Apps ───────────────────────────────────────
   deploy:
     name: Deploy to ACA
     needs: build

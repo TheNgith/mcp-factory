@@ -91,6 +91,14 @@ OPENAI_ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
+# ── Windows GUI bridge (optional) ─────────────────────────────────────────
+# Set GUI_BRIDGE_URL to the Windows runner VM's bridge address, e.g.:
+#   http://<vm-public-ip>:8090
+# Set GUI_BRIDGE_SECRET to the same BRIDGE_SECRET configured on the VM.
+# If either is absent the pipeline works normally (Linux-only analysis).
+GUI_BRIDGE_URL    = os.getenv("GUI_BRIDGE_URL", "").rstrip("/")
+GUI_BRIDGE_SECRET = os.getenv("GUI_BRIDGE_SECRET", "")
+
 # ── Generation module (P1: MCP SDK server emit) ───────────────────────────
 _GEN_DIR = Path(__file__).parent.parent / "src" / "generation"
 if str(_GEN_DIR) not in sys.path:
@@ -498,6 +506,45 @@ def _extract_invocables(data: Any) -> list:
     return []
 
 
+def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[dict]:
+    """Dispatch Windows-only analysis to the GUI bridge VM.
+
+    Covers GUI (pywinauto), COM/TLB (pythoncom), CLI (Windows EXEs),
+    and registry scan — none of which run in the Linux ACA container.
+
+    Returns an empty list (silently) when the bridge is unconfigured or
+    unreachable so the rest of the pipeline always completes.
+    """
+    if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
+        return []
+
+    import httpx  # already in api/requirements.txt
+
+    payload = {
+        "path":  str(binary_path),
+        "hints": hints,
+        "types": ["gui", "com", "cli", "registry"],
+    }
+    try:
+        logger.info("[%s] Calling GUI bridge at %s for %s", job_id, GUI_BRIDGE_URL, binary_path.name)
+        resp = httpx.post(
+            f"{GUI_BRIDGE_URL}/analyze",
+            json=payload,
+            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+            timeout=120,  # GUI walk can be slow
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        invocables = data.get("invocables", [])
+        if data.get("errors"):
+            logger.warning("[%s] Bridge reported partial errors: %s", job_id, data["errors"])
+        logger.info("[%s] Bridge returned %d invocables", job_id, len(invocables))
+        return invocables
+    except Exception as exc:
+        logger.warning("[%s] GUI bridge call failed (non-fatal): %s", job_id, exc)
+        return []
+
+
 def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     """Run the discovery pipeline on a local file path. Returns invocables list."""
     out_dir = Path(tempfile.mkdtemp(prefix=f"mcp_{job_id}_"))
@@ -580,6 +627,18 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
             "invocable_count": len(merged_invocables),
         }},
     )
+
+    # ── Augment with Windows-only analysis via GUI bridge (if configured) ──
+    # The bridge covers GUI buttons, COM/TLB interfaces, Windows EXE CLI help,
+    # and registry scan — none of which run in the Linux container.
+    bridge_invocables = _call_gui_bridge(binary_path, job_id, hints)
+    if bridge_invocables:
+        for inv in bridge_invocables:
+            name = inv.get("name", "")
+            if name and name not in seen_names:
+                seen_names.add(name)
+                merged_invocables.append(inv)
+        logger.info("[%s] After bridge merge: %d total invocables", job_id, len(merged_invocables))
 
     return {
         "job_id": job_id,

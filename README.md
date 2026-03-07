@@ -82,9 +82,9 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
 - **Pipeline** (`Dockerfile`) — `uvicorn api.main:app` on port 8000. Runs discovery, reads Key Vault secrets via Managed Identity. Writes uploads/artifacts to Blob Storage.
 - **UI** (`Dockerfile.ui`) — `uvicorn ui.main:app` on port 8080. Proxies `/api/*` to the pipeline URL via `httpx`. Holds no secrets.
 
-## Current Status — Week 9 / 16
+## Current Status — Week 10 / 16
 
-> **Summary:** Full end-to-end pipeline is **live in Azure** (commit `7144ed2`). Analyze → generate → chat all verified against `calc.exe`. .NET Aspire builds 0 warnings/0 errors. GitHub Actions CI/CD (test → build → deploy, OIDC) live. App Insights custom telemetry (`discovery_complete`, `generate_complete`, `chat_complete`) active. Only remaining known gap: thin GUI descriptions when running in a Linux container (pywinauto requires Windows).
+> **Summary:** Full end-to-end pipeline is **live in Azure**. Analyze → generate → chat verified against `calc.exe` and `notepad.exe`. MCP stdio server (`generated/notepad/mcp_stdio.py`) registered in `.vscode/mcp.json` — VS Code Copilot connects natively via `#mcp-notepad`. Azure Monitor Workbook deployed alongside App Insights showing live operational metrics. Self-hosted Windows runner VM provisioned in Bicep for GUI automation CI jobs. All known gaps closed.
 
 - [x] **Sections 2-3: Hybrid Discovery Engine** — **COMPLETE**
   - ✅ PE DLL/EXE, .NET, COM/TLB, RPC, CLI, SQL, 9 scripting languages, all §1 legacy protocols
@@ -92,12 +92,14 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
   - ✅ `--registry` flag scans HKLM App Paths, Uninstall keys, and COM CLSID registrations — §1.c
   - ✅ Uniform `{ name, kind, confidence, description, return_type, parameters, execution }` schema
   - ✅ 29/29 demo targets pass across all 10 source-type sections
-- [x] **Section 4: MCP Generation** — **COMPLETE (cloud + local)**
+- [x] **Section 4: MCP Generation** — **COMPLETE (cloud + local + Copilot)**
   - ✅ `python mcp_factory.py --target <file>` runs full pipeline in one command
   - ✅ Flask MCP server with `/tools`, `/invoke`, `/chat`, `/download/invocables`
   - ✅ Chat UI at `http://localhost:5000`; shows tool calls + live execution results
   - ✅ Working demos: Calculator (55 invocables, WinUI3) and Notepad (Win32)
   - ✅ `/api/generate` live in ACA — returns correct tool schema, saved to Blob artifacts
+  - ✅ **`generated/notepad/mcp_stdio.py`** — native MCP JSON-RPC 2.0 stdio server using the `mcp` Python SDK. Same tool registry as the HTTP server; runs `_execute_tool` (pywinauto) in a thread executor so the asyncio loop never blocks.
+  - ✅ **`.vscode/mcp.json`** — VS Code Copilot server registration. Open Copilot Chat → type `#mcp-notepad` → tools appear; ask Copilot to open Notepad and type text → it calls `type_text` through the MCP protocol.
 - [x] **Section 5: Verification UI** — **COMPLETE (cloud)**
   - ✅ FastAPI web UI (`ui/main.py`) — 4-step wizard: Upload → Select → Generate → Chat
   - ✅ Installed-path input field (§2.b) — paste `C:\Program Files\AppD\` directly
@@ -112,14 +114,17 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
   - ✅ Docker images pushed to `mcpfactoryacr.azurecr.io`; both ACA apps live
   - ✅ `mcp-factory-pipeline` — revision `0000003`, end-to-end verified
   - ✅ .NET Aspire — `aspire/AppHost/Program.cs` orchestrates both containers; port bindings, App Insights, and `PIPELINE_URL` injection all wired. Run locally with `cd aspire/AppHost && dotnet run` (requires .NET 8 SDK + Docker Desktop).
-  - ✅ CI/CD — `.github/workflows/ci-cd.yml` — three-job pipeline (test → build → deploy), GitHub OIDC (no stored secrets). Triggers on every push to `main`. One-time `az identity federated-credential create` + role-assignment commands documented in the workflow file header.
+  - ✅ CI/CD — `.github/workflows/ci-cd.yml` — **four**-job pipeline (test → **gui-tests (Windows)** → build → deploy), GitHub OIDC (no stored secrets). Triggers on every push to `main`.
   - ✅ ACA scale-to-zero — both container apps scale to 0 replicas when idle, up to 3/2 on HTTP load. Zero cost when unused.
   - ✅ Blob-backed job state — `_register_invocables` persists invocable map to `artifacts/{job_id}/invocables_map.json`; `_get_invocable` reloads from Blob on cache miss. State survives container recycles and scale-to-zero.
   - ✅ Registry scan wired into API — `_run_discovery` passes `--registry` on Windows, enabling HKLM App Paths / Uninstall / COM CLSID enumeration (§1.c) from the cloud API.
+  - ✅ **Azure Monitor Workbook** — `infra/workbook.bicep` deploys a shared Workbook into `mcp-factory-rg` alongside App Insights. Five tiles: analyses this week, avg invocables/job, tool call success %, avg+P95 latency table, throughput timechart. All KQL queries use `toint(customDimensions[...])` matching the actual telemetry schema.
+  - ✅ **Self-hosted Windows runner VM** — `infra/runner-vm.bicep` provisions a `Standard_D2s_v3` Windows Server 2022 VM with `CustomScriptExtension` that auto-installs Python, pywinauto, and the GitHub Actions runner service on first boot (`scripts/install-github-runner.ps1`). The `gui-tests` CI job targets `[self-hosted, windows, x64]`.
+  - ✅ **Azure AI Search** — `api/search.py` vector-indexes tool descriptions at generation time; chat endpoint uses nearest-neighbor retrieval to select the 15 most relevant tools per turn when a server has >15 tools — prevents context-window exhaustion on large binaries.
 - [x] **Sponsor Requirements (§6 checklist)**
   - ✅ Azure Cloud (compute, storage, networking, OpenAI) — live
-  - ✅ GitHub + GitHub Copilot — in use
-  - ✅ VS Code — dev environment
+  - ✅ GitHub + GitHub Copilot — in use; generated MCP server connects natively to Copilot Chat
+  - ✅ VS Code — dev environment + `.vscode/mcp.json` for Copilot MCP registration
   - ✅ .NET Aspire app host — `aspire/AppHost/Program.cs` — both containers fully wired
   - ✅ GitHub Codespaces — `.devcontainer/devcontainer.json`
   - ✅ Microsoft docs cited — References section in this README
@@ -128,12 +133,38 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
 
 ### Known Gaps
 
-| Gap | Detail |
+| Gap | Status |
 |---|---|
-| Thin descriptions on Linux | `calc.exe` returns "Executable file (no help output detected)" when running inside Linux container — pywinauto / UIA require a live Windows session. Not fixable without a Windows-based runner or sidecar. |
-| CI/CD OIDC activation | ✅ **Done 2026-03-07.** Federated credential created; `Contributor` role assigned on both ACA apps. Push to `main` now triggers test → build → deploy automatically. |
+| Thin GUI descriptions in Linux container | ✅ **Closed 2026-03-07** — `gui-tests` CI job runs on self-hosted Windows runner; pywinauto/UIA runs against a live Windows session in CI. |
+| CI/CD OIDC activation | ✅ **Closed 2026-03-07** — Federated credential created; `Contributor` role assigned on both ACA apps. |
+| MCP protocol proof (Copilot tool call) | ✅ **Closed 2026-03-07** — Confirmed live: opened Copilot Chat, asked it to open Notepad and type "hello world" — it called `file_new` then `type_text` through the MCP stdio protocol. Notepad opened and text appeared. |
+| GUI / COM / CLI Windows analysis in cloud | ✅ **Closed 2026-03-07** — `scripts/gui_bridge.py` FastAPI worker runs on the Windows runner VM, exposing `POST /analyze` for all 4 Windows-only source types (GUI pywinauto, COM/TLB pythoncom, Windows EXE CLI, registry scan). `api/main.py` calls the bridge after static analysis and merges results. Wired into Bicep via `guiBridgeUrl` / `guiBridgeSecret` params; VM auto-starts the bridge as a scheduled task on boot. |
 
 **Approach:** A **Hybrid Discovery Engine** that intelligently routes any target file to the appropriate analyzers based on detected capabilities, producing a uniform MCP JSON contract that §4 consumes directly.
+
+## VS Code Copilot Integration
+
+The generated MCP server connects directly to VS Code Copilot Chat — no extra configuration required.
+
+**Prerequisites:** `.venv` activated, `mcp>=1.0` installed (`pip install -r generated/notepad/requirements.txt`).
+
+**Steps:**
+
+1. Open this repo in VS Code. The `.vscode/mcp.json` is already present and points to `generated/notepad/mcp_stdio.py`.
+2. Open Copilot Chat (`Ctrl+Alt+I`).
+3. Type: `#mcp-notepad open a new file and type hello world`
+4. Copilot calls `file_new` then `type_text` through the MCP stdio protocol. Notepad opens on your desktop and "hello world" appears in it.
+
+**What this proves:** The factory generated a binary → `invocables.json` → `mcp_stdio.py` → VS Code Copilot can control Notepad. That is the complete proof-of-concept end-to-end.
+
+**Run the server manually (for debugging):**
+```powershell
+.venv\Scripts\Activate.ps1
+cd generated\notepad
+python mcp_stdio.py
+# Send JSON-RPC manually or use scripts\mcp_smoke_test.py
+python ..\..\scripts\mcp_smoke_test.py
+```
 
 ## Platform Requirements
 
