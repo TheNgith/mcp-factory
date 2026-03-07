@@ -41,6 +41,13 @@ __pycache__/
 *.egg-info/
 validation_output/
 
+# Generated pipeline output (local artifacts, not source)
+generated/
+
+# Root-level debug/scratch test scripts
+test_notepad_uia.py
+test_saveas_tree.py
+
 demo_output/
 
 # Working/scratch documents not for version control

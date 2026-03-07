@@ -18,6 +18,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Res
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_factory.ui")
 
+# ── Optional API-key guard ─────────────────────────────────────────────────
+# Set UI_API_KEY env var on the container to require a shared key on every
+# request.  Leave unset (or empty) for open access during local development.
+UI_API_KEY = os.getenv("UI_API_KEY", "")
+
 PIPELINE_URL = os.getenv(
     "PIPELINE_URL",
     "https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io",
@@ -30,6 +35,56 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _api_key_guard(request: Request, call_next):
+    """If UI_API_KEY is set, every non-health request must present it."""
+    if not UI_API_KEY:
+        return await call_next(request)
+    # always allow health + static assets
+    if request.url.path in ("/health", "/favicon.ico"):
+        return await call_next(request)
+    # check header or query param
+    provided = (
+        request.headers.get("X-UI-Key", "")
+        or request.query_params.get("apikey", "")
+    )
+    # For browser page load we embed the key via a cookie set by the login form
+    if not provided:
+        provided = request.cookies.get("ui_api_key", "")
+    if provided != UI_API_KEY:
+        from fastapi.responses import HTMLResponse as _HR
+        login_html = """
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<title>MCP Factory – Sign In</title>
+<style>body{background:#0f1117;color:#e2e6f3;font-family:'Segoe UI',system-ui,sans-serif;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+  .box{background:#1a1d27;border:1px solid #2e3254;border-radius:10px;padding:36px 40px;width:340px}
+  h2{margin:0 0 24px;color:#5b8ef0;font-size:1.2rem}input{width:100%;background:#22263a;
+  border:1px solid #2e3254;border-radius:7px;color:#e2e6f3;font-size:.9rem;padding:10px 13px;
+  outline:none;box-sizing:border-box;margin-bottom:16px}input:focus{border-color:#5b8ef0}
+  button{background:#5b8ef0;color:#fff;border:none;border-radius:7px;padding:10px 24px;
+  font-size:.9rem;font-weight:600;cursor:pointer;width:100%}.err{color:#f09090;font-size:.82rem;margin-top:8px}
+</style></head><body><div class="box">
+<h2>⚙ MCP Factory — Access Required</h2>
+<form id="f" onsubmit="return submit()">
+  <input type="password" id="k" placeholder="Enter API key" autofocus />
+  <button type="submit">Continue</button>
+  <div class="err" id="err"></div>
+</form></div>
+<script>
+function submit(){
+  const k=document.getElementById('k').value;
+  document.cookie='ui_api_key='+encodeURIComponent(k)+';path=/;SameSite=Strict';
+  fetch('/',{headers:{'X-UI-Key':k}}).then(r=>{
+    if(r.ok){location.reload();}else{document.getElementById('err').textContent='Invalid key.';}
+  });
+  return false;
+}
+</script></body></html>"""
+        return _HR(content=login_html, status_code=401)
+    return await call_next(request)
 
 
 # ── Single-page frontend ───────────────────────────────────────────────────
@@ -375,7 +430,21 @@ _HTML = r"""<!DOCTYPE html>
           <div class="file-name" id="file-name"></div>
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:12px;margin:4px 0 4px">
+        <hr style="flex:1;border:none;border-top:1px solid var(--border)" />
+        <span style="font-size:.78rem;color:var(--muted);white-space:nowrap">OR — already installed</span>
+        <hr style="flex:1;border:none;border-top:1px solid var(--border)" />
+      </div>
 
+      <div class="form-row">
+        <label>Installed path on the server (e.g. C:\Program Files\AppD\)</label>
+        <input class="input" id="dir-path" type="text"
+          placeholder="C:\Windows\System32\notepad.exe  or  C:\Program Files\AppD\"
+          autocomplete="off" />
+        <div style="font-size:.75rem;color:var(--muted);margin-top:4px">
+          ⚠ Path must be accessible from the pipeline server. Use file upload for cloud deployments.
+        </div>
+      </div>
       <div class="form-row">
         <label>Hints / description (optional)</label>
         <textarea id="hints" placeholder="e.g. calculator CLI, zstd compression library…"></textarea>
@@ -528,9 +597,27 @@ const fileDrop  = $('file-drop');
 fileInput.addEventListener('change', () => {
   const name = fileInput.files[0]?.name || '';
   $('file-name').textContent = name ? `✓ ${name}` : '';
-  $('analyze-btn').disabled = !name;
+  // clear the path field when a file is chosen
+  if (name) $('dir-path').value = '';
+  _syncAnalyzeBtn();
   clearError('upload-error');
 });
+
+$('dir-path').addEventListener('input', () => {
+  // clear file selection when a path is typed
+  if ($('dir-path').value.trim()) {
+    fileInput.value = '';
+    $('file-name').textContent = '';
+  }
+  _syncAnalyzeBtn();
+  clearError('upload-error');
+});
+
+function _syncAnalyzeBtn() {
+  const hasFile = !!fileInput.files[0];
+  const hasPath = !!$('dir-path').value.trim();
+  $('analyze-btn').disabled = !hasFile && !hasPath;
+}
 
 ['dragover','dragleave','drop'].forEach(ev =>
   fileDrop.addEventListener(ev, e => {
@@ -547,24 +634,40 @@ fileInput.addEventListener('change', () => {
 // ── Analyze ───────────────────────────────────────────────
 $('analyze-btn').addEventListener('click', async () => {
   clearError('upload-error');
-  const file = fileInput.files[0];
-  if (!file) return;
+  const file    = fileInput.files[0];
+  const dirPath = $('dir-path').value.trim();
+  if (!file && !dirPath) return;
 
   const btn = $('analyze-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Analyzing…';
 
-  const fd = new FormData();
-  fd.append('file', file);
-  fd.append('hints', $('hints').value.trim());
-
   try {
-    const res = await fetch('/api/analyze', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${res.status}: ${err}`);
+    let data;
+    if (dirPath) {
+      // §2.b installed-path route
+      const res = await fetch('/api/analyze-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dirPath, hints: $('hints').value.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`${res.status}: ${err}`);
+      }
+      data = await res.json();
+    } else {
+      // §2.a file-upload route
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('hints', $('hints').value.trim());
+      const res = await fetch('/api/analyze', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`${res.status}: ${err}`);
+      }
+      data = await res.json();
     }
-    const data = await res.json();
     state.jobId = data.job_id;
     state.invocables = flattenInvocables(data.invocables);
     buildInvocablesList();
@@ -579,24 +682,53 @@ $('analyze-btn').addEventListener('click', async () => {
 
 // ── Flatten invocables from the discovery JSON ────────────
 function flattenInvocables(raw) {
-  // The discovery JSON can come in several shapes; normalise to array
-  if (Array.isArray(raw)) return raw;
-  // {tools: [...]}
-  if (raw && Array.isArray(raw.tools)) return raw.tools.map(t => ({
+  // The discovery JSON can come in several shapes; normalise to a flat array.
+  // Always normalise individual items so `doc`, `signature`, and `execution`
+  // are reliably present for the rest of the UI.
+  function normalise(inv) {
+    return {
+      ...inv,
+      // discovery uses `description`; older formats may use `doc`/`signature`
+      doc: inv.doc ?? inv.description ?? '',
+      signature: inv.signature ?? inv.description ?? inv.name ?? '',
+      parameters: inv.parameters ?? [],
+      execution: inv.execution ?? {},
+      tier: inv.tier ?? inv.confidence_tier ?? 2,
+    };
+  }
+
+  // Plain array – already normalised (the API now always returns this)
+  if (Array.isArray(raw)) return raw.map(normalise);
+
+  // Nested discovery format: {metadata:{}, invocables:[…], summary:{}}
+  // Also handles the case where the API accidentally passes the full JSON dict.
+  if (raw && Array.isArray(raw.invocables)) return raw.invocables.map(normalise);
+
+  // OpenAI function-call tool schema: {tools: [{type:"function", function:{…}}]}
+  if (raw && Array.isArray(raw.tools)) return raw.tools.map(t => normalise({
     name: t.function?.name ?? t.name,
     signature: t.function?.description ?? '',
     doc: t.function?.description ?? '',
     parameters: Object.entries(t.function?.parameters?.properties ?? {}).map(([k,v])=>({name:k,type:v.type})),
     tier: 1,
+    execution: t.execution ?? {},
   }));
-  // flat object {name: {...}}
-  if (raw && typeof raw === 'object') return Object.entries(raw).map(([name, info]) => ({
-    name,
-    signature: info.signature ?? name,
-    doc: info.doc ?? info.description ?? '',
-    parameters: info.parameters ?? [],
-    tier: info.tier ?? 2,
-  }));
+
+  // Legacy flat object {name: {signature, doc, …}}
+  // Guard against top-level metadata/summary keys sneaking in.
+  if (raw && typeof raw === 'object') {
+    const skip = new Set(['metadata', 'summary', 'mcp_version', 'component']);
+    return Object.entries(raw)
+      .filter(([k]) => !skip.has(k))
+      .map(([name, info]) => normalise({
+        name,
+        signature: info.signature ?? name,
+        doc: info.doc ?? info.description ?? '',
+        parameters: info.parameters ?? [],
+        tier: info.tier ?? 2,
+        execution: info.execution ?? {},
+      }));
+  }
   return [];
 }
 
@@ -717,6 +849,9 @@ async function sendMessage() {
       body: JSON.stringify({
         messages: state.messages,
         tools: state.tools,
+        // Pass full invocable metadata so the pipeline can actually execute tool calls
+        invocables: state.invocables,
+        job_id: state.jobId,
       }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
@@ -724,11 +859,16 @@ async function sendMessage() {
 
     if (data.tool_calls?.length) {
       data.tool_calls.forEach(tc => {
-        appendChatMsg('tool-call', `🔧 ${tc.name}(${tc.arguments})`);
+        appendChatMsg('tool-call', `🔧 ${tc.name}(${tc.arguments ?? JSON.stringify(tc)})`);
       });
     }
     const content = data.content ?? '*(no text content)*';
     appendChatMsg('assistant', content);
+    // show round count when the model needed multiple tool-call loops
+    if ((data.rounds ?? 1) > 1) {
+      appendChatMsg('tool-call',
+        `ℹ️ Completed in ${data.rounds} agentic round(s)`);
+    }
     state.messages.push({ role: 'assistant', content });
   } catch(e) {
     showError('chat-error', `Chat error: ${e.message}`);
@@ -770,7 +910,8 @@ $('restart-btn').addEventListener('click', () => {
   state.jobId = null; state.invocables = []; state.tools = [];
   state.schemaBlob = null; state.messages = [];
   fileInput.value = ''; $('file-name').textContent = '';
-  $('hints').value = ''; $('analyze-btn').disabled = true;
+  $('dir-path').value = ''; $('hints').value = '';
+  $('analyze-btn').disabled = true;
   $('chat-window').innerHTML =
     '<div class="chat-empty" id="chat-empty">Send a message to start the conversation.<br/><span style="font-size:.75rem;">e.g. "What tools are available?" or "Run add(3, 4)"</span></div>';
   showSection(0);
@@ -833,6 +974,12 @@ async def proxy_analyze(file: UploadFile = File(...), hints: str = Form(default=
     except Exception as e:
         logger.error(f"Proxy analyze error: {e}")
         return JSONResponse({"detail": str(e)}, status_code=502)
+
+
+@app.post("/api/analyze-path")
+async def proxy_analyze_path(body: dict[str, Any]) -> JSONResponse:
+    """Proxy installed-path analysis to the pipeline /api/analyze-path."""
+    return await _proxy_json("/api/analyze-path", body)
 
 
 @app.post("/api/generate")

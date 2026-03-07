@@ -19,12 +19,34 @@ from exports import demangle_with_undname, deduplicate_exports, resolve_forwarde
 from pe_parse import read_pe_exports, get_exports_from_dumpbin, find_dumpbin
 from schema import ExportedFunc, Invocable, MatchInfo, write_csv, write_json, write_markdown, write_tier_summary, write_invocables_json, exports_to_invocables
 from utils import Spinner, format_verbose_header, format_verbose_result
-from dotnet_analyzer import get_dotnet_methods, get_dotnet_metadata
-from com_scan import scan_com_registry, com_objects_to_invocables
 from import_analyzer import analyze_imports, format_capabilities_summary
 from rpc_analyzer import analyze_rpc, rpc_to_invocables, format_rpc_summary
 from cli_analyzer import analyze_cli
-from gui_analyzer import analyze_gui, PYWINAUTO_AVAILABLE
+
+# Windows-only analyzers — imported conditionally so the pipeline runs on Linux
+try:
+    from dotnet_analyzer import get_dotnet_methods, get_dotnet_metadata
+    _DOTNET_AVAILABLE = True
+except Exception:
+    _DOTNET_AVAILABLE = False
+    def get_dotnet_methods(*a, **kw): return []
+    def get_dotnet_metadata(*a, **kw): return {}
+
+try:
+    from com_scan import scan_com_registry, com_objects_to_invocables
+    _COM_AVAILABLE = True
+except Exception:
+    _COM_AVAILABLE = False
+    def scan_com_registry(*a, **kw): return []
+    def com_objects_to_invocables(*a, **kw): return []
+
+try:
+    from gui_analyzer import analyze_gui, PYWINAUTO_AVAILABLE
+    _GUI_AVAILABLE = True
+except Exception:
+    _GUI_AVAILABLE = False
+    PYWINAUTO_AVAILABLE = False
+    def analyze_gui(*a, **kw): return []
 from script_analyzer import analyze_script
 from sql_analyzer import analyze_sql
 from js_analyzer import analyze_js
@@ -33,6 +55,14 @@ from wsdl_analyzer import analyze_wsdl
 from idl_analyzer import analyze_idl
 from jndi_analyzer import analyze_jndi
 from pdb_analyzer import analyze_pdb
+
+# Registry analyzer — Windows only, gracefully absent on Linux
+try:
+    from registry_analyzer import analyze_registry
+    _REGISTRY_AVAILABLE = True
+except Exception:
+    _REGISTRY_AVAILABLE = False
+    def analyze_registry(*a, **kw): return []  # type: ignore
 
 # Plugin-based analyzer registry
 ANALYZER_REGISTRY = {
@@ -50,6 +80,7 @@ ANALYZER_REGISTRY = {
     'idl':      {'name': 'CORBA IDL Analyzer',       'enabled': True},
     'jndi':     {'name': 'JNDI Config Analyzer',     'enabled': True},
     'pdb':      {'name': 'PDB Symbol Analyzer',      'enabled': True},
+    'registry': {'name': 'Windows Registry Analyzer (§1.c)', 'enabled': True},
 }
 
 
@@ -771,6 +802,32 @@ def analyze_cli_tool(exe_path: Path, out_dir: Path, base_name: str, args) -> int
     return 0
 
 
+# ── §1.c Registry scan helper ─────────────────────────────────────────────
+
+def _run_registry_scan(out_dir: Path, base_name: str, hints: str = "") -> None:
+    """Run analyze_registry and persist the result as *base_name*_registry_mcp.json."""
+    import json as _json
+
+    if not _REGISTRY_AVAILABLE:
+        logger.warning("Registry scan requested but winreg is not available (non-Windows).")
+        return
+
+    logger.info("§1.c: Scanning Windows Registry…")
+    invocables = analyze_registry(hints)
+
+    if not invocables:
+        logger.info("Registry scan: no invocables found.")
+        return
+
+    out_path = out_dir / f"{base_name}_registry_mcp.json"
+    out_path.write_text(
+        _json.dumps({"invocables": invocables, "source": "windows_registry"}, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(f"Registry scan: {len(invocables)} invocables → {out_path}")
+    print(f"\n[§1.c Registry] {len(invocables)} invocables found → {out_path.name}")
+
+
 def main():
     """Main entry point."""
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
@@ -844,6 +901,11 @@ def main():
         action="store_true",
         help="Show detailed pipeline steps with spinner animation",
     )
+    parser.add_argument(
+        "--registry",
+        action="store_true",
+        help="§1.c: Also scan the Windows Registry (App Paths, installed apps, COM classes)",
+    )
 
     args = parser.parse_args()
 
@@ -873,6 +935,11 @@ def main():
     # ── §2.a: Accept installed directory (c:\Program Files\AppD\) ────────────
     if dll_path and dll_path.is_dir():
         return analyze_directory(dll_path, out_dir, args)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── §1.c: Optional Windows Registry scan ─────────────────────────────────
+    if getattr(args, "registry", False):
+        _run_registry_scan(out_dir, base_name, getattr(args, "description", ""))
     # ─────────────────────────────────────────────────────────────────────────
 
     # Detect file type and route to appropriate analyzer

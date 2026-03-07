@@ -15,6 +15,14 @@ examplejson/
 experiments/
 docs/
 tests/
+generated/
+scripts/
+aspire/
 *.md
 Dockerfile
+Dockerfile.ui
 .dockerignore
+mcp_factory.py
+README.md
+CHANGELOG.md
+CONTRIBUTING.md

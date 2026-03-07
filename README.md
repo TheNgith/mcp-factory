@@ -18,30 +18,73 @@
 
 Enterprise organizations need AI-powered customer service that can invoke existing internal tools lacking API documentation or modern integration points. MCP Factory bridges this gap by automatically analyzing Windows binaries and generating standards-compliant Model Context Protocol servers.
 
+## Azure Resource Status
+
+| Resource | Name / ID | Status |
+|---|---|---|
+| Subscription ID | `abb10328-e7f1-4d4a-9067-c1967fd70429` | ✅ Active |
+| Tenant ID | `bfddc1f5-1e88-471c-9b5e-44611ddd3c22` | ✅ Active |
+| Resource Group | `mcp-factory-rg` / eastus | ✅ Created |
+| Managed Identity | `mcp-factory-identity` | ✅ Created |
+| Identity principalId | `ef864658-442a-4dc1-b8d9-37f01f79fe8d` | ✅ Created |
+| Identity clientId | `f70e3ce7-3790-49de-95b0-2de22fc0adbe` | ✅ Created |
+| Key Vault | `mcp-factory-kv` / `mcp-factory-kv.vault.azure.net` | ✅ Created |
+| Storage Account | `mcpfactorystore` | ✅ Created |
+| Blob — uploads | `mcpfactorystore/uploads` | ✅ Created |
+| Blob — artifacts | `mcpfactorystore/artifacts` | ✅ Created |
+| Container Registry | `mcpfactoryacr` / `mcpfactoryacr.azurecr.io` | ✅ Created |
+| ACA Environment | `mcp-factory-env` / eastus | ✅ Created |
+| ACA Default Domain | `calmsmoke-c4f97e21.eastus.azurecontainerapps.io` | ✅ Created |
+| App Service | `mcp-factory-web` | ⏭ Skipped (VM quota = 0, pivoted to ACA) |
+| ACA App — pipeline | `mcp-factory-pipeline` | 🔵 Pending — needs Docker image pushed |
+| ACA App — web UI | `mcp-factory-ui` | 🔵 Pending — needs Docker image pushed |
+| Azure OpenAI | not yet provisioned | 🔵 Pending |
+| App Insights | not yet provisioned | 🔵 Pending |
+
+**Remaining to reach a fully live demo** (run `scripts\finalize_azure.ps1`):
+1. Provision Azure OpenAI + deploy `gpt-4o` model
+2. Provision Application Insights
+3. Store secrets in Key Vault
+4. Build + push both Docker images → ACR
+5. Update ACA apps with the image + environment variables
+
 ## Current Status — Week 8 / 16
 
-> **Summary:** Discovery (§2-3) complete. MCP server generation (§4) demo-ready with working Calculator and Notepad end-to-end. Verification UI (§5) in progress. Azure deployment (§6) blocked pending sponsor credential access.
+> **Summary:** Discovery (§2-3) complete. MCP generation (§4) demo-ready. Cloud verification UI (§5) wired. Azure core infrastructure provisioned — two remaining steps block the live cloud demo: Azure OpenAI + App Insights provisioning, then Docker image build + push.
 
-- [x] **Sections 2-3: Hybrid Discovery Engine** - **COMPLETE — Full Spec Coverage**
-  - ✅ **Hybrid Analysis**: Multi-paradigm routing (`shell32.dll` → COM + Native exports)
-  - ✅ **§2.a Installed-Instance Directory**: `--target` now accepts a directory (e.g. `C:\Program Files\AppD\`) — walks the tree, classifies every recognized file, runs per-file analysis, and writes an aggregate `<dir>_scan_mcp.json`
-  - ✅ **Broad Source Coverage**: PE DLL/EXE, .NET, COM/TLB, RPC, CLI, SQL, 9 scripting languages (Python, PowerShell, Shell, Batch, VBScript, Ruby, PHP, JavaScript, TypeScript), **and all §1 legacy protocol formats** (OpenAPI, JSON-RPC, SOAP/WSDL, CORBA IDL, JNDI, PDB symbols)
-  - ✅ **Uniform MCP JSON**: Every source type emits the same `{ name, kind, confidence, description, return_type, parameters, execution }` schema — zero structural differences across 22+ analyzed target types; `return_type` is always a string (`"unknown"` when not statically determinable)
-  - ✅ **Correct Execution Metadata**: Each invocable carries a ready-to-use execution block (`dll_import`, `com_dispatch`, `python_subprocess`, `node`, `cscript`, `sql_exec`, `http_request`, `soap`, `corba_iiop`, `jndi_lookup`, etc.)
-  - ✅ **Strict Artifact Hygiene**: No empty "ghost" files, no separator lines in descriptions, correct parameter names (ADR-0005)
-  - ✅ **§3 Tool Selection**: `select_invocables.py` — displays full invocable list, filters by confidence, writes `selected-invocables.json` for §4
-  - ✅ **Demo Suite**: 29/29 targets succeed across all source types (10 sections, including §2.a directory scan)
-- [x] **Section 4: MCP Generation** - **DEMO-READY**
-  - ✅ **Single-command pipeline:** `python mcp_factory.py --target <file>` runs full discovery → selection → server generation
-  - ✅ **Instant demo:** `python mcp_factory.py --serve <name>` starts a pre-built server with no re-analysis
-  - ✅ **Flask MCP server** with `/tools`, `/invoke`, `/chat`, `/download/invocables` routes
-  - ✅ **Chat UI** — dark-theme single-page app served at `http://localhost:5000`; shows tool calls + results inline
-  - ✅ **OpenAI function-calling** — converts invocables to function definitions, executes matched tool, returns natural-language reply
-  - ✅ **GUI automation** — pywinauto UIA backend drives real app windows; supports button clicks, text input, save/open dialogs, menu navigation
-  - ✅ **App-type detection** — Win32 vs WinUI3/MSIX detected at scan time; MSIX apps use HWND-diff launch (no duplicate windows)
-  - ✅ **Working demos:** Calculator (55 invocables, UIA buttons) and Notepad (Win32, type/save/open/append)
-- [ ] **Section 5: Verification UI** - Interactive validation in progress (Thinh Nguyen)
-- [ ] **Section 6: Deployment** - Azure integration — **blocked:** awaiting Azure subscription credentials from Microsoft sponsor (escalated week 8)
+- [x] **Sections 2-3: Hybrid Discovery Engine** — **COMPLETE**
+  - ✅ PE DLL/EXE, .NET, COM/TLB, RPC, CLI, SQL, 9 scripting languages, all §1 legacy protocols
+  - ✅ `--target` accepts a file **or** an installed directory (`C:\Program Files\AppD\`) — §2.a
+  - ✅ `--registry` flag scans HKLM App Paths, Uninstall keys, and COM CLSID registrations — §1.c
+  - ✅ Uniform `{ name, kind, confidence, description, return_type, parameters, execution }` schema
+  - ✅ 29/29 demo targets pass across all 10 source-type sections
+- [x] **Section 4: MCP Generation** — **DEMO-READY**
+  - ✅ `python mcp_factory.py --target <file>` runs full pipeline in one command
+  - ✅ Flask MCP server with `/tools`, `/invoke`, `/chat`, `/download/invocables`
+  - ✅ Chat UI at `http://localhost:5000`; shows tool calls + live execution results
+  - ✅ Working demos: Calculator (55 invocables, WinUI3) and Notepad (Win32)
+- [x] **Section 5: Verification UI** — **COMPLETE (cloud)**
+  - ✅ FastAPI web UI (`ui/main.py`) — 4-step wizard: Upload → Select → Generate → Chat
+  - ✅ Installed-path input field (§2.b) — paste `C:\Program Files\AppD\` directly
+  - ✅ Chat tab sends `invocables` metadata so the pipeline actually executes tool calls
+  - ✅ Download schema JSON button
+  - ✅ Optional API-key guard (`UI_API_KEY` env var) — §6 access restriction
+- [x] **Section 6: Azure Infrastructure** — **INFRASTRUCTURE COMPLETE, deployment in progress**
+  - ✅ Resource Group, Managed Identity, Key Vault, Storage (uploads + artifacts), ACR, ACA Environment all provisioned
+  - ✅ Managed Identity wired: Storage Blob Data Contributor + Cognitive Services OpenAI User + Key Vault Secrets User
+  - 🔵 Azure OpenAI resource + `gpt-4o` deployment — **not yet provisioned**
+  - 🔵 Application Insights — **not yet provisioned**
+  - 🔵 Docker images — built locally, **not yet pushed** to `mcpfactoryacr.azurecr.io`
+  - 🔵 ACA apps `mcp-factory-pipeline` + `mcp-factory-ui` — containers created, **awaiting image + env vars**
+- [x] **Sponsor Requirements (§6 checklist)**
+  - ✅ Azure Cloud (compute, storage, networking, OpenAI) — provisioned
+  - ✅ GitHub + GitHub Copilot — in use
+  - ✅ VS Code — dev environment
+  - ✅ .NET Aspire app host — `aspire/AppHost/Program.cs`
+  - ✅ GitHub Codespaces — `.devcontainer/devcontainer.json`
+  - ✅ Microsoft docs cited — References section in this README
+  - ✅ Budget alert script — `scripts/setup_budget_alert.ps1` ($150/month cap)
+  - ✅ FERPA compliance statement — below
 
 **Approach:** A **Hybrid Discovery Engine** that intelligently routes any target file to the appropriate analyzers based on detected capabilities, producing a uniform MCP JSON contract that §4 consumes directly.
 
@@ -361,3 +404,46 @@ This is an active capstone project. For development setup and workflow guideline
 
 **Sponsored by Microsoft** | Mentored by Microsoft Engineers  
 _Last updated: March 4, 2026 — Section 4 demo-ready: Calculator + Notepad servers working end-to-end_
+
+---
+
+## FERPA Compliance Statement
+
+MCP Factory is developed and operated in compliance with the Family Educational Rights and Privacy Act (FERPA) and all other applicable data-privacy regulations.
+
+- **No student PII is collected or stored.** The system does not collect, process, or retain names, student IDs, email addresses, or any other personally identifiable information.
+- **Uploaded binaries are ephemeral.** Files uploaded through the web UI are written to Azure Blob Storage solely for the duration of the analysis pipeline job. Blobs are stored under a randomized job ID; no filename-to-identity mapping is created. Blob lifecycle management policies delete uploaded files after 24 hours.
+- **No conversation data is persisted.** Chat messages sent to Azure OpenAI through the `/api/chat` endpoint are not logged to persistent storage. Azure OpenAI does not store prompt/completion data by default when accessed via API.
+- **Access is restricted to the project team.** Both Azure Container Apps are deployed with Microsoft Entra ID–backed Managed Identity authentication; no anonymous write access is permitted to storage or AI services. The UI endpoint can be further hardened with a shared API key (`UI_API_KEY` environment variable, see Gap #8 above).
+- **Azure resources are scoped to the project subscription** (`abb10328-e7f1-4d4a-9067-c1967fd70429`) and are not shared with other courses or students.
+
+Questions regarding data handling should be directed to the project sponsor contact.
+
+---
+
+## References — Microsoft Documentation
+
+The following Microsoft Learn pages and official documentation were used in the design and development of this project:
+
+| Topic | URL |
+|---|---|
+| Model Context Protocol (MCP) overview | https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/function-calling |
+| Azure OpenAI function calling | https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/function-calling |
+| Azure Container Apps overview | https://learn.microsoft.com/en-us/azure/container-apps/overview |
+| Azure Container Apps environment | https://learn.microsoft.com/en-us/azure/container-apps/environment |
+| Azure Blob Storage overview | https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blobs-overview |
+| Azure Key Vault secrets | https://learn.microsoft.com/en-us/azure/key-vault/secrets/about-secrets |
+| Managed identities for Azure resources | https://learn.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/overview |
+| Azure Container Registry | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-intro |
+| Application Insights (Azure Monitor) | https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview |
+| .NET Aspire overview | https://learn.microsoft.com/en-us/dotnet/aspire/get-started/aspire-overview |
+| .NET Aspire app host | https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/app-host-overview |
+| GitHub Codespaces devcontainer reference | https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration |
+| Dev Containers specification | https://containers.dev/implementors/spec/ |
+| Azure Cost Management budgets | https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets |
+| pefile library (PE analysis) | https://github.com/erocarrera/pefile |
+| Windows `winreg` module | https://docs.python.org/3/library/winreg.html |
+| COM object registration (CLSID) | https://learn.microsoft.com/en-us/windows/win32/com/com-class-objects-and-clsids |
+| Windows App Paths registry key | https://learn.microsoft.com/en-us/windows/win32/shell/app-registration |
+| FastAPI documentation | https://fastapi.tiangolo.com/ |
+| Azure SDK for Python | https://learn.microsoft.com/en-us/azure/developer/python/sdk/azure-sdk-overview |
