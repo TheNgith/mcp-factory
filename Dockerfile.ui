@@ -1,0 +1,17 @@
+# MCP Factory – UI container
+# Lightweight: only FastAPI + httpx (proxies to the pipeline container).
+FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY ui/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY ui/ ./ui/
+
+# Pipeline API URL – overridden at deploy time via ACA env var
+ENV PIPELINE_URL=https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io
+
+EXPOSE 8080
+
+CMD ["uvicorn", "ui.main:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,0 +1,111 @@
+# .github/workflows/deploy-ui.yml
+#
+# Builds and deploys the UI container (Dockerfile.ui) to ACA as
+# mcp-factory-ui. Creates the Container App on first run; updates on
+# subsequent runs.
+#
+# ── Required GitHub Secrets ──────────────────────────────────────────────
+#   AZURE_CLIENT_ID       → f70e3ce7-3790-49de-95b0-2de22fc0adbe
+#   AZURE_TENANT_ID       → bfddc1f5-1e88-471c-9b5e-44611ddd3c22
+#   AZURE_SUBSCRIPTION_ID → abb10328-e7f1-4d4a-9067-c1967fd70429
+#
+# See deploy-pipeline.yml for the one-time OIDC federated credential setup.
+# ────────────────────────────────────────────────────────────────────────
+
+name: Deploy UI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ui/**'
+      - 'Dockerfile.ui'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR:           mcpfactoryacr.azurecr.io
+  IMAGE:         mcpfactoryacr.azurecr.io/mcp-factory-ui
+  APP_NAME:      mcp-factory-ui
+  RG:            mcp-factory-rg
+  ACA_ENV:       mcp-factory-env
+  IDENTITY:      mcp-factory-identity
+  PIPELINE_URL:  https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io
+  IDENTITY_ID:   /subscriptions/abb10328-e7f1-4d4a-9067-c1967fd70429/resourcegroups/mcp-factory-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mcp-factory-identity
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name mcpfactoryacr
+
+      - name: Build & push image
+        run: |
+          IMAGE_TAG="${{ env.IMAGE }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ env.IMAGE }}:latest"
+          docker build -f Dockerfile.ui -t "$IMAGE_TAG" -t "$IMAGE_LATEST" .
+          docker push "$IMAGE_TAG"
+          docker push "$IMAGE_LATEST"
+
+      - name: Create or update Container App
+        run: |
+          IMAGE_TAG="${{ env.IMAGE }}:${{ github.sha }}"
+
+          if az containerapp show \
+               --name ${{ env.APP_NAME }} \
+               --resource-group ${{ env.RG }} \
+               --query name -o tsv 2>/dev/null; then
+            echo "→ Updating existing Container App"
+            az containerapp update \
+              --name ${{ env.APP_NAME }} \
+              --resource-group ${{ env.RG }} \
+              --image "$IMAGE_TAG" \
+              --set-env-vars "PIPELINE_URL=${{ env.PIPELINE_URL }}"
+          else
+            echo "→ Creating Container App for the first time"
+            az containerapp create \
+              --name "${{ env.APP_NAME }}" \
+              --resource-group "${{ env.RG }}" \
+              --environment "${{ env.ACA_ENV }}" \
+              --image "$IMAGE_TAG" \
+              --registry-server "${{ env.ACR }}" \
+              --user-assigned "${{ env.IDENTITY_ID }}" \
+              --target-port 8080 \
+              --ingress external \
+              --min-replicas 0 \
+              --max-replicas 3 \
+              --cpu 0.25 \
+              --memory 0.5Gi \
+              --env-vars "PIPELINE_URL=${{ env.PIPELINE_URL }}"
+          fi
+
+      - name: Print UI URL
+        run: |
+          URL=$(az containerapp show \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RG }} \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "🌐 UI → https://$URL"
+          # Wait up to 60 s for /health
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$URL/health" || echo 000)
+            echo "  attempt $i → $STATUS"
+            [ "$STATUS" = "200" ] && echo "✓ Healthy" && exit 0
+            sleep 5
+          done
+          echo "⚠ Health check did not pass in time" && exit 1
