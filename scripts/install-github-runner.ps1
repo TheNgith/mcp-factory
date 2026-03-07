@@ -40,31 +40,35 @@ function Write-Step { param([string]$Message) Write-Host "`n==> $Message" -Foreg
 # ---------------------------------------------------------------------------
 Write-Step 'Installing Python 3.10'
 
+$pyDir       = 'C:\Python310'
+$pyExe       = "$pyDir\python.exe"
 $pyInstaller = Join-Path $env:TEMP 'python310-amd64.exe'
 $pyUrl       = 'https://www.python.org/ftp/python/3.10.11/python-3.10.11-amd64.exe'
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path $pyExe)) {
+    Write-Host "Downloading Python 3.10 installer..."
     Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing
-    Start-Process $pyInstaller `
-        -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1' `
-        -Wait
+    Write-Host "Running Python installer (TargetDir=$pyDir)..."
+    $proc = Start-Process $pyInstaller `
+        -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=`"$pyDir`"" `
+        -Wait -PassThru
+    Write-Host "Python installer exit code: $($proc.ExitCode)"
     Remove-Item $pyInstaller -ErrorAction SilentlyContinue
+    if (-not (Test-Path $pyExe)) { throw "Python installation failed - $pyExe not found" }
 }
 
-# Reload PATH so python/pip binaries are visible in this session
-$machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-$userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-$env:PATH    = "$machinePath;$userPath"
+# Prepend the known install dir to PATH for this session (registry refresh is unreliable under SYSTEM)
+$env:PATH = "$pyDir;$pyDir\Scripts;$env:PATH"
 
-python --version
+& $pyExe --version
 
 # ---------------------------------------------------------------------------
 # 2. Install Python packages
 # ---------------------------------------------------------------------------
 Write-Step 'Installing Python packages'
 
-pip install --quiet --upgrade pip
-pip install --quiet `
+& $pyExe -m pip install --quiet --upgrade pip 2>&1 | Out-Null
+& $pyExe -m pip install --quiet `
     flask>=3.0 `
     openai>=1.0 `
     python-dotenv>=1.0 `
@@ -106,7 +110,7 @@ $bridgePy  = Join-Path $bridgeDir 'gui_bridge.py'
 `$src = 'C:\actions-runner\_work\mcp-factory\mcp-factory\scripts\gui_bridge.py'
 if (Test-Path `$src) { Copy-Item `$src -Destination '$bridgePy' -Force }
 
-python '$bridgePy'
+& 'C:\Python310\python.exe' '$bridgePy'
 "@ | Set-Content $bridgeScript -Encoding UTF8
 
 # Register as a scheduled task that starts at system boot (survives reboots)
