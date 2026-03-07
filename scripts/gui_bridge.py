@@ -119,7 +119,26 @@ async def analyze(
 
     target = Path(body.path)
     if not target.exists():
-        raise HTTPException(status_code=404, detail=f"Path not found: {body.path}")
+        # The path comes from the Linux ACA container (e.g. /tmp/mcp_xyz/calc.exe).
+        # It won't exist here — try to resolve the filename against Windows system paths.
+        filename = Path(body.path).name
+        system_candidates = [
+            Path(r"C:\Windows\System32") / filename,
+            Path(r"C:\Windows") / filename,
+            Path(r"C:\Windows\SysWOW64") / filename,
+            Path(r"C:\Program Files") / filename,
+            Path(r"C:\Program Files (x86)") / filename,
+        ]
+        for candidate in system_candidates:
+            if candidate.exists():
+                logger.info("Resolved '%s' → '%s' via system path fallback", body.path, candidate)
+                target = candidate
+                break
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Path not found: {body.path} (also searched system paths for '{filename}')",
+            )
 
     requested = set(body.types)
     invocables: list[dict] = []

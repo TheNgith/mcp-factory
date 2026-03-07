@@ -77,6 +77,7 @@ jobs:
   gui-tests:
     name: GUI automation tests (Windows)
     runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 15
     # Run in parallel with the Linux test job — no dependency between them.
     # Only runs on push to main so we don't spin up Notepad on every PR.
     if: github.ref == 'refs/heads/main'
