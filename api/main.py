@@ -6,6 +6,7 @@ Integrates with Azure Blob Storage, Azure OpenAI, and Application Insights.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import json
 import logging
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -32,13 +34,53 @@ from openai import AzureOpenAI
 
 # ── App Insights telemetry ─────────────────────────────────────────────────
 APPINSIGHTS_CONN = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "")
+_AI_TRACER = None
 if APPINSIGHTS_CONN:
     try:
         from opencensus.ext.azure.log_exporter import AzureLogHandler
+        from opencensus.ext.azure.trace_exporter import AzureExporter
+        from opencensus.trace.tracer import Tracer
+        from opencensus.trace.samplers import AlwaysOnSampler
         _ai_handler = AzureLogHandler(connection_string=APPINSIGHTS_CONN)
         logging.getLogger().addHandler(_ai_handler)
+        _AI_TRACER = Tracer(
+            exporter=AzureExporter(connection_string=APPINSIGHTS_CONN),
+            sampler=AlwaysOnSampler(),
+        )
     except Exception:
         pass  # telemetry is best-effort
+
+
+@contextlib.contextmanager
+def _ai_span(name: str, **props):
+    """Emit a custom App Insights event with duration and optional properties.
+
+    Works via two channels:
+    - Structured log entry (AzureLogHandler picks up custom_dimensions)
+    - OpenCensus trace span (AzureExporter sends to Application Insights)
+    Both are best-effort; failures are silently swallowed.
+    """
+    t0 = time.perf_counter()
+    span = None
+    try:
+        if _AI_TRACER:
+            span = _AI_TRACER.start_span(name=name)
+            for k, v in props.items():
+                span.add_attribute(k, str(v))
+        yield
+    finally:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        if span and _AI_TRACER:
+            try:
+                _AI_TRACER.end_span()
+            except Exception:
+                pass
+        dims = {"event": name, "duration_ms": elapsed_ms, **{k: str(v) for k, v in props.items()}}
+        logger.info(
+            "[telemetry] %s completed in %dms",
+            name, elapsed_ms,
+            extra={"custom_dimensions": dims},
+        )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_factory.api")
@@ -86,20 +128,43 @@ ARTIFACT_CONTAINER = "artifacts"
 SRC_DISCOVERY_DIR  = Path(__file__).parent.parent / "src" / "discovery"
 
 # ── Per-job invocable registries ───────────────────────────────────────────
-# Populated by /api/execute and looked up by tool name.
+# Backed by both in-memory cache and Blob Storage so state survives container
+# recycles (scale-to-zero, deployments, crashes).  P7.
 # Structure: {job_id: {tool_name: invocable_dict}}
 _JOB_INVOCABLE_MAPS: dict[str, dict[str, Any]] = {}
 _JOB_MAP_LOCK = threading.Lock()
 
 
 def _register_invocables(job_id: str, invocables: list[dict]) -> None:
+    inv_map = {inv["name"]: inv for inv in invocables}
     with _JOB_MAP_LOCK:
-        _JOB_INVOCABLE_MAPS[job_id] = {inv["name"]: inv for inv in invocables}
+        _JOB_INVOCABLE_MAPS[job_id] = inv_map
+    # Persist to Blob so state survives container recycles (P7)
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/invocables_map.json",
+            json.dumps(inv_map).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist invocables to Blob: %s", job_id, exc)
 
 
 def _get_invocable(job_id: str, name: str) -> dict | None:
     with _JOB_MAP_LOCK:
-        return _JOB_INVOCABLE_MAPS.get(job_id, {}).get(name)
+        result = _JOB_INVOCABLE_MAPS.get(job_id, {}).get(name)
+    if result is not None:
+        return result
+    # Cache miss — reload from Blob (handles container restarts, P7)
+    try:
+        data: dict = json.loads(
+            _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+        )
+        with _JOB_MAP_LOCK:
+            _JOB_INVOCABLE_MAPS.setdefault(job_id, {}).update(data)
+        return data.get(name)
+    except Exception:
+        return None
 
 
 # ── ctypes type maps (Windows-only) ────────────────────────────────────────
@@ -347,6 +412,8 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     ]
     if hints:
         cmd += ["--tag", hints[:40].replace(" ", "_")]
+    if IS_WINDOWS:
+        cmd += ["--registry"]  # scan HKLM App Paths, Uninstall, COM CLSIDs (§1.c / P9)
 
     # PYTHONPATH must include the discovery package directory so all sibling
     # modules (classify, exports, schema, …) resolve correctly.
@@ -406,8 +473,14 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
             logger.warning(f"[{job_id}] Blob upload failed for {mcp_file.name}: {exc}")
 
     logger.info(
-        f"[{job_id}] Discovery complete: {len(mcp_files)} file(s), "
-        f"{len(merged_invocables)} unique invocables"
+        "[%s] Discovery complete: %d file(s), %d unique invocables",
+        job_id, len(mcp_files), len(merged_invocables),
+        extra={"custom_dimensions": {
+            "event": "discovery_complete",
+            "job_id": job_id,
+            "file_count": len(mcp_files),
+            "invocable_count": len(merged_invocables),
+        }},
     )
 
     return {
@@ -488,7 +561,11 @@ async def analyze(
     tmp_path.write_bytes(content)
 
     try:
-        result = _run_discovery(tmp_path, job_id, hints)
+        with _ai_span("analyze", job_id=job_id, filename=original_name,
+                      file_size_bytes=len(content), hints=hints or ""):
+            result = _run_discovery(tmp_path, job_id, hints)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[{job_id}] Discovery failed: {e}")
         raise HTTPException(500, f"Analysis failed: {e}")
@@ -563,6 +640,16 @@ async def generate(body: dict[str, Any]):
     schema_blob = f"{job_id}/mcp_schema.json"
     _upload_to_blob(ARTIFACT_CONTAINER, schema_blob, json.dumps(mcp_schema, indent=2).encode())
 
+    logger.info(
+        "[%s] Generated MCP schema with %d tools",
+        job_id, len(tools),
+        extra={"custom_dimensions": {
+            "event": "generate_complete",
+            "job_id": job_id,
+            "tool_count": len(tools),
+            "component": mcp_schema.get("component", ""),
+        }},
+    )
     return JSONResponse({"job_id": job_id, "schema_blob": schema_blob, "mcp_schema": mcp_schema})
 
 
@@ -639,6 +726,8 @@ async def chat(body: dict[str, Any]):
     try:
         client = _openai_client()
         msg = None
+        _tool_calls_total = 0
+        _chat_t0 = time.perf_counter()
 
         for _round in range(MAX_TOOL_ROUNDS):
             kwargs: dict = {
@@ -655,6 +744,17 @@ async def chat(body: dict[str, Any]):
 
             # No tool calls → final answer
             if not msg.tool_calls:
+                logger.info(
+                    "[chat] completed in %d round(s), %d tool call(s)",
+                    _round + 1, _tool_calls_total,
+                    extra={"custom_dimensions": {
+                        "event": "chat_complete",
+                        "job_id": job_id,
+                        "rounds": _round + 1,
+                        "tool_calls_total": _tool_calls_total,
+                        "duration_ms": int((time.perf_counter() - _chat_t0) * 1000),
+                    }},
+                )
                 return JSONResponse({
                     "role": msg.role,
                     "content": msg.content,
@@ -680,6 +780,7 @@ async def chat(body: dict[str, Any]):
             }
             conversation.append(assistant_turn)
 
+            _tool_calls_total += len(msg.tool_calls)
             # Execute each tool call and append tool result messages
             for tc in msg.tool_calls:
                 fn_name = tc.function.name

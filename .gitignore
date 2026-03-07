@@ -52,3 +52,8 @@ demo_output/
 
 # Working/scratch documents not for version control
 docs/SECTIONS_2_3_GAP_ANALYSIS.md
+
+# .NET Aspire build output
+aspire/**/bin/
+aspire/**/obj/
+aspire/**/.vs/

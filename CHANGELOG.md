@@ -5,7 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2026-02-22
+## [1.3.0] - 2026-03-07
+
+### Added
+- **GitHub Actions CI/CD** (`.github/workflows/ci-cd.yml`) — three-job pipeline: `test` (pytest on Python 3.10), `build` (Docker build + push to ACR with SHA tag), `deploy` (az containerapp update → smoke-test `/health`). Uses OIDC federation — no stored secrets. One-time setup instructions are in the workflow file header.
+- **App Insights custom telemetry** (`api/main.py`) — OpenCensus `AzureExporter` + `Tracer` initialised alongside the existing `AzureLogHandler`. New `_ai_span()` context manager emits trace spans + structured `custom_dimensions` log events to Application Insights. Custom events: `discovery_complete` (file count, invocable count), `generate_complete` (tool count, component name), `chat_complete` (rounds, tool calls total, duration).
+- **KV duplicate secrets cleanup** (`scripts/cleanup_kv_secrets.ps1`) — deletes `storage-account` and `appinsights-connection-string` (shadows of the canonical `azure-storage-account` and `appinsights-connection` secrets). Supports `--DryRun`. Soft-deletes then purges.
+
+### Fixed
+- **`aspire/AppHost/AppHost.csproj`** — corrected project structure to use `<IsAspireHost>true</IsAspireHost>` + `Sdk="Microsoft.NET.Sdk"` (matching the official `dotnet new aspire-apphost` template). The existing `<Sdk Name="Aspire.AppHost.Sdk">` / `<Sdk Name="Aspire.Hosting.Sdk">` top-level element was the wrong pattern for Aspire 8.2.2. Removed `Aspire.Hosting.Docker` (9.x only) and `Aspire.Hosting` (transitive). Removed `.WaitFor(pipeline)` (9.x only API).
+- **Workload manifest band mismatch** — `dotnet workload install aspire` wrote to `sdk-manifests\8.0.100` but SDK 8.0.418 reads from `8.0.400`. `WorkloadManifest.json` / `.targets` promoted to `8.0.400` slot. `AppHost` now builds cleanly: `0 Warning(s)  0 Error(s)`.
+
+
+
+### Fixed
+- **`aspire/AppHost/Program.cs` — UI port mismatch** — `WithHttpEndpoint(port: 3000, targetPort: 3000)` was wrong; `Dockerfile.ui` runs uvicorn on 8080. Corrected to `port: 8080, targetPort: 8080`.
+- **`aspire/AppHost/Program.cs` — missing App Insights parameter** — `APPLICATIONINSIGHTS_CONNECTION_STRING` was wired in ACA via `secretref:` but absent from the Aspire orchestration. Added as a `secret: true` parameter so local Docker runs also receive telemetry config.
+- **`.gitignore` — .NET build outputs** — `aspire/**/bin/`, `aspire/**/obj/`, `aspire/**/.vs/` added so `dotnet build` artifacts do not dirty the repo.
+
+### Changed
+- Aspire `Program.cs` comments updated: corrected OpenAI endpoint example, clarified that `AZURE_CLIENT_ID` is ACA-only (locally `DefaultAzureCredential` uses `az login`), added explicit port mapping notes.
+
+
+
+### Added
+- **Full Azure deployment** — both ACA containers (`mcp-factory-pipeline`, `mcp-factory-ui`) live and publicly accessible. End-to-end flow (analyze → generate → chat) verified against `calc.exe`.
+- **Azure OpenAI** — `mcp-factory-openai` resource provisioned; `gpt-4o` (2024-11-20, 10K TPM) deployment active and accessed via Managed Identity.
+- **Application Insights** — `mcp-factory-insights` wired to both containers via `APPLICATIONINSIGHTS_CONNECTION_STRING` secret.
+- **`_extract_invocables()` helper** (`api/main.py`) — normalises any discovery JSON shape (wrapped `{metadata, invocables, summary}` dict _or_ legacy flat array) to a clean list. Fixes the root cause of the "metadata / invocables / summary" fake-tool bug.
+- **Multi-file output merge** (`_run_discovery`) — collects all `*_mcp.json` files produced by a single run (EXEs emit `_cli_mcp.json` + `_gui_mcp.json`), merges and de-duplicates by `name`. Fixes single-file truncation bug.
+- **Preserved original filename** (`/api/analyze`) — uploaded file is written to `<tmp_dir>/<original_name>` instead of `tmpXXX_<suffix>`, so the discovery pipeline derives the correct base name (e.g. `calc` not `tmpXXX`).
+- **`flattenInvocables` guard** (`api/main.py`) — defensive unwrap in the `/api/generate` and `/api/execute` paths to tolerate both wrapped and flat payloads from the UI.
+- **`description` field fallback** (`/api/generate`) — resolve order is `doc → description → signature → name` so thin-schema invocables always produce a usable tool description.
+
+### Changed
+- ACA pipeline revision incremented to `mcp-factory-pipeline--0000003`.
+- README Azure Resource Status table updated to ✅ Live for all resources.
+
+
 
 ### Added
 - **Interactive invocable selection UI** — `src/ui/select_invocables.py`: rich terminal table with confidence-based defaults (`guaranteed`+`high` on, `medium`+`low` off), toggle/range/filter commands, description hint highlighting (Section 2.b), writes `selected-invocables.json` for Section 4 consumption

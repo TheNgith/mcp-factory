@@ -11,8 +11,9 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "discovery"))
 
+import pytest
 from schema import ExportedFunc
-from pe_parse import get_exports_from_dumpbin
+from pe_parse import read_pe_exports
 from exports import deduplicate_exports
 from headers_scan import scan_headers
 
@@ -29,10 +30,9 @@ class TestFixtures:
     def test_zstd_exports_exist(self):
         """Verify zstd.dll exports can be extracted."""
         if not self.ZSTD_DLL.exists():
-            print(f"SKIP: {self.ZSTD_DLL} not found (run setup-dev.ps1 first)")
-            return
+            pytest.skip(f"{self.ZSTD_DLL} not found (Windows-only fixture)")
         
-        exports, success = get_exports_from_dumpbin(self.ZSTD_DLL, "dumpbin")
+        exports, success = read_pe_exports(self.ZSTD_DLL)
         assert success, "zstd.dll export extraction failed"
         assert len(exports) > 0, "zstd.dll has no exports"
         assert any('ZSTD_' in e.name for e in exports), "No ZSTD_ prefixed exports found"
@@ -41,14 +41,11 @@ class TestFixtures:
     def test_zstd_header_matching(self):
         """Verify zstd.dll exports match header prototypes."""
         if not self.ZSTD_DLL.exists():
-            print(f"SKIP: {self.ZSTD_DLL} not found")
-            return
-        
+            pytest.skip(f"{self.ZSTD_DLL} not found (Windows-only fixture)")
         if not self.ZSTD_HEADERS.exists():
-            print(f"SKIP: {self.ZSTD_HEADERS} not found")
-            return
+            pytest.skip(f"{self.ZSTD_HEADERS} not found (Windows-only fixture)")
         
-        exports, success = get_exports_from_dumpbin(self.ZSTD_DLL, "dumpbin")
+        exports, success = read_pe_exports(self.ZSTD_DLL)
         assert success, "Failed to get exports"
         
         exports = deduplicate_exports(exports)
@@ -64,10 +61,9 @@ class TestFixtures:
     def test_sqlite3_exports_exist(self):
         """Verify sqlite3.dll exports can be extracted."""
         if not self.SQLITE_DLL.exists():
-            print(f"SKIP: {self.SQLITE_DLL} not found")
-            return
+            pytest.skip(f"{self.SQLITE_DLL} not found (Windows-only fixture)")
         
-        exports, success = get_exports_from_dumpbin(self.SQLITE_DLL, "dumpbin")
+        exports, success = read_pe_exports(self.SQLITE_DLL)
         assert success, "sqlite3.dll export extraction failed"
         assert len(exports) > 100, "sqlite3.dll has suspiciously few exports"
         assert any('sqlite3_' in e.name for e in exports), "No sqlite3_ prefixed exports found"
@@ -76,14 +72,11 @@ class TestFixtures:
     def test_sqlite3_header_matching(self):
         """Verify sqlite3.dll exports match header prototypes."""
         if not self.SQLITE_DLL.exists():
-            print(f"SKIP: {self.SQLITE_DLL} not found")
-            return
-        
+            pytest.skip(f"{self.SQLITE_DLL} not found (Windows-only fixture)")
         if not self.SQLITE_HEADERS.exists():
-            print(f"SKIP: {self.SQLITE_HEADERS} not found")
-            return
+            pytest.skip(f"{self.SQLITE_HEADERS} not found (Windows-only fixture)")
         
-        exports, success = get_exports_from_dumpbin(self.SQLITE_DLL, "dumpbin")
+        exports, success = read_pe_exports(self.SQLITE_DLL)
         assert success, "Failed to get exports"
         
         exports = deduplicate_exports(exports)

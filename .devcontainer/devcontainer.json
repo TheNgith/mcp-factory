@@ -1,0 +1,65 @@
+{
+  "name": "MCP Factory",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+
+  // Install OS-level tools: dumpbin is not available on Linux, but all
+  // cross-platform analyzers (script, OpenAPI, WSDL, IDL, SQL, etc.) work.
+  "onCreateCommand": "pip install -r requirements.txt -r api/requirements.txt -r ui/requirements.txt",
+
+  "postCreateCommand": "pip install --quiet pre-commit && pre-commit install --install-hooks 2>/dev/null || true",
+
+  "forwardPorts": [
+    8000,   // FastAPI pipeline  (api/main.py)
+    3000,   // FastAPI UI        (ui/main.py)
+    5000    // Local Flask MCP server (generated/*)
+  ],
+
+  "portsAttributes": {
+    "8000": { "label": "Pipeline API",  "onAutoForward": "notify" },
+    "3000": { "label": "MCP Factory UI","onAutoForward": "openBrowser" },
+    "5000": { "label": "MCP Server",    "onAutoForward": "notify" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.terminal.activateEnvInCurrentTerminal": true,
+        "editor.formatOnSave": true,
+        "editor.rulers": [100]
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "ms-azuretools.vscode-docker",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-dotnettools.dotnet-interactive-vscode",
+        "redhat.vscode-yaml",
+        "humao.rest-client"
+      ]
+    }
+  },
+
+  "features": {
+    // Azure CLI — lets developers run az commands directly in Codespaces
+    "ghcr.io/devcontainers/features/azure-cli:1": {},
+    // .NET 8 SDK — required for the Aspire AppHost project
+    "ghcr.io/devcontainers/features/dotnet:2": {
+      "version": "8.0"
+    }
+  },
+
+  "secrets": {
+    "AZURE_OPENAI_ENDPOINT":   { "description": "Azure OpenAI endpoint URL" },
+    "AZURE_OPENAI_DEPLOYMENT": { "description": "Deployment name (e.g. gpt-4o)" },
+    "AZURE_STORAGE_ACCOUNT":   { "description": "Storage account name" },
+    "AZURE_CLIENT_ID":         { "description": "Managed Identity client ID" }
+  },
+
+  "remoteEnv": {
+    "PYTHONPATH": "${containerWorkspaceFolder}/src/discovery"
+  }
+}

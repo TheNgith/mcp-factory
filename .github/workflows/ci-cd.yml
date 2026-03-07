@@ -1,0 +1,150 @@
+# MCP Factory — CI / CD
+#
+# Trigger: every push to main (tests + deploy) and every PR to main (tests only).
+#
+# Prerequisites — add these as GitHub Actions secrets in the repo settings:
+#   AZURE_CLIENT_ID       f70e3ce7-3790-49de-95b0-2de22fc0adbe
+#   AZURE_TENANT_ID       bfddc1f5-1e88-471c-9b5e-44611ddd3c22
+#   AZURE_SUBSCRIPTION_ID abb10328-e7f1-4d4a-9067-c1967fd70429
+#
+# Azure one-time setup (run once, then commit this file):
+#   # Add federated credential to the Managed Identity for GitHub OIDC
+#   az identity federated-credential create \
+#     --identity-name mcp-factory-identity \
+#     --resource-group mcp-factory-rg \
+#     --name github-actions \
+#     --issuer https://token.actions.githubusercontent.com \
+#     --subject repo:evanking12/mcp-factory:ref:refs/heads/main \
+#     --audiences api://AzureADTokenExchange
+#
+#   # Grant Contributor on each ACA app (needed for az containerapp update)
+#   # Note: "Azure ContainerApps Contributor" is not a real built-in role — use "Contributor" scoped per-app.
+#   az role assignment create \
+#     --assignee ef864658-442a-4dc1-b8d9-37f01f79fe8d \
+#     --role "Contributor" \
+#     --scope /subscriptions/abb10328-e7f1-4d4a-9067-c1967fd70429/resourceGroups/mcp-factory-rg/providers/Microsoft.App/containerApps/mcp-factory-pipeline
+#   az role assignment create \
+#     --assignee ef864658-442a-4dc1-b8d9-37f01f79fe8d \
+#     --role "Contributor" \
+#     --scope /subscriptions/abb10328-e7f1-4d4a-9067-c1967fd70429/resourceGroups/mcp-factory-rg/providers/Microsoft.App/containerApps/mcp-factory-ui
+#   # DONE — both assignments created 2026-03-07
+#
+# All other roles (AcrPush, Storage, OpenAI, Key Vault) are already assigned.
+
+name: CI / CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write   # required for Azure OIDC login
+  contents: read
+
+env:
+  RESOURCE_GROUP:  mcp-factory-rg
+  ACR_NAME:        mcpfactoryacr
+  PIPELINE_IMAGE:  mcpfactoryacr.azurecr.io/mcp-factory-pipeline
+  UI_IMAGE:        mcpfactoryacr.azurecr.io/mcp-factory-ui
+  PIPELINE_APP:    mcp-factory-pipeline
+  UI_APP:          mcp-factory-ui
+  HEALTH_URL:      https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io/health
+
+jobs:
+  # ── 1. Tests ────────────────────────────────────────────────────────────────
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r api/requirements.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+  # ── 2. Build & push Docker images ───────────────────────────────────────────
+  build:
+    name: Build & push Docker images
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image-tag: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC — no stored secrets)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build & push pipeline image
+        run: |
+          docker build \
+            -t ${{ env.PIPELINE_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.PIPELINE_IMAGE }}:latest \
+            .
+          docker push ${{ env.PIPELINE_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.PIPELINE_IMAGE }}:latest
+
+      - name: Build & push UI image
+        run: |
+          docker build \
+            -t ${{ env.UI_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.UI_IMAGE }}:latest \
+            -f Dockerfile.ui \
+            .
+          docker push ${{ env.UI_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.UI_IMAGE }}:latest
+
+  # ── 3. Deploy to Azure Container Apps ───────────────────────────────────────
+  deploy:
+    name: Deploy to ACA
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy pipeline container
+        run: |
+          az containerapp update \
+            --name ${{ env.PIPELINE_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }}
+
+      - name: Deploy UI container
+        run: |
+          az containerapp update \
+            --name ${{ env.UI_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.UI_IMAGE }}:${{ needs.build.outputs.image-tag }}
+
+      - name: Wait for revision to stabilise
+        run: sleep 30
+
+      - name: Smoke-test pipeline health
+        run: |
+          curl -sf ${{ env.HEALTH_URL }} | grep -q '"status":"ok"'
+          echo "Pipeline health check passed"

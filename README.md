@@ -24,33 +24,67 @@ Enterprise organizations need AI-powered customer service that can invoke existi
 |---|---|---|
 | Subscription ID | `abb10328-e7f1-4d4a-9067-c1967fd70429` | ✅ Active |
 | Tenant ID | `bfddc1f5-1e88-471c-9b5e-44611ddd3c22` | ✅ Active |
-| Resource Group | `mcp-factory-rg` / eastus | ✅ Created |
-| Managed Identity | `mcp-factory-identity` | ✅ Created |
-| Identity principalId | `ef864658-442a-4dc1-b8d9-37f01f79fe8d` | ✅ Created |
-| Identity clientId | `f70e3ce7-3790-49de-95b0-2de22fc0adbe` | ✅ Created |
-| Key Vault | `mcp-factory-kv` / `mcp-factory-kv.vault.azure.net` | ✅ Created |
-| Storage Account | `mcpfactorystore` | ✅ Created |
-| Blob — uploads | `mcpfactorystore/uploads` | ✅ Created |
-| Blob — artifacts | `mcpfactorystore/artifacts` | ✅ Created |
-| Container Registry | `mcpfactoryacr` / `mcpfactoryacr.azurecr.io` | ✅ Created |
-| ACA Environment | `mcp-factory-env` / eastus | ✅ Created |
-| ACA Default Domain | `calmsmoke-c4f97e21.eastus.azurecontainerapps.io` | ✅ Created |
+| Resource Group | `mcp-factory-rg` / eastus | ✅ Active |
+| Managed Identity | `mcp-factory-identity` (clientId `f70e3ce7…`, principalId `ef864658…`) | ✅ Active |
+| Key Vault | `mcp-factory-kv` / `mcp-factory-kv.vault.azure.net` | ✅ Active |
+| Storage Account | `mcpfactorystore` / Standard_LRS | ✅ Active |
+| Blob — uploads | `mcpfactorystore/uploads` | ✅ Active |
+| Blob — artifacts | `mcpfactorystore/artifacts` | ✅ Active |
+| Container Registry | `mcpfactoryacr` / `mcpfactoryacr.azurecr.io` | ✅ Active |
+| ACA Environment | `mcp-factory-env` / eastus (Log Analytics `0baaed31…`) | ✅ Active |
+| ACA Default Domain | `calmsmoke-c4f97e21.eastus.azurecontainerapps.io` | ✅ Active |
+| ACA App — pipeline | `mcp-factory-pipeline` | ✅ Live — `mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io` |
+| ACA App — web UI | `mcp-factory-ui` | ✅ Live — `mcp-factory-ui.calmsmoke-c4f97e21.eastus.azurecontainerapps.io` |
+| Azure OpenAI | `mcp-factory-openai` / `https://mcp-factory-openai.openai.azure.com/` | ✅ Active |
+| OpenAI Deployment | `gpt-4o` (model 2024-11-20, 10K TPM) | ✅ Active |
+| App Insights | `mcp-factory-insights` (Log Analytics: `mcp-factory-logs`) | ✅ Active |
 | App Service | `mcp-factory-web` | ⏭ Skipped (VM quota = 0, pivoted to ACA) |
-| ACA App — pipeline | `mcp-factory-pipeline` | 🔵 Pending — needs Docker image pushed |
-| ACA App — web UI | `mcp-factory-ui` | 🔵 Pending — needs Docker image pushed |
-| Azure OpenAI | not yet provisioned | 🔵 Pending |
-| App Insights | not yet provisioned | 🔵 Pending |
 
-**Remaining to reach a fully live demo** (run `scripts\finalize_azure.ps1`):
-1. Provision Azure OpenAI + deploy `gpt-4o` model
-2. Provision Application Insights
-3. Store secrets in Key Vault
-4. Build + push both Docker images → ACR
-5. Update ACA apps with the image + environment variables
+### Identity & RBAC
 
-## Current Status — Week 8 / 16
+All access is via Managed Identity — no keys or secrets in environment variables.
 
-> **Summary:** Discovery (§2-3) complete. MCP generation (§4) demo-ready. Cloud verification UI (§5) wired. Azure core infrastructure provisioned — two remaining steps block the live cloud demo: Azure OpenAI + App Insights provisioning, then Docker image build + push.
+| Role | Resource |
+|---|---|
+| Key Vault Secrets User + Secrets Officer | `mcp-factory-kv` |
+| Storage Blob Data Contributor | `mcpfactorystore` |
+| AcrPull + AcrPush | `mcpfactoryacr` |
+| Cognitive Services OpenAI User | `mcp-factory-openai` |
+
+### Key Vault Secrets
+
+Wired to ACA containers via `secretref:`:
+
+| Secret name | Used by |
+|---|---|
+| `azure-storage-account` | pipeline |
+| `openai-endpoint` | pipeline |
+| `openai-deployment` | pipeline |
+| `azure-client-id` | pipeline |
+| `appinsights-connection` | pipeline |
+
+### Deployment
+
+Two containers — auto-deployed on every push to `main` via `.github/workflows/ci-cd.yml` (GitHub Actions OIDC, no stored secrets). Manual commands for emergency hot-fixes:
+
+```powershell
+# Build and push
+docker build -t mcpfactoryacr.azurecr.io/mcp-factory-pipeline:latest .
+docker build -t mcpfactoryacr.azurecr.io/mcp-factory-ui:latest -f Dockerfile.ui .
+docker push mcpfactoryacr.azurecr.io/mcp-factory-pipeline:latest
+docker push mcpfactoryacr.azurecr.io/mcp-factory-ui:latest
+
+# Update running containers
+az containerapp update --name mcp-factory-pipeline --resource-group mcp-factory-rg --image mcpfactoryacr.azurecr.io/mcp-factory-pipeline:latest
+az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --image mcpfactoryacr.azurecr.io/mcp-factory-ui:latest
+```
+
+- **Pipeline** (`Dockerfile`) — `uvicorn api.main:app` on port 8000. Runs discovery, reads Key Vault secrets via Managed Identity. Writes uploads/artifacts to Blob Storage.
+- **UI** (`Dockerfile.ui`) — `uvicorn ui.main:app` on port 8080. Proxies `/api/*` to the pipeline URL via `httpx`. Holds no secrets.
+
+## Current Status — Week 9 / 16
+
+> **Summary:** Full end-to-end pipeline is **live in Azure** (commit `7144ed2`). Analyze → generate → chat all verified against `calc.exe`. .NET Aspire builds 0 warnings/0 errors. GitHub Actions CI/CD (test → build → deploy, OIDC) live. App Insights custom telemetry (`discovery_complete`, `generate_complete`, `chat_complete`) active. Only remaining known gap: thin GUI descriptions when running in a Linux container (pywinauto requires Windows).
 
 - [x] **Sections 2-3: Hybrid Discovery Engine** — **COMPLETE**
   - ✅ PE DLL/EXE, .NET, COM/TLB, RPC, CLI, SQL, 9 scripting languages, all §1 legacy protocols
@@ -58,33 +92,46 @@ Enterprise organizations need AI-powered customer service that can invoke existi
   - ✅ `--registry` flag scans HKLM App Paths, Uninstall keys, and COM CLSID registrations — §1.c
   - ✅ Uniform `{ name, kind, confidence, description, return_type, parameters, execution }` schema
   - ✅ 29/29 demo targets pass across all 10 source-type sections
-- [x] **Section 4: MCP Generation** — **DEMO-READY**
+- [x] **Section 4: MCP Generation** — **COMPLETE (cloud + local)**
   - ✅ `python mcp_factory.py --target <file>` runs full pipeline in one command
   - ✅ Flask MCP server with `/tools`, `/invoke`, `/chat`, `/download/invocables`
   - ✅ Chat UI at `http://localhost:5000`; shows tool calls + live execution results
   - ✅ Working demos: Calculator (55 invocables, WinUI3) and Notepad (Win32)
+  - ✅ `/api/generate` live in ACA — returns correct tool schema, saved to Blob artifacts
 - [x] **Section 5: Verification UI** — **COMPLETE (cloud)**
   - ✅ FastAPI web UI (`ui/main.py`) — 4-step wizard: Upload → Select → Generate → Chat
   - ✅ Installed-path input field (§2.b) — paste `C:\Program Files\AppD\` directly
   - ✅ Chat tab sends `invocables` metadata so the pipeline actually executes tool calls
   - ✅ Download schema JSON button
   - ✅ Optional API-key guard (`UI_API_KEY` env var) — §6 access restriction
-- [x] **Section 6: Azure Infrastructure** — **INFRASTRUCTURE COMPLETE, deployment in progress**
+- [x] **Section 6: Azure Infrastructure** — **FULLY DEPLOYED**
   - ✅ Resource Group, Managed Identity, Key Vault, Storage (uploads + artifacts), ACR, ACA Environment all provisioned
-  - ✅ Managed Identity wired: Storage Blob Data Contributor + Cognitive Services OpenAI User + Key Vault Secrets User
-  - 🔵 Azure OpenAI resource + `gpt-4o` deployment — **not yet provisioned**
-  - 🔵 Application Insights — **not yet provisioned**
-  - 🔵 Docker images — built locally, **not yet pushed** to `mcpfactoryacr.azurecr.io`
-  - 🔵 ACA apps `mcp-factory-pipeline` + `mcp-factory-ui` — containers created, **awaiting image + env vars**
+  - ✅ Managed Identity: Storage Blob Data Contributor + Cognitive Services OpenAI User + Key Vault Secrets User + Officer + AcrPull + AcrPush. No secrets/keys in env vars.
+  - ✅ Azure OpenAI `mcp-factory-openai` — `gpt-4o` deployment (2024-11-20, 10K TPM) active
+  - ✅ Application Insights `mcp-factory-insights` wired to both containers
+  - ✅ Docker images pushed to `mcpfactoryacr.azurecr.io`; both ACA apps live
+  - ✅ `mcp-factory-pipeline` — revision `0000003`, end-to-end verified
+  - ✅ .NET Aspire — `aspire/AppHost/Program.cs` orchestrates both containers; port bindings, App Insights, and `PIPELINE_URL` injection all wired. Run locally with `cd aspire/AppHost && dotnet run` (requires .NET 8 SDK + Docker Desktop).
+  - ✅ CI/CD — `.github/workflows/ci-cd.yml` — three-job pipeline (test → build → deploy), GitHub OIDC (no stored secrets). Triggers on every push to `main`. One-time `az identity federated-credential create` + role-assignment commands documented in the workflow file header.
+  - ✅ ACA scale-to-zero — both container apps scale to 0 replicas when idle, up to 3/2 on HTTP load. Zero cost when unused.
+  - ✅ Blob-backed job state — `_register_invocables` persists invocable map to `artifacts/{job_id}/invocables_map.json`; `_get_invocable` reloads from Blob on cache miss. State survives container recycles and scale-to-zero.
+  - ✅ Registry scan wired into API — `_run_discovery` passes `--registry` on Windows, enabling HKLM App Paths / Uninstall / COM CLSID enumeration (§1.c) from the cloud API.
 - [x] **Sponsor Requirements (§6 checklist)**
-  - ✅ Azure Cloud (compute, storage, networking, OpenAI) — provisioned
+  - ✅ Azure Cloud (compute, storage, networking, OpenAI) — live
   - ✅ GitHub + GitHub Copilot — in use
   - ✅ VS Code — dev environment
-  - ✅ .NET Aspire app host — `aspire/AppHost/Program.cs`
+  - ✅ .NET Aspire app host — `aspire/AppHost/Program.cs` — both containers fully wired
   - ✅ GitHub Codespaces — `.devcontainer/devcontainer.json`
   - ✅ Microsoft docs cited — References section in this README
   - ✅ Budget alert script — `scripts/setup_budget_alert.ps1` ($150/month cap)
   - ✅ FERPA compliance statement — below
+
+### Known Gaps
+
+| Gap | Detail |
+|---|---|
+| Thin descriptions on Linux | `calc.exe` returns "Executable file (no help output detected)" when running inside Linux container — pywinauto / UIA require a live Windows session. Not fixable without a Windows-based runner or sidecar. |
+| CI/CD OIDC activation | ✅ **Done 2026-03-07.** Federated credential created; `Contributor` role assigned on both ACA apps. Push to `main` now triggers test → build → deploy automatically. |
 
 **Approach:** A **Hybrid Discovery Engine** that intelligently routes any target file to the appropriate analyzers based on detected capabilities, producing a uniform MCP JSON contract that §4 consumes directly.
 
@@ -103,7 +150,7 @@ This tool is designed around Windows. If you are on a Mac, see [docs/mac-compati
 
 ## Installation
 
-**Prerequisites:** Git, Python 3.8+, and Visual Studio Build Tools (for `dumpbin.exe`).
+**Prerequisites:** Git, Python 3.8+.
 
 ```powershell
 # Clone and run the demo
@@ -403,7 +450,7 @@ This is an active capstone project. For development setup and workflow guideline
 ---
 
 **Sponsored by Microsoft** | Mentored by Microsoft Engineers  
-_Last updated: March 4, 2026 — Section 4 demo-ready: Calculator + Notepad servers working end-to-end_
+_Last updated: March 7, 2026 — Aspire builds clean; CI/CD workflow, App Insights custom telemetry, and KV cleanup script added_
 
 ---
 
