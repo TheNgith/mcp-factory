@@ -53,5 +53,5 @@ if ($c) {
         Write-Host "WARNING: bridge in session 0 - reboot required for session 1"
     }
 } else {
-    Write-Host "Bridge not running — reboot required"
+    Write-Host "Bridge not running - reboot required"
 }
