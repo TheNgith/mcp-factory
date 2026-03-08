@@ -78,9 +78,9 @@ def _launch_hidden(exe_str: str, backend: str = "win32"):
     si.wShowWindow = _SW_SHOWMINNOACTIVE
 
     proc = subprocess.Popen([exe_str], startupinfo=si)
-    time.sleep(1.8)
+    time.sleep(0.5)  # reduced: launcher stubs (UWP/MSIX) exit immediately anyway
 
-    app = Application(backend=backend).connect(process=proc.pid, timeout=8)
+    app = Application(backend=backend).connect(process=proc.pid, timeout=3)  # reduced: 8→3
     app.top_window().handle  # raises immediately if no window found under PID
     return proc, app
 
@@ -128,9 +128,9 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
         before = _snap_hwnds()
         subprocess.Popen(f'start "" "{exe_str}"', shell=True)
 
-        # Poll for up to 8 s in 0.5 s increments — MSIX apps can be slow
+        # Poll for up to 3 s in 0.5 s increments — reduced from 8 s
         new_hwnds: set = set()
-        for _ in range(16):
+        for _ in range(6):
             time.sleep(0.5)
             after = _snap_hwnds()
             new_hwnds = after - before
@@ -162,7 +162,7 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
 
     # ── Strategy B: title-pattern loop (win32gui unavailable) ────────────
     subprocess.Popen(f'start "" "{exe_str}"', shell=True)
-    time.sleep(4.0)  # longer wait since we have no diff signal
+    time.sleep(1.5)  # reduced: 4.0→1.5 — enough for most apps to show a window
 
     app = None
     last_exc: Exception = RuntimeError("no connect attempted")
@@ -174,7 +174,7 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
         {"title_re": "(?i).*Calculator.*"},
     ]:
         try:
-            app = Application(backend=backend).connect(timeout=6, **connect_kw)
+            app = Application(backend=backend).connect(timeout=2, **connect_kw)  # reduced: 6→2
             break
         except Exception as exc:
             last_exc = exc

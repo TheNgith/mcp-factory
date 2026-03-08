@@ -31,6 +31,9 @@ Returns standard discovery JSON  { "invocables": [...] }.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import concurrent.futures
 import json
 import logging
 import os
@@ -77,8 +80,14 @@ def _check_auth(x_bridge_key: str) -> None:
 class AnalyzeRequest(BaseModel):
     path: str
     hints: str = ""
-    types: list[str] = ["gui", "com", "cli", "registry"]
+    types: list[str] = ["gui", "com", "cli", "registry"]    # base64-encoded binary content (optional): lets the bridge analyze an
+    # uploaded file whose Linux temp path doesn't exist on the Windows VM.
+    content: str | None = None
 
+
+# How long (seconds) to allow the GUI analyzer to run before giving up.
+# pywinauto can hang indefinitely on UWP stubs (calc.exe on Server 2022).
+GUI_ANALYZE_TIMEOUT = 30
 
 # ── Lazy analyzer imports (all Windows-only) ─────────────────────────────────
 def _import_gui():
@@ -109,48 +118,39 @@ def _inv_to_dict(inv: Any) -> dict:
     return {k: v for k, v in vars(inv).items() if not k.startswith("_")}
 
 
-# ── Main endpoint ─────────────────────────────────────────────────────────────
-@app.post("/analyze")
-async def analyze(
-    body: AnalyzeRequest,
-    x_bridge_key: str = Header(default=""),
-):
-    _check_auth(x_bridge_key)
+# How long (seconds) to allow the GUI analyzer before giving up.
+# pywinauto can hang for 90+ s on UWP stubs (e.g. calc.exe on Server 2022).
+GUI_ANALYZE_TIMEOUT = 30
 
-    target = Path(body.path)
-    if not target.exists():
-        # The path comes from the Linux ACA container (e.g. /tmp/mcp_xyz/calc.exe).
-        # It won't exist here — try to resolve the filename against Windows system paths.
-        filename = Path(body.path).name
-        system_candidates = [
-            Path(r"C:\Windows\System32") / filename,
-            Path(r"C:\Windows") / filename,
-            Path(r"C:\Windows\SysWOW64") / filename,
-            Path(r"C:\Program Files") / filename,
-            Path(r"C:\Program Files (x86)") / filename,
-        ]
-        for candidate in system_candidates:
-            if candidate.exists():
-                logger.info("Resolved '%s' → '%s' via system path fallback", body.path, candidate)
-                target = candidate
-                break
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Path not found: {body.path} (also searched system paths for '{filename}')",
-            )
 
-    requested = set(body.types)
+def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
+    """Synchronous analysis worker — runs in a thread pool executor.
+
+    Keeping all blocking I/O (pywinauto, COM, subprocess) in a plain function
+    avoids stalling the uvicorn async event loop.
+    """
     invocables: list[dict] = []
     errors: dict[str, str] = {}
 
     # ── GUI ──────────────────────────────────────────────────────────────────
     if "gui" in requested and target.suffix.lower() == ".exe":
         try:
-            analyze_gui = _import_gui()
-            results = analyze_gui(target)
-            invocables.extend(_inv_to_dict(i) for i in results)
-            logger.info("GUI: %d invocables from %s", len(results), target.name)
+            analyze_gui_fn = _import_gui()
+            # Enforce a hard time-box: pywinauto retries can add up to 90+ s on
+            # headless Server 2022 where UWP windows never appear.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _gui_pool:
+                _gui_future = _gui_pool.submit(analyze_gui_fn, target)
+                try:
+                    gui_results = _gui_future.result(timeout=GUI_ANALYZE_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        "GUI analysis timed out after %ds for %s — skipping",
+                        GUI_ANALYZE_TIMEOUT, target.name,
+                    )
+                    errors["gui"] = f"timed out after {GUI_ANALYZE_TIMEOUT}s"
+                    gui_results = []
+            invocables.extend(_inv_to_dict(i) for i in gui_results)
+            logger.info("GUI: %d invocables from %s", len(gui_results), target.name)
         except Exception as exc:
             logger.warning("GUI analysis failed: %s", exc)
             errors["gui"] = str(exc)
@@ -199,14 +199,14 @@ async def analyze(
     if "registry" in requested:
         try:
             analyze_registry = _import_registry()
-            results = analyze_registry(hints=target.stem)
+            results = analyze_registry(hints=hints or target.stem)
             invocables.extend(_inv_to_dict(i) for i in results)
             logger.info("Registry: %d invocables", len(results))
         except Exception as exc:
             logger.warning("Registry analysis failed: %s", exc)
             errors["registry"] = str(exc)
 
-    # De-duplicate by name (same function may appear in multiple analyzers)
+    # De-duplicate by name
     seen: set[str] = set()
     unique: list[dict] = []
     for inv in invocables:
@@ -215,12 +215,84 @@ async def analyze(
             seen.add(name)
             unique.append(inv)
 
-    return JSONResponse({
+    return {
         "invocables": unique,
         "count":      len(unique),
         "errors":     errors,
         "source":     str(target),
-    })
+    }
+
+
+# ── Main endpoint ─────────────────────────────────────────────────────────────
+@app.post("/analyze")
+async def analyze(
+    body: AnalyzeRequest,
+    x_bridge_key: str = Header(default=""),
+):
+    _check_auth(x_bridge_key)
+
+    tmp_dir: Path | None = None
+
+    if body.content:
+        # The pipeline sent base64-encoded file bytes — decode to a temp file.
+        # This handles uploaded binaries whose Linux temp path doesn't exist on Windows.
+        try:
+            import shutil
+            tmp_dir = Path(tempfile.mkdtemp(prefix="bridge_"))
+            target  = tmp_dir / Path(body.path).name
+            target.write_bytes(base64.b64decode(body.content))
+            logger.info(
+                "Decoded uploaded binary to %s (%d bytes)",
+                target, target.stat().st_size,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not decode content: {exc}")
+    else:
+        target = Path(body.path)
+        if not target.exists():
+            # The path comes from the Linux ACA container (e.g. /tmp/mcp_xyz/calc.exe).
+            # It won't exist here — try to resolve the filename against Windows system paths.
+            filename = Path(body.path).name
+            system_candidates = [
+                Path(r"C:\Windows\System32") / filename,
+                Path(r"C:\Windows") / filename,
+                Path(r"C:\Windows\SysWOW64") / filename,
+                Path(r"C:\Program Files") / filename,
+                Path(r"C:\Program Files (x86)") / filename,
+            ]
+            for candidate in system_candidates:
+                if candidate.exists():
+                    logger.info("Resolved '%s' → '%s' via system path fallback", body.path, candidate)
+                    target = candidate
+                    break
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Path not found: {body.path} (also searched system paths for '{filename}')",
+                )
+
+    requested = set(body.types)
+
+    try:
+        # Run all blocking analysis in a thread pool — keeps the uvicorn async
+        # event loop free to service health checks and concurrent requests.
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,  # default ThreadPoolExecutor
+            _run_analysis_sync,
+            target,
+            requested,
+            body.hints,
+        )
+    finally:
+        if tmp_dir is not None:
+            try:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    return JSONResponse(result)
 
 
 @app.get("/health")

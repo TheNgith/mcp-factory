@@ -520,10 +520,23 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
 
     import httpx  # already in api/requirements.txt
 
+    # Base64-encode the binary so the bridge can write it to a local temp file
+    # on the Windows VM — avoids the "Linux path not found" problem for any
+    # arbitrary uploaded EXE (not just Windows system executables).
+    content_b64: str | None = None
+    try:
+        raw = binary_path.read_bytes()
+        if len(raw) <= 50_000_000:  # skip inline transfer for files > 50 MB
+            import base64
+            content_b64 = base64.b64encode(raw).decode()
+    except Exception as exc:
+        logger.warning("[%s] Could not read binary for bridge content: %s", job_id, exc)
+
     payload = {
-        "path":  str(binary_path),
-        "hints": hints,
-        "types": ["gui", "com", "cli", "registry"],
+        "path":    str(binary_path),
+        "hints":   hints,
+        "types":   ["gui", "com", "cli", "registry"],
+        "content": content_b64,   # None → bridge falls back to system-path lookup
     }
     try:
         logger.info("[%s] Calling GUI bridge at %s for %s", job_id, GUI_BRIDGE_URL, binary_path.name)
@@ -531,7 +544,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
             f"{GUI_BRIDGE_URL}/analyze",
             json=payload,
             headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=120,  # GUI walk can be slow
+            timeout=180,  # 30s GUI timeout on bridge + other analyzers + network margin
         )
         resp.raise_for_status()
         data = resp.json()
