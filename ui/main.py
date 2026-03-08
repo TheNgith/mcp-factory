@@ -1011,6 +1011,17 @@ async def proxy_chat(body: dict[str, Any]) -> JSONResponse:
     return await _proxy_json("/api/chat", body)
 
 
+@app.get("/api/jobs/{job_id}")
+async def proxy_job_status(job_id: str) -> JSONResponse:
+    """Proxy job-status polling to the pipeline /api/jobs/{job_id}."""
+    try:
+        r = await _client().get(f"/api/jobs/{job_id}")
+        return JSONResponse(content=r.json(), status_code=r.status_code)
+    except Exception as e:
+        logger.error(f"Proxy job status error: {e}")
+        return JSONResponse({"detail": str(e)}, status_code=502)
+
+
 @app.get("/api/download/{job_id}/{filename}")
 async def proxy_download(job_id: str, filename: str) -> Response:
     """Stream artifact download from the pipeline."""
