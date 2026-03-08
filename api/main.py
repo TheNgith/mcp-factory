@@ -596,7 +596,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         cmd,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=240,
         env=discovery_env,
     )
     print(f"[DIAG {job_id}] subprocess done rc={result.returncode}", flush=True)
