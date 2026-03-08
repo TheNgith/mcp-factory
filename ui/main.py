@@ -668,8 +668,25 @@ $('analyze-btn').addEventListener('click', async () => {
       }
       data = await res.json();
     }
-    state.jobId = data.job_id;
-    state.invocables = flattenInvocables(data.invocables);
+    // Both routes return 202 {job_id, status_url} — poll until done
+    const jobId = data.job_id;
+    state.jobId = jobId;
+    if (!jobId) throw new Error('No job_id in response');
+
+    // Poll GET /api/jobs/{id} until status is done or error
+    let jobResult = null;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      btn.innerHTML = `<span class="spinner"></span> Analyzing… (${(i+1)*2}s)`;
+      const poll = await fetch(`/api/jobs/${jobId}`);
+      if (!poll.ok) throw new Error(`Poll failed: ${poll.status}`);
+      const s = await poll.json();
+      if (s.status === 'done') { jobResult = s.result; break; }
+      if (s.status === 'error') throw new Error(s.error || 'Discovery failed');
+    }
+    if (!jobResult) throw new Error('Analysis timed out after 120s');
+
+    state.invocables = flattenInvocables(jobResult.invocables);
     buildInvocablesList();
     showSection(1);
   } catch(e) {
