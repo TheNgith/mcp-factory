@@ -115,6 +115,10 @@ def _blob_client() -> BlobServiceClient:
     return BlobServiceClient(
         account_url=f"https://{STORAGE_ACCOUNT}.blob.core.windows.net",
         credential=credential,
+        # Prevent silent TCP-drop from hanging the worker thread indefinitely.
+        # connection_timeout: TCP connect; read_timeout: per-read-op deadline.
+        connection_timeout=10,
+        read_timeout=30,
     )
 
 def _openai_client() -> AzureOpenAI:
@@ -209,8 +213,10 @@ def _analyze_worker(
             "created_at": time.time(),
             "updated_at": time.time(),
         })
+        print(f"[DIAG {job_id}] entering _run_discovery", flush=True)
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
             result = _run_discovery(tmp_path, job_id, hints)
+        print(f"[DIAG {job_id}] _run_discovery returned {len(result.get('invocables',[]))} invocables", flush=True)
         _persist_job_status(job_id, {
             "status": "done",
             "progress": 100,
@@ -474,7 +480,7 @@ def _execute_tool(inv: dict, args: dict) -> str:
 def _upload_to_blob(container: str, blob_name: str, data: bytes) -> str:
     client = _blob_client()
     cc = client.get_container_client(container)
-    cc.upload_blob(blob_name, data, overwrite=True)
+    cc.upload_blob(blob_name, data, overwrite=True, timeout=30)
     logger.info(f"Uploaded blob {container}/{blob_name}")
     return blob_name
 
@@ -580,6 +586,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         "PYTHONPATH": str(SRC_DISCOVERY_DIR),
     }
 
+    print(f"[DIAG {job_id}] subprocess start", flush=True)
     logger.info(f"[{job_id}] Running discovery: {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
@@ -588,6 +595,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         timeout=120,
         env=discovery_env,
     )
+    print(f"[DIAG {job_id}] subprocess done rc={result.returncode}", flush=True)
     logger.info(f"[{job_id}] Discovery stdout: {result.stdout[-1000:]}")
     if result.returncode != 0:
         logger.warning(f"[{job_id}] Discovery stderr: {result.stderr[-1000:]}")
@@ -625,11 +633,14 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
 
         # Upload every artifact to Blob Storage
         blob_name = f"{job_id}/{mcp_file.name}"
+        print(f"[DIAG {job_id}] uploading artifact {mcp_file.name}", flush=True)
         try:
             _upload_to_blob(ARTIFACT_CONTAINER, blob_name, mcp_file.read_bytes())
         except Exception as exc:
             logger.warning(f"[{job_id}] Blob upload failed for {mcp_file.name}: {exc}")
+        print(f"[DIAG {job_id}] artifact upload done {mcp_file.name}", flush=True)
 
+    print(f"[DIAG {job_id}] all artifacts uploaded, calling bridge", flush=True)
     logger.info(
         "[%s] Discovery complete: %d file(s), %d unique invocables",
         job_id, len(mcp_files), len(merged_invocables),
