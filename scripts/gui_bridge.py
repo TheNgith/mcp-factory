@@ -85,10 +85,6 @@ class AnalyzeRequest(BaseModel):
     content: str | None = None
 
 
-# How long (seconds) to allow the GUI analyzer to run before giving up.
-# pywinauto can hang indefinitely on UWP stubs (calc.exe on Server 2022).
-GUI_ANALYZE_TIMEOUT = 30
-
 # ── Lazy analyzer imports (all Windows-only) ─────────────────────────────────
 def _import_gui():
     from gui_analyzer import analyze_gui  # type: ignore
