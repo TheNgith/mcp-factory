@@ -470,7 +470,7 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
         except Exception as exc:
             return f"GUI menu error: {exc}"
     if action_type == "button_click":
-        button = args.get("button") or execution.get("button", "")
+        button = args.get("button") or execution.get("button_name") or execution.get("button", "")
         try:
             app = _connect_app(exe_path)
             win = app.top_window()
