@@ -159,7 +159,7 @@ if (`$before -ne `$after) {
     Start-Process -FilePath `$Python -ArgumentList """"`$BridgePy"""" -NoNewWindow
     Write-Host "[autopull] Bridge restarted."
 } else {
-    Write-Host "[autopull] No changes ($((`$after).Substring(0,7))). Bridge unchanged."
+    Write-Host "[autopull] No changes (`$(`$after.Substring(0,7))). Bridge unchanged."
 }
 "@ | Set-Content -Encoding UTF8 $AutoPullScript
 Write-Host "[OK] Wrote auto-pull script to $AutoPullScript"
