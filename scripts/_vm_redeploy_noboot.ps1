@@ -25,7 +25,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal `
     -UserId "$env:COMPUTERNAME\$UserName" `
-    -LogonType InteractiveToken `
+    -LogonType Interactive `
     -RunLevel Highest
 
 Register-ScheduledTask `
