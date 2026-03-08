@@ -421,10 +421,20 @@ def _read_display(app) -> str:
         # Calculator display control name
         for ctrl_name in ("CalculatorResults", "Display", "Result", "output"):
             try:
-                return win[ctrl_name].window_text().strip()
+                t = win[ctrl_name].window_text().strip()
+                if t:
+                    return t
             except Exception:
                 pass
-        # Generic fallback — first Edit or Static that has content
+        # Prefer a Text descendant that contains a digit (the numeric display)
+        for ctrl in win.descendants(control_type="Text"):
+            try:
+                t = ctrl.window_text().strip()
+                if t and any(c.isdigit() for c in t):
+                    return t
+            except Exception:
+                pass
+        # Last resort: first non-empty Text descendant
         for ctrl in win.descendants(control_type="Text"):
             try:
                 t = ctrl.window_text().strip()
