@@ -116,7 +116,8 @@ def _inv_to_dict(inv: Any) -> dict:
 
 # How long (seconds) to allow the GUI analyzer before giving up.
 # pywinauto can hang for 90+ s on UWP stubs (e.g. calc.exe on Server 2022).
-GUI_ANALYZE_TIMEOUT = 30
+# Raised to 60 s to give Win11 UWP apps enough time to expose their UIA tree.
+GUI_ANALYZE_TIMEOUT = 60
 
 
 def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
@@ -135,7 +136,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
             # Enforce a hard time-box: pywinauto retries can add up to 90+ s on
             # headless Server 2022 where UWP windows never appear.
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _gui_pool:
-                _gui_future = _gui_pool.submit(analyze_gui_fn, target)
+                _gui_future = _gui_pool.submit(analyze_gui_fn, target, 20)
                 try:
                     gui_results = _gui_future.result(timeout=GUI_ANALYZE_TIMEOUT)
                 except concurrent.futures.TimeoutError:
