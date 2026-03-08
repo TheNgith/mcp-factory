@@ -85,6 +85,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Sync bridge files from checkout
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\mcp-bridge | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\scripts\gui_bridge.py" -Destination C:\mcp-bridge\gui_bridge.py -Force
+          if (Test-Path "$env:GITHUB_WORKSPACE\src\discovery") {
+            Copy-Item "$env:GITHUB_WORKSPACE\src\discovery" -Destination C:\mcp-bridge\discovery -Recurse -Force
+          }
+          Stop-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 1
+          Start-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"

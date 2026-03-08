@@ -199,7 +199,7 @@ async def analyze(
     if "registry" in requested:
         try:
             analyze_registry = _import_registry()
-            results = analyze_registry(target)
+            results = analyze_registry(hints=target.stem)
             invocables.extend(_inv_to_dict(i) for i in results)
             logger.info("Registry: %d invocables", len(results))
         except Exception as exc:
