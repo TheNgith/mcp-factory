@@ -10,12 +10,14 @@ function Invoke-Bridge($invocable) {
     return $resp
 }
 
-Write-Host "--- Step 1: Launch calc (cli) ---"
-$r = Invoke-Bridge @{ name = "calc"; execution = @{ method = "cli"; exe_path = $exe; action_type = "launch" } }
+# Launch via CLI invocable (method=subprocess, executable_path) - matches real pipeline output
+Write-Host "--- Step 1: Launch calc ---"
+$r = Invoke-Bridge @{ name = "calc"; execution = @{ method = "subprocess"; executable_path = $exe; arg_style = "flag" } }
 Write-Host ($r | ConvertTo-Json)
 
 Start-Sleep -Seconds 4
 
+# Button clicks via GUI invocable (method=gui_action, exe_path, button_name) - matches real pipeline output
 Write-Host "--- Step 2: Press Four ---"
 $r = Invoke-Bridge @{ name = "press_four"; execution = @{ method = "gui_action"; exe_path = $exe; action_type = "button_click"; button_name = "Four" } }
 Write-Host ($r | ConvertTo-Json)
