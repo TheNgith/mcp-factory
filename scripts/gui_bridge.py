@@ -370,28 +370,47 @@ def _execute_cli_bridge(execution: dict, name: str, args: dict) -> str:
 
 
 def _connect_app(exe_path: str, title_re: str = ""):
-    """Connect to a running app window by title first, then exe path.
+    """Connect to a running app window generically — no hardcoding.
 
-    UWP apps (e.g. Calculator) run from WindowsApps\\... not from
-    C:\\Windows\\System32\\calc.exe, so connect(path=...) always fails.
-    Connecting by window title is reliable across all app types.
+    Strategy (in order):
+    1. Enumerate all open Desktop windows and find the one whose title or
+       owning process name contains the exe stem. Works for UWP apps whose
+       real process (e.g. CalculatorApp.exe) differs from the launcher
+       (calc.exe), as well as classic Win32 apps.
+    2. Fall back to pywinauto connect(path=...) for classic apps.
+    3. If an explicit title_re was supplied, try that too.
     """
+    import psutil  # type: ignore
+    from pywinauto import Desktop  # type: ignore
     from pywinauto.application import Application  # type: ignore
-    # Try title match first
-    candidates = [
-        title_re or "",
-        Path(exe_path).stem.replace("_", " ").title(),
-        Path(exe_path).stem,
-    ]
-    for t in candidates:
-        if not t:
-            continue
+
+    exe_stem = Path(exe_path).stem.lower()  # e.g. "calc", "notepad"
+
+    # Walk all visible top-level windows
+    best_handle = None
+    for w in Desktop(backend="uia").windows():
         try:
-            app = Application(backend="uia").connect(title_re=t, timeout=3)
-            return app
+            title = (w.window_text() or "").lower()
+            pid   = w.element_info.process_id
+            try:
+                proc_name = (psutil.Process(pid).name() or "").lower()
+            except Exception:
+                proc_name = ""
+            if exe_stem in title or exe_stem in proc_name:
+                best_handle = w.handle
+                break
+        except Exception:
+            continue
+
+    if best_handle:
+        return Application(backend="uia").connect(handle=best_handle)
+
+    # Fallback: classic Win32 connect by path
+    if title_re:
+        try:
+            return Application(backend="uia").connect(title_re=title_re, timeout=3)
         except Exception:
             pass
-    # Fall back to path (works for classic Win32 apps)
     return Application(backend="uia").connect(path=exe_path, timeout=5)
 
 
@@ -430,7 +449,7 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
             # Don't hide the window — GUI apps need a visible desktop window
             # so subsequent connect() calls can find them by title.
             subprocess.Popen([exe_path])
-            import time; time.sleep(1)  # give UWP a moment to appear
+            import time; time.sleep(3)  # UWP apps need ~3s to render UIA tree
             return f"Launched {Path(exe_path).name}"
         except Exception as exc:
             return f"GUI launch error: {exc}"
