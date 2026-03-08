@@ -466,6 +466,27 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
     )
 
 
+def _call_execute_bridge(inv: dict, args: dict) -> str | None:
+    """Forward a tool-call to the Windows VM bridge /execute endpoint.
+
+    Returns the result string on success, or None if the bridge is
+    unavailable / returns an error (caller falls through to local execution).
+    """
+    import httpx
+    try:
+        resp = httpx.post(
+            f"{GUI_BRIDGE_URL}/execute",
+            json={"invocable": inv, "args": args},
+            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", "")
+    except Exception as exc:
+        logger.warning("Bridge /execute failed (falling through to local): %s", exc)
+        return None
+
+
 def _execute_tool(inv: dict, args: dict) -> str:
     """Dispatch a single tool call to the correct backend."""
     name      = inv.get("name", "")
@@ -474,6 +495,11 @@ def _execute_tool(inv: dict, args: dict) -> str:
 
     if method == "dll_import":
         return _execute_dll(inv, execution, args)
+    # GUI and CLI both need Windows — forward to the bridge when configured.
+    if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
+        result = _call_execute_bridge(inv, args)
+        if result is not None:
+            return result
     if method == "gui_action":
         return _execute_gui(execution, name, args)
     return _execute_cli(execution, name, args)
@@ -818,7 +844,14 @@ async def generate(body: dict[str, Any]):
     for inv in selected:
         props: dict = {}
         required: list = []
-        for p in inv.get("parameters", []):
+        # parameters may be None (bridge raw field) or a string (legacy) —
+        # normalise to a list so iteration is always safe.
+        raw_params = inv.get("parameters") or []
+        if isinstance(raw_params, str):
+            raw_params = []
+        for p in raw_params:
+            if not isinstance(p, dict):
+                continue
             pname = p.get("name", "arg")
             props[pname] = {
                 "type": "string",

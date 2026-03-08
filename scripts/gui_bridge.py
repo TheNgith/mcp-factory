@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import secrets
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -85,6 +86,11 @@ class AnalyzeRequest(BaseModel):
     content: str | None = None
 
 
+class ExecuteRequest(BaseModel):
+    invocable: dict
+    args: dict = {}
+
+
 # ── Lazy analyzer imports (all Windows-only) ─────────────────────────────────
 def _import_gui():
     from gui_analyzer import analyze_gui  # type: ignore
@@ -108,9 +114,16 @@ def _import_registry():
 
 
 def _inv_to_dict(inv: Any) -> dict:
-    """Convert an Invocable dataclass (or dict) to a plain dict."""
+    """Convert an Invocable dataclass (or dict) to a plain dict.
+
+    Uses to_dict() when available so parameters is always a list
+    (not the raw Optional[str] dataclass field) and all fields are
+    in the canonical pipeline format.
+    """
     if isinstance(inv, dict):
         return inv
+    if hasattr(inv, "to_dict"):
+        return inv.to_dict()
     return {k: v for k, v in vars(inv).items() if not k.startswith("_")}
 
 
@@ -290,6 +303,118 @@ async def analyze(
                 pass
 
     return JSONResponse(result)
+
+
+# ── Execution helpers (mirror of api/main.py — runs on Windows) ──────────────
+
+def _resolve_exe_path(path: str) -> str:
+    """Resolve a possibly-Linux temp path to a real Windows executable path."""
+    p = Path(path)
+    if p.exists():
+        return str(p)
+    filename = p.name
+    for candidate in [
+        Path(r"C:\Windows\System32") / filename,
+        Path(r"C:\Windows") / filename,
+        Path(r"C:\Windows\SysWOW64") / filename,
+        Path(r"C:\Program Files") / filename,
+        Path(r"C:\Program Files (x86)") / filename,
+    ]:
+        if candidate.exists():
+            logger.info("Resolved '%s' → '%s'", path, candidate)
+            return str(candidate)
+    return path  # let the caller surface a natural error
+
+
+def _execute_cli_bridge(execution: dict, name: str, args: dict) -> str:
+    target = (
+        execution.get("executable_path")
+        or execution.get("target_path")
+        or execution.get("dll_path", "")
+    )
+    if not target:
+        return f"CLI error: no executable path configured for '{name}'"
+    target = _resolve_exe_path(target)
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # If the exe stem matches the invocable name, treat it as a launch invocable
+    if Path(target).stem.lower() == name.lower():
+        try:
+            subprocess.Popen([target], creationflags=no_window)
+            return f"Launched {Path(target).name}"
+        except Exception as exc:
+            return f"CLI error: {exc}"
+    cmd = [target, name] + [str(v) for v in args.values()]
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=no_window,
+        )
+        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+    except Exception as exc:
+        return f"CLI error: {exc}"
+
+
+def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
+    try:
+        from pywinauto.application import Application  # type: ignore
+    except ImportError:
+        return "pywinauto is not installed on the bridge VM."
+    exe_path    = _resolve_exe_path(execution.get("exe_path", ""))
+    action_type = execution.get("action_type", "launch")
+    if action_type in ("launch", "open_app") or not exe_path:
+        try:
+            subprocess.Popen([exe_path])
+            return f"Launched {Path(exe_path).name}"
+        except Exception as exc:
+            return f"GUI launch error: {exc}"
+    if action_type == "close_app":
+        try:
+            app = Application(backend="uia").connect(path=exe_path, timeout=3)
+            app.kill()
+            return "App closed."
+        except Exception as exc:
+            return f"GUI close error: {exc}"
+    if action_type == "menu_click":
+        menu_path = args.get("menu_path") or execution.get("menu_path", "")
+        try:
+            app = Application(backend="uia").connect(path=exe_path, timeout=5)
+            app.top_window().menu_select(menu_path)
+            return f"Menu '{menu_path}' selected."
+        except Exception as exc:
+            return f"GUI menu error: {exc}"
+    if action_type == "button_click":
+        button = args.get("button") or execution.get("button", "")
+        try:
+            app = Application(backend="uia").connect(path=exe_path, timeout=5)
+            app.top_window()[button].click()
+            return f"Button '{button}' clicked."
+        except Exception as exc:
+            return f"GUI button error: {exc}"
+    return f"GUI action '{action_type}' dispatched for '{Path(exe_path).name}'."
+
+
+@app.post("/execute")
+async def execute(
+    body: ExecuteRequest,
+    x_bridge_key: str = Header(default=""),
+):
+    """Execute a single tool call on this Windows VM and return the result."""
+    _check_auth(x_bridge_key)
+    inv       = body.invocable
+    args      = body.args
+    name      = inv.get("name", "")
+    execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
+    method    = execution.get("method", "")
+    logger.info("Execute: tool=%s method=%s args=%s", name, method, list(args.keys()))
+    loop = asyncio.get_running_loop()
+    if method == "gui_action":
+        result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)
+    else:
+        result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
+    return JSONResponse({"result": result})
 
 
 @app.get("/health")
