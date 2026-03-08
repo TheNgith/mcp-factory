@@ -71,8 +71,12 @@ def _ai_span(name: str, **props):
     finally:
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         if span and _AI_TRACER:
+            # Flush in a daemon thread so a slow/unreachable App Insights
+            # endpoint can never block the worker thread.
             try:
-                _AI_TRACER.end_span()
+                threading.Thread(
+                    target=_AI_TRACER.end_span, daemon=True, name="ai-flush"
+                ).start()
             except Exception:
                 pass
         dims = {"event": name, "duration_ms": elapsed_ms, **{k: str(v) for k, v in props.items()}}
@@ -641,15 +645,11 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         print(f"[DIAG {job_id}] artifact upload done {mcp_file.name}", flush=True)
 
     print(f"[DIAG {job_id}] all artifacts uploaded, calling bridge", flush=True)
+    # Use plain logger.info (no custom_dimensions) here — the AzureLogHandler
+    # flushes synchronously and can block 90s if App Insights is slow.
     logger.info(
         "[%s] Discovery complete: %d file(s), %d unique invocables",
         job_id, len(mcp_files), len(merged_invocables),
-        extra={"custom_dimensions": {
-            "event": "discovery_complete",
-            "job_id": job_id,
-            "file_count": len(mcp_files),
-            "invocable_count": len(merged_invocables),
-        }},
     )
 
     # ── Augment with Windows-only analysis via GUI bridge (if configured) ──
