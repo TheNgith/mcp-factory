@@ -860,7 +860,10 @@ async def generate(body: dict[str, Any]):
 
     # Save schema to Blob
     schema_blob = f"{job_id}/mcp_schema.json"
-    _upload_to_blob(ARTIFACT_CONTAINER, schema_blob, json.dumps(mcp_schema, indent=2).encode())
+    try:
+        _upload_to_blob(ARTIFACT_CONTAINER, schema_blob, json.dumps(mcp_schema, indent=2).encode())
+    except Exception as blob_exc:
+        logger.warning("[%s] Schema blob upload failed (non-fatal): %s", job_id, blob_exc)
 
     # ── P1: Generate true MCP SDK server artifacts ─────────────────────────
     mcp_artifacts: dict = {}

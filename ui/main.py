@@ -969,7 +969,11 @@ def _client() -> httpx.AsyncClient:
 async def _proxy_json(path: str, body: Any) -> JSONResponse:
     try:
         r = await _client().post(path, json=body)
-        return JSONResponse(content=r.json(), status_code=r.status_code)
+        try:
+            content = r.json()
+        except Exception:
+            content = {"detail": r.text or f"Pipeline returned empty response (HTTP {r.status_code})"}
+        return JSONResponse(content=content, status_code=r.status_code if r.text else 502)
     except Exception as e:
         logger.error(f"Proxy error → {path}: {e}")
         return JSONResponse({"detail": str(e)}, status_code=502)
