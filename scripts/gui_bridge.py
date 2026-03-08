@@ -255,6 +255,18 @@ async def analyze(
                 "Decoded uploaded binary to %s (%d bytes)",
                 target, target.stat().st_size,
             )
+            # Prefer the real system-path binary for GUI analysis — temp copies
+            # of UWP stubs (e.g. calc.exe) won't launch a visible window.
+            sys_candidate = _resolve_exe_path(str(target))
+            if sys_candidate != str(target) and Path(sys_candidate).exists():
+                logger.info("Using system path %s for analysis instead of temp copy", sys_candidate)
+                target = Path(sys_candidate)
+                # Clean up the temp dir immediately since we won't use it
+                try:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                tmp_dir = None
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Could not decode content: {exc}")
     else:
@@ -357,6 +369,55 @@ def _execute_cli_bridge(execution: dict, name: str, args: dict) -> str:
         return f"CLI error: {exc}"
 
 
+def _connect_app(exe_path: str, title_re: str = ""):
+    """Connect to a running app window by title first, then exe path.
+
+    UWP apps (e.g. Calculator) run from WindowsApps\\... not from
+    C:\\Windows\\System32\\calc.exe, so connect(path=...) always fails.
+    Connecting by window title is reliable across all app types.
+    """
+    from pywinauto.application import Application  # type: ignore
+    # Try title match first
+    candidates = [
+        title_re or "",
+        Path(exe_path).stem.replace("_", " ").title(),
+        Path(exe_path).stem,
+    ]
+    for t in candidates:
+        if not t:
+            continue
+        try:
+            app = Application(backend="uia").connect(title_re=t, timeout=3)
+            return app
+        except Exception:
+            pass
+    # Fall back to path (works for classic Win32 apps)
+    return Application(backend="uia").connect(path=exe_path, timeout=5)
+
+
+def _read_display(app) -> str:
+    """Try to read the current display value from the top window."""
+    try:
+        win = app.top_window()
+        # Calculator display control name
+        for ctrl_name in ("CalculatorResults", "Display", "Result", "output"):
+            try:
+                return win[ctrl_name].window_text().strip()
+            except Exception:
+                pass
+        # Generic fallback — first Edit or Static that has content
+        for ctrl in win.descendants(control_type="Text"):
+            try:
+                t = ctrl.window_text().strip()
+                if t:
+                    return t
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ""
+
+
 def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     try:
         from pywinauto.application import Application  # type: ignore
@@ -366,13 +427,16 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     action_type = execution.get("action_type", "launch")
     if action_type in ("launch", "open_app") or not exe_path:
         try:
+            # Don't hide the window — GUI apps need a visible desktop window
+            # so subsequent connect() calls can find them by title.
             subprocess.Popen([exe_path])
+            import time; time.sleep(1)  # give UWP a moment to appear
             return f"Launched {Path(exe_path).name}"
         except Exception as exc:
             return f"GUI launch error: {exc}"
     if action_type == "close_app":
         try:
-            app = Application(backend="uia").connect(path=exe_path, timeout=3)
+            app = _connect_app(exe_path)
             app.kill()
             return "App closed."
         except Exception as exc:
@@ -380,7 +444,8 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     if action_type == "menu_click":
         menu_path = args.get("menu_path") or execution.get("menu_path", "")
         try:
-            app = Application(backend="uia").connect(path=exe_path, timeout=5)
+            app = _connect_app(exe_path)
+            app.top_window().set_focus()
             app.top_window().menu_select(menu_path)
             return f"Menu '{menu_path}' selected."
         except Exception as exc:
@@ -388,9 +453,16 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     if action_type == "button_click":
         button = args.get("button") or execution.get("button", "")
         try:
-            app = Application(backend="uia").connect(path=exe_path, timeout=5)
-            app.top_window()[button].click()
-            return f"Button '{button}' clicked."
+            app = _connect_app(exe_path)
+            win = app.top_window()
+            win.set_focus()
+            win[button].click()
+            import time; time.sleep(0.1)
+            display = _read_display(app)
+            result = f"Clicked '{button}'."
+            if display:
+                result += f" Display shows: {display}"
+            return result
         except Exception as exc:
             return f"GUI button error: {exc}"
     return f"GUI action '{action_type}' dispatched for '{Path(exe_path).name}'."
