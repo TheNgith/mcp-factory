@@ -1018,6 +1018,23 @@ async def chat(body: dict[str, Any]):
     MAX_TOOL_ROUNDS = 5
     conversation = list(messages)  # working copy
 
+    # Inject system prompt if not already present — forces the model to
+    # actually call tools instead of narrating what the user should do.
+    if not any(m.get("role") == "system" for m in conversation):
+        tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
+        conversation.insert(0, {
+            "role": "system",
+            "content": (
+                "You are an AI agent with direct control over a Windows application via MCP tools. "
+                "When the user asks you to perform an action (click a button, type text, open a menu, "
+                "calculate something, etc.) you MUST call the appropriate tool to do it yourself — "
+                "do NOT tell the user to do it manually. "
+                "You have access to these tools: " + tool_names + ". "
+                "Always prefer calling a tool over describing what to do. "
+                "After each tool call, report what happened and the result."
+            ),
+        })
+
     try:
         client = _openai_client()
         msg = None
