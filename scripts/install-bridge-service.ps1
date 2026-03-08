@@ -1,17 +1,10 @@
-# install-bridge-service.ps1
+﻿# install-bridge-service.ps1
+# Run this ONCE on the Windows runner VM (as Administrator).
+# It generates a BRIDGE_SECRET, installs the bridge as a Scheduled Task,
+# opens the firewall, and starts the bridge immediately.
 #
-# Run this ONCE on the Windows runner VM (as Administrator) to:
-#   1. Generate a BRIDGE_SECRET and print it (copy it — you need it for ACA)
-#   2. Persist the secret to a local .env file the bridge reads at startup
-#   3. Register a Windows Scheduled Task that starts the bridge at boot
-#   4. Open Windows Firewall for port 8090
-#   5. Start it immediately
-#
-# Usage (on the VM, in the repo root):
+# Usage (in repo root, as Admin):
 #   .\scripts\install-bridge-service.ps1
-#
-# After running, copy the printed BRIDGE_SECRET and run:
-#   .\scripts\wire-bridge-to-aca.ps1 -BridgeSecret "<secret>" -BridgeIP "<vm-public-ip>"
 
 #Requires -RunAsAdministrator
 
@@ -25,49 +18,45 @@ $EnvFile    = Join-Path $RepoRoot "scripts\.bridge.env"
 $TaskName   = "MCP-Factory-GUI-Bridge"
 $BridgePort = 8090
 
-# ── 1. Generate secret ────────────────────────────────────────────────────────
+# 1. Generate or reuse secret
 if (Test-Path $EnvFile) {
     Write-Host "[INFO] Reusing existing bridge env at $EnvFile"
-    $existing = Get-Content $EnvFile | Where-Object { $_ -match '^BRIDGE_SECRET=' }
-    $BridgeSecret = ($existing -split '=', 2)[1]
+    $line = Get-Content $EnvFile | Where-Object { $_ -match '^BRIDGE_SECRET=' }
+    $BridgeSecret = ($line -split '=', 2)[1]
 } else {
     Add-Type -AssemblyName System.Security
     $bytes = New-Object byte[] 32
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $BridgeSecret = [Convert]::ToBase64String($bytes) -replace '[+/=]', ''
     "BRIDGE_SECRET=$BridgeSecret`nBRIDGE_PORT=$BridgePort" | Set-Content $EnvFile
-    Write-Host "[OK] Generated new BRIDGE_SECRET and saved to $EnvFile"
+    Write-Host "[OK] Generated BRIDGE_SECRET and saved to $EnvFile"
 }
 
 Write-Host ""
 Write-Host "========================================="
 Write-Host "  BRIDGE_SECRET = $BridgeSecret"
-Write-Host "  Copy this — you need it for wire-bridge-to-aca.ps1"
+Write-Host "  Copy this for wire-bridge-to-aca.ps1"
 Write-Host "========================================="
 Write-Host ""
 
-# ── 2. Remove stale task if it exists ─────────────────────────────────────────
-$existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing) {
+# 2. Remove stale task
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($existingTask) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Host "[OK] Removed stale task $TaskName"
 }
 
-# ── 3. Build the startup command ──────────────────────────────────────────────
-# Reads BRIDGE_SECRET from .bridge.env, then launches uvicorn via gui_bridge.py
-$StartCmd = @"
-cmd /c "for /f `"tokens=1,2 delims==`" %A in ($EnvFile) do (set %A=%B) && $PythonExe $BridgePy"
-"@
+# 3. Register Scheduled Task
+$action = New-ScheduledTaskAction `
+    -Execute "cmd.exe" `
+    -Argument "/c for /f ""tokens=1,2 delims=="" %A in ($EnvFile) do set %A=%B && ""$PythonExe"" ""$BridgePy"""
 
-$action  = New-ScheduledTaskAction -Execute "cmd.exe" `
-    -Argument "/c for /f `"tokens=1,2 delims==`" %A in ($EnvFile) do set %A=%B && `"$PythonExe`" `"$BridgePy`""
-$trigger = New-ScheduledTaskTrigger -AtStartup
+$trigger  = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 5 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -StartWhenAvailable
-
 $principal = New-ScheduledTaskPrincipal `
     -UserId "SYSTEM" `
     -LogonType ServiceAccount `
@@ -81,9 +70,9 @@ Register-ScheduledTask `
     -Principal $principal `
     -Force | Out-Null
 
-Write-Host "[OK] Scheduled task '$TaskName' registered (runs at boot as SYSTEM)"
+Write-Host "[OK] Scheduled task registered: $TaskName"
 
-# ── 4. Open firewall ──────────────────────────────────────────────────────────
+# 4. Open firewall
 $fwRule = Get-NetFirewallRule -DisplayName "MCP Bridge $BridgePort" -ErrorAction SilentlyContinue
 if (-not $fwRule) {
     New-NetFirewallRule `
@@ -97,8 +86,7 @@ if (-not $fwRule) {
     Write-Host "[INFO] Firewall rule already exists for port $BridgePort"
 }
 
-# ── 5. Start it now without rebooting ────────────────────────────────────────
-# Kill any stale bridge process on this port first
+# 5. Kill stale process and start bridge now
 $stale = Get-NetTCPConnection -LocalPort $BridgePort -ErrorAction SilentlyContinue
 if ($stale) {
     $stale | ForEach-Object {
@@ -110,16 +98,97 @@ if ($stale) {
 
 $env:BRIDGE_SECRET = $BridgeSecret
 $env:BRIDGE_PORT   = "$BridgePort"
-Start-Process -FilePath $PythonExe -ArgumentList "`"$BridgePy`"" -NoNewWindow
+Start-Process -FilePath $PythonExe -ArgumentList """$BridgePy""" -NoNewWindow
 Start-Sleep -Seconds 3
 
-# ── 6. Smoke test ─────────────────────────────────────────────────────────────
+# 6. Health check
 try {
     $resp = Invoke-RestMethod -Uri "http://localhost:$BridgePort/health" -TimeoutSec 5
     Write-Host "[OK] Bridge is UP: $($resp | ConvertTo-Json -Compress)"
 } catch {
-    Write-Warning "Bridge health check failed — it may still be starting. Check with: Invoke-RestMethod http://localhost:$BridgePort/health"
+    Write-Warning "Bridge health check failed - may still be starting. Run: Invoke-RestMethod http://localhost:$BridgePort/health"
 }
 
+# 7. Auto-pull scheduled task (git pull + restart bridge every 5 minutes)
+$AutoPullTaskName = "MCP-Factory-Bridge-AutoPull"
+$AutoPullScript   = Join-Path $RepoRoot "scripts\_bridge_autopull.ps1"
+
+# Write the auto-pull helper script next to this one
+@"
+# _bridge_autopull.ps1 — runs every 5 minutes via Scheduled Task.
+# Pulls latest code from GitHub and restarts the bridge if anything changed.
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = "SilentlyContinue"
+
+`$RepoRoot = "$RepoRoot"
+`$EnvFile  = "$EnvFile"
+`$BridgePy = "$BridgePy"
+`$Python   = "$PythonExe"
+`$Port     = $BridgePort
+`$TaskName = "$TaskName"
+
+# Resolve git (try common install paths if not in PATH)
+`$git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+if (-not `$git) {
+    foreach (`$p in @(
+        "`$env:ProgramFiles\Git\bin\git.exe",
+        "`$env:ProgramFiles\Git\cmd\git.exe",
+        "C:\Program Files\Git\bin\git.exe",
+        "C:\Program Files\Git\cmd\git.exe"
+    )) { if (Test-Path `$p) { `$git = `$p; break } }
+}
+if (-not `$git) { Write-Host "[autopull] git not found, skipping."; exit 0 }
+
+Push-Location `$RepoRoot
+`$before = & "`$git" rev-parse HEAD 2>`$null
+& "`$git" fetch origin main --quiet 2>`$null
+& "`$git" reset --hard origin/main --quiet 2>`$null
+`$after  = & "`$git" rev-parse HEAD 2>`$null
+Pop-Location
+
+if (`$before -ne `$after) {
+    Write-Host "[autopull] Updated `$before -> `$after. Restarting bridge…"
+    # Kill process on bridge port then restart via Scheduled Task
+    `$conn = Get-NetTCPConnection -LocalPort `$Port -ErrorAction SilentlyContinue
+    if (`$conn) { `$conn | ForEach-Object { try { Stop-Process -Id `$_.OwningProcess -Force } catch {} } }
+    Start-Sleep 2
+    # Load env and restart
+    `$line = Get-Content `$EnvFile | Where-Object { `$_ -match '^BRIDGE_SECRET=' }
+    `$env:BRIDGE_SECRET = (`$line -split '=', 2)[1]
+    `$env:BRIDGE_PORT   = "`$Port"
+    Start-Process -FilePath `$Python -ArgumentList """"`$BridgePy"""" -NoNewWindow
+    Write-Host "[autopull] Bridge restarted."
+} else {
+    Write-Host "[autopull] No changes ($((`$after).Substring(0,7))). Bridge unchanged."
+}
+"@ | Set-Content -Encoding UTF8 $AutoPullScript
+Write-Host "[OK] Wrote auto-pull script to $AutoPullScript"
+
+# Register the 5-minute auto-pull task
+$existingAP = Get-ScheduledTask -TaskName $AutoPullTaskName -ErrorAction SilentlyContinue
+if ($existingAP) {
+    Unregister-ScheduledTask -TaskName $AutoPullTaskName -Confirm:$false
+}
+
+$apAction = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NonInteractive -ExecutionPolicy Bypass -File `"$AutoPullScript`""
+$apTrigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date)
+$apSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
+    -StartWhenAvailable
+$apPrincipal = New-ScheduledTaskPrincipal `
+    -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+Register-ScheduledTask `
+    -TaskName  $AutoPullTaskName `
+    -Action    $apAction `
+    -Trigger   $apTrigger `
+    -Settings  $apSettings `
+    -Principal $apPrincipal `
+    -Force | Out-Null
+Write-Host "[OK] Auto-pull task registered: $AutoPullTaskName (every 5 minutes)"
+
 Write-Host ""
-Write-Host "Next step: run wire-bridge-to-aca.ps1 with the BRIDGE_SECRET above and this VM's public IP."
+Write-Host "Next step: run wire-bridge-to-aca.ps1 with the BRIDGE_SECRET above and the VM public IP."
+Write-Host "Auto-pull: the bridge will update itself from GitHub every 5 minutes automatically."
