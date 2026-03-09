@@ -523,6 +523,62 @@ async def health():
     return {"status": "ok", "platform": "windows"}
 
 
+@app.get("/debug_uia")
+async def debug_uia(
+    stem: str = "calc",
+    x_bridge_key: str = Header(default=""),
+):
+    """Dump UIA Text/Edit descendants of the first window matching 'stem'."""
+    _check_auth(x_bridge_key)
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def _dump():
+        import psutil
+        from pywinauto import Desktop
+        from pywinauto.application import Application
+        result = {"windows": [], "descendants": []}
+        for w in Desktop(backend="uia").windows():
+            try:
+                title = (w.window_text() or "").lower()
+                pid   = w.element_info.process_id
+                pname = (psutil.Process(pid).name() or "").lower()
+                if stem.lower() in title or stem.lower() in pname:
+                    result["windows"].append({
+                        "title": w.window_text(),
+                        "pid": pid,
+                        "process": psutil.Process(pid).name(),
+                        "handle": w.handle,
+                    })
+                    app = Application(backend="uia").connect(handle=w.handle)
+                    win = app.top_window()
+                    for ctrl in win.descendants(control_type="Text"):
+                        try:
+                            result["descendants"].append({
+                                "type": "Text",
+                                "auto_id": ctrl.element_info.automation_id,
+                                "text": ctrl.window_text(),
+                            })
+                        except Exception:
+                            pass
+                    for ctrl in win.descendants(control_type="Edit"):
+                        try:
+                            result["descendants"].append({
+                                "type": "Edit",
+                                "auto_id": ctrl.element_info.automation_id,
+                                "text": ctrl.window_text(),
+                            })
+                        except Exception:
+                            pass
+                    break
+            except Exception:
+                continue
+        return result
+
+    data = await loop.run_in_executor(None, _dump)
+    return JSONResponse(data)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.getenv("BRIDGE_PORT", "8090"))
