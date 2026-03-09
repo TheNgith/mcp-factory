@@ -331,7 +331,16 @@ async def analyze(
             except Exception:
                 pass
 
-    _ANALYSIS_CACHE[_cache_key] = (time.time(), result)
+    # Only cache results with more than 1 invocable — a count of 1 almost always
+    # means the GUI analysis failed (cold-start) and only the CLI stub came back.
+    # Skipping the cache forces a fresh retry on the next request.
+    if result.get("count", 0) > 1:
+        _ANALYSIS_CACHE[_cache_key] = (time.time(), result)
+    else:
+        logger.info(
+            "Skipping cache for %s — only %d invocable(s) found (likely cold-start failure)",
+            target.name, result.get("count", 0),
+        )
     return JSONResponse(result)
 
 
