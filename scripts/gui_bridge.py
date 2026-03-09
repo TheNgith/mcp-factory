@@ -416,6 +416,12 @@ def _connect_app(exe_path: str, title_re: str = ""):
 
 def _read_display(app) -> str:
     """Try to read the current display value from the top window."""
+    def _clean(t: str) -> str:
+        # UWP Calculator prefixes values with accessibility text e.g. "Display is 8"
+        import re
+        t = re.sub(r"^(?:Display is|Result is|Expression is)\s*", "", t, flags=re.IGNORECASE)
+        return t.strip()
+
     try:
         win = app.top_window()
         # Try common automation IDs for calculator/display controls
@@ -423,7 +429,7 @@ def _read_display(app) -> str:
             try:
                 t = win.child_window(auto_id=aid).window_text().strip()
                 if t:
-                    return t
+                    return _clean(t)
             except Exception:
                 pass
         # Prefer a Text descendant that contains a digit (the numeric display)
@@ -431,7 +437,7 @@ def _read_display(app) -> str:
             try:
                 t = ctrl.window_text().strip()
                 if t and any(c.isdigit() for c in t):
-                    return t
+                    return _clean(t)
             except Exception:
                 pass
         # Last resort: first non-empty Text descendant
@@ -439,7 +445,7 @@ def _read_display(app) -> str:
             try:
                 t = ctrl.window_text().strip()
                 if t:
-                    return t
+                    return _clean(t)
             except Exception:
                 pass
     except Exception:
