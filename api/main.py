@@ -1015,9 +1015,9 @@ async def chat(body: dict[str, Any]):
     if job_id and invocables:
         _register_invocables(job_id, invocables)
 
-    MAX_TOOL_ROUNDS = 5
+    MAX_TOOL_ROUNDS = 12
     conversation = list(messages)  # working copy
-        _all_tool_results: list[dict] = []  # accumulated across all rounds for response
+    _all_tool_results: list[dict] = []  # accumulated across all rounds for response
     # actually call tools instead of narrating what the user should do.
     if not any(m.get("role") == "system" for m in conversation):
         tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
@@ -1025,12 +1025,14 @@ async def chat(body: dict[str, Any]):
             "role": "system",
             "content": (
                 "You are an AI agent with direct control over a Windows application via MCP tools. "
-                "When the user asks you to perform an action (click a button, type text, open a menu, "
-                "calculate something, etc.) you MUST call the appropriate tool to do it yourself — "
-                "do NOT tell the user to do it manually. "
-                "You have access to these tools: " + tool_names + ". "
-                "Always prefer calling a tool over describing what to do. "
-                "After each tool call, report what happened and the result."
+                "RULES YOU MUST FOLLOW:\n"
+                "1. When asked to perform actions, call tools immediately — never describe what you would do.\n"
+                "2. Do NOT launch an application that is already open. Only call the launch tool once; "
+                "if the app is already open or you already launched it this session, skip calling it again.\n"
+                "3. You can call MULTIPLE tools in a single response — do this to perform sequences faster. "
+                "For example, to press 4 then × then 3, issue all three tool calls at once.\n"
+                "4. After completing all actions, report the final result shown on screen.\n"
+                "You have access to these tools: " + tool_names + "."
             ),
         })
 

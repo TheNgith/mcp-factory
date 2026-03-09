@@ -366,8 +366,14 @@ def _execute_cli_bridge(execution: dict, name: str, args: dict) -> str:
         return f"CLI error: no executable path configured for '{name}'"
     target = _resolve_exe_path(target)
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    # If the exe stem matches the invocable name, treat it as a launch invocable
+    # If the exe stem matches the invocable name, treat it as a launch invocable.
+    # Check if it's already running first — avoids stacking duplicate windows.
     if Path(target).stem.lower() == name.lower():
+        try:
+            _running_app = _connect_app(target)
+            return f"{Path(target).name} is already running — reusing existing window."
+        except Exception:
+            pass
         try:
             subprocess.Popen([target], creationflags=no_window)
             return f"Launched {Path(target).name}"
