@@ -57,9 +57,16 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -StartWhenAvailable
+
+# The bridge must run as the interactive user (NOT SYSTEM) because pywinauto
+# needs to enumerate windows in the user's desktop session. SYSTEM runs in
+# Session 0 and cannot see GUI windows launched in the user's session.
+$BridgeUser = "$env:COMPUTERNAME\$env:USERNAME"
+Write-Host "[INFO] Bridge will run as: $BridgeUser"
+$BridgePassRaw = Read-Host "Enter Windows password for '$BridgeUser' (needed for task scheduler)"
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "SYSTEM" `
-    -LogonType ServiceAccount `
+    -UserId $BridgeUser `
+    -LogonType Password `
     -RunLevel Highest
 
 Register-ScheduledTask `
@@ -68,6 +75,7 @@ Register-ScheduledTask `
     -Trigger   $trigger `
     -Settings  $settings `
     -Principal $principal `
+    -Password  $BridgePassRaw `
     -Force | Out-Null
 
 Write-Host "[OK] Scheduled task registered: $TaskName"
