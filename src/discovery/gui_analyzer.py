@@ -128,9 +128,10 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
         before = _snap_hwnds()
         subprocess.Popen(f'start "" "{exe_str}"', shell=True)
 
-        # Poll for up to 3 s in 0.5 s increments — reduced from 8 s
+        # Poll up to 12 s in 0.5 s increments; exit as soon as a window appears.
+        # Cold-start UWP / MSIX apps need up to ~8 s on a fresh desktop session.
         new_hwnds: set = set()
-        for _ in range(6):
+        for _ in range(24):
             time.sleep(0.5)
             after = _snap_hwnds()
             new_hwnds = after - before
@@ -162,7 +163,7 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
 
     # ── Strategy B: title-pattern loop (win32gui unavailable) ────────────
     subprocess.Popen(f'start "" "{exe_str}"', shell=True)
-    time.sleep(1.5)  # reduced: 4.0→1.5 — enough for most apps to show a window
+    time.sleep(4.0)  # allow cold-start apps enough time to create their window
 
     app = None
     last_exc: Exception = RuntimeError("no connect attempted")
@@ -174,7 +175,7 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
         {"title_re": "(?i).*Calculator.*"},
     ]:
         try:
-            app = Application(backend=backend).connect(timeout=2, **connect_kw)  # reduced: 6→2
+            app = Application(backend=backend).connect(timeout=4, **connect_kw)
             break
         except Exception as exc:
             last_exc = exc

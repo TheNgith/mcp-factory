@@ -41,6 +41,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,13 @@ for _p in [str(_ROOT), str(_DISCOVERY)]:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gui_bridge")
+
+# ── Analysis result cache ──────────────────────────────────────────────────────
+# Key: resolved absolute exe path (lowercased); value: (timestamp, result_dict).
+# A warm cache hit skips re-launching the same binary on repeated uploads,
+# which matters most for UWP stubs that require a full cold-start window wait.
+_ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
+_ANALYSIS_CACHE_TTL = 3600  # seconds — 1 hour
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 BRIDGE_SECRET = os.getenv("BRIDGE_SECRET", "")
@@ -295,6 +303,15 @@ async def analyze(
 
     requested = set(body.types)
 
+    # ── Cache lookup ──────────────────────────────────────────────────────────
+    _cache_key = str(target).lower()
+    _cached = _ANALYSIS_CACHE.get(_cache_key)
+    if _cached:
+        _ts, _res = _cached
+        if time.time() - _ts < _ANALYSIS_CACHE_TTL:
+            logger.info("Cache hit for %s (%d invocables)", target.name, _res["count"])
+            return JSONResponse(_res)
+
     try:
         # Run all blocking analysis in a thread pool — keeps the uvicorn async
         # event loop free to service health checks and concurrent requests.
@@ -314,6 +331,7 @@ async def analyze(
             except Exception:
                 pass
 
+    _ANALYSIS_CACHE[_cache_key] = (time.time(), result)
     return JSONResponse(result)
 
 
