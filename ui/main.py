@@ -543,6 +543,7 @@ _HTML = r"""<!DOCTYPE html>
       <div class="btn-row" style="margin-top:18px">
         <button class="btn btn-secondary" id="back3-btn">← Back</button>
         <button class="btn btn-success" id="download-btn">⬇ Download Schema JSON</button>
+        <button class="btn btn-secondary" id="transcript-btn">⬇ Transcript</button>
         <button class="btn btn-secondary" id="restart-btn">↺ Start Over</button>
       </div>
     </div>
@@ -874,7 +875,12 @@ async function sendMessage() {
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     const data = await res.json();
 
-    if (data.tool_calls?.length) {
+    if (data.tool_results?.length) {
+      data.tool_results.forEach(tr => {
+        const argStr = typeof tr.arguments === 'string' ? tr.arguments : JSON.stringify(tr.arguments ?? {});
+        appendChatMsg('tool-call', `🔧 ${tr.name}(${argStr}) → ${tr.result ?? ''}`);
+      });
+    } else if (data.tool_calls?.length) {
       data.tool_calls.forEach(tc => {
         appendChatMsg('tool-call', `🔧 ${tc.name}(${tc.arguments ?? JSON.stringify(tc)})`);
       });
@@ -916,6 +922,20 @@ $('chat-input').addEventListener('keydown', e => {
 $('download-btn').addEventListener('click', () => {
   if (!state.jobId) return;
   window.location.href = `/api/download/${state.jobId}/mcp_schema.json`;
+});
+
+$('transcript-btn').addEventListener('click', () => {
+  const lines = state.messages
+    .filter(m => m.role !== 'system')
+    .map(m => `[${m.role.toUpperCase()}]\n${m.content ?? ''}`)
+    .join('\n\n---\n\n');
+  const blob = new Blob([lines], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mcp-transcript-${state.jobId ?? 'session'}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 });
 
 // ── Navigation ────────────────────────────────────────────

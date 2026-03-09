@@ -1017,8 +1017,7 @@ async def chat(body: dict[str, Any]):
 
     MAX_TOOL_ROUNDS = 5
     conversation = list(messages)  # working copy
-
-    # Inject system prompt if not already present — forces the model to
+        _all_tool_results: list[dict] = []  # accumulated across all rounds for response
     # actually call tools instead of narrating what the user should do.
     if not any(m.get("role") == "system" for m in conversation):
         tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
@@ -1094,6 +1093,7 @@ async def chat(body: dict[str, Any]):
                     "role": msg.role,
                     "content": msg.content,
                     "tool_calls": [],
+                    "tool_results": _all_tool_results,
                     "rounds": _round + 1,
                 })
 
@@ -1140,26 +1140,33 @@ async def chat(body: dict[str, Any]):
                     )
                     logger.warning(f"[chat/{_round}] No invocable for {fn_name}")
 
+                _all_tool_results.append({"name": fn_name, "arguments": fn_args, "result": tool_result})
                 conversation.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": tool_result,
                 })
 
-        # Exceeded MAX_TOOL_ROUNDS — return last assistant message
+        # Exceeded MAX_TOOL_ROUNDS — force one final text-only summary from the model
         if msg is None:
-            return JSONResponse({"role": "assistant", "content": "", "tool_calls": [], "rounds": 0})
-        last_tool_calls = [
-            {
-                "name": tc.function.name,
-                "arguments": tc.function.arguments,
-            }
-            for tc in (msg.tool_calls or [])
-        ]
+            return JSONResponse({"role": "assistant", "content": "", "tool_calls": [], "tool_results": [], "rounds": 0})
+        summary_content = "All steps completed."
+        try:
+            _summary_resp = client.chat.completions.create(
+                model=OPENAI_DEPLOYMENT,
+                messages=conversation,
+                temperature=0.2,
+                tools=_active_tools,
+                tool_choice="none",
+            )
+            summary_content = _summary_resp.choices[0].message.content or summary_content
+        except Exception as _se:
+            logger.warning("[chat] Final summary call failed: %s", _se)
         return JSONResponse({
             "role": "assistant",
-            "content": msg.content or "(tool execution loop reached round limit)",
-            "tool_calls": last_tool_calls,
+            "content": summary_content,
+            "tool_calls": [],
+            "tool_results": _all_tool_results,
             "rounds": MAX_TOOL_ROUNDS,
         })
 
