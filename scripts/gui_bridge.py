@@ -418,10 +418,10 @@ def _read_display(app) -> str:
     """Try to read the current display value from the top window."""
     try:
         win = app.top_window()
-        # Calculator display control name
-        for ctrl_name in ("CalculatorResults", "Display", "Result", "output"):
+        # Try common automation IDs for calculator/display controls
+        for aid in ("CalculatorResults", "Display", "Result", "output", "NormalOutput"):
             try:
-                t = win[ctrl_name].window_text().strip()
+                t = win.child_window(auto_id=aid).window_text().strip()
                 if t:
                     return t
             except Exception:
@@ -485,8 +485,13 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
             app = _connect_app(exe_path)
             win = app.top_window()
             win.set_focus()
-            win[button].click()
-            import time; time.sleep(0.1)
+            # Try child_window by title first, fall back to bracket notation
+            try:
+                btn = win.child_window(title=button, control_type="Button")
+                btn.click()
+            except Exception:
+                win[button].click()
+            import time; time.sleep(0.3)
             display = _read_display(app)
             result = f"Clicked '{button}'."
             if display:
