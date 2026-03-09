@@ -1015,9 +1015,10 @@ async def chat(body: dict[str, Any]):
     if job_id and invocables:
         _register_invocables(job_id, invocables)
 
-    MAX_TOOL_ROUNDS = 12
+    MAX_TOOL_ROUNDS = 50  # hard safety cap only — loop detection stops earlier
     conversation = list(messages)  # working copy
     _all_tool_results: list[dict] = []  # accumulated across all rounds for response
+    _last_call_signature: str = ""    # for loop detection
     # actually call tools instead of narrating what the user should do.
     if not any(m.get("role") == "system" for m in conversation):
         tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
@@ -1118,6 +1119,14 @@ async def chat(body: dict[str, Any]):
             conversation.append(assistant_turn)
 
             _tool_calls_total += len(msg.tool_calls)
+
+            # Loop detection: if every tool call this round is identical to last round, stop.
+            _this_sig = "|".join(f"{tc.function.name}:{tc.function.arguments}" for tc in msg.tool_calls)
+            if _this_sig == _last_call_signature:
+                logger.warning("[chat] Loop detected (same calls twice) — forcing summary")
+                break
+            _last_call_signature = _this_sig
+
             # Execute each tool call and append tool result messages
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
