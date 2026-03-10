@@ -29,7 +29,7 @@ resource acaNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
       {
         name: 'AllowVnetInbound'
         properties: {
-          priority:                 65000
+          priority:                 100
           direction:                'Inbound'
           access:                   'Allow'
           protocol:                 '*'
@@ -42,7 +42,7 @@ resource acaNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
       {
         name: 'AllowAzureLoadBalancerInbound'
         properties: {
-          priority:                 65001
+          priority:                 110
           direction:                'Inbound'
           access:                   'Allow'
           protocol:                 '*'

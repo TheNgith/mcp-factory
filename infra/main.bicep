@@ -60,12 +60,8 @@ param runnerToken string = ''
 @secure()
 param runnerVmAdminPassword string = ''
 
-@description('GUI bridge URL — HTTP address of the Windows runner VM (e.g. http://<vm-ip>:8090). Leave empty to disable.')
-param guiBridgeUrl string = ''
-
-@description('Shared secret the pipeline uses to authenticate with the GUI bridge.')
-@secure()
-param guiBridgeSecret string = ''
+// GUI bridge credentials are stored in Key Vault (gui-bridge-url, gui-bridge-secret).
+// Populate those secrets before deploying; the pipeline container reads them via secretref.
 
 // ---------------------------------------------------------------------------
 // Derived names — deterministic, collision-free
@@ -108,7 +104,8 @@ module identity 'br/public:avm/res/managed-identity/user-assigned-identity:0.2.1
 }
 
 // ---------------------------------------------------------------------------
-// Key Vault  (RBAC auth; no stored secrets — placeholder for future use)
+// Key Vault  (RBAC auth; secrets: openai-endpoint, openai-deployment, azure-storage-account,
+//             appinsights-connection, azure-client-id, gui-bridge-url, gui-bridge-secret)
 // ---------------------------------------------------------------------------
 
 module kv 'br/public:avm/res/key-vault/vault:0.6.1' = {
@@ -375,9 +372,9 @@ module pipelineApp 'br/public:avm/res/app/container-app:0.4.1' = {
           { name: 'AZURE_OPENAI_DEPLOYMENT',        value: 'gpt-4o' }
           { name: 'AZURE_SEARCH_ENDPOINT',          value: 'https://${searchName}.search.windows.net' }
           { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.outputs.connectionString }
-          // GUI bridge — optional; leave empty to disable Windows-only analysis in cloud
-          { name: 'GUI_BRIDGE_URL',                 value: guiBridgeUrl }
-          { name: 'GUI_BRIDGE_SECRET',              value: guiBridgeSecret }
+          // GUI bridge — credentials sourced from Key Vault via secretref (no plain-text secrets)
+          { name: 'GUI_BRIDGE_URL',    secretRef: 'kv-gui-bridge-url' }
+          { name: 'GUI_BRIDGE_SECRET', secretRef: 'kv-gui-bridge-secret' }
         ]
       }
     ]

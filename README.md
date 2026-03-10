@@ -32,9 +32,9 @@ Enterprise organizations need AI-powered customer service that can invoke existi
 | Blob — artifacts | `mcpfactorystore/artifacts` | ✅ Active |
 | Container Registry | `mcpfactoryacr` / `mcpfactoryacr.azurecr.io` | ✅ Active |
 | ACA Environment | `mcp-factory-env` / eastus (Log Analytics `0baaed31…`) | ✅ Active |
-| ACA Default Domain | `calmsmoke-c4f97e21.eastus.azurecontainerapps.io` | ✅ Active |
-| ACA App — pipeline | `mcp-factory-pipeline` | ✅ Live — `mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io` |
-| ACA App — web UI | `mcp-factory-ui` | ✅ Live — `mcp-factory-ui.calmsmoke-c4f97e21.eastus.azurecontainerapps.io` |
+| ACA Default Domain | `icycoast-8ddfa278.eastus.azurecontainerapps.io` | ✅ Active (VNet-integrated) |
+| ACA App — pipeline | `mcp-factory-pipeline` | ✅ Live — `mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io` |
+| ACA App — web UI | `mcp-factory-ui` | ✅ Live — `mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io` |
 | Azure OpenAI | `mcp-factory-openai` / `https://mcp-factory-openai.openai.azure.com/` | ✅ Active |
 | OpenAI Deployment | `gpt-4o` (model 2024-11-20, 10K TPM) | ✅ Active |
 | App Insights | `mcp-factory-insights` (Log Analytics: `mcp-factory-logs`) | ✅ Active |

@@ -1,0 +1,157 @@
+{
+  "version": "Notebook/1.0",
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "azure monitor"
+  ],
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# MCP Factory — Operational Metrics\n\nLive view of the discovery, generation, and chat pipeline. All values are read from Application Insights custom events emitted by `api/main.py`.\n\n| Event | Dimensions |\n|---|---|\n| `discovery_complete` | `job_id`, `file_count`, `invocable_count` |\n| `generate_complete` | `job_id`, `tool_count`, `component` |\n| `chat_complete` | `job_id`, `rounds`, `tool_calls_total`, `duration_ms` |\n\n> All dimensions land in `customDimensions` as strings — use `toint()` / `todouble()` in KQL."
+      },
+      "name": "header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents\n| where name == \"discovery_complete\"\n| where timestamp > ago(7d)\n| count",
+        "size": 4,
+        "title": "Analyses this week",
+        "timeContext": {
+          "durationMs": 604800000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "stat",
+        "tileSettings": {
+          "showBorder": false,
+          "titleContent": {
+            "columnMatch": "Count",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" }
+          },
+          "leftContent": {
+            "columnMatch": "Count",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" },
+            "numberFormat": { "unit": 17, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+          }
+        }
+      },
+      "customWidth": "25",
+      "name": "analyses-this-week"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents\n| where name == \"discovery_complete\"\n| extend invocable_count = toint(customDimensions[\"invocable_count\"])\n| summarize avg_invocables = round(avg(invocable_count), 1)",
+        "size": 4,
+        "title": "Avg invocables per job",
+        "timeContext": {
+          "durationMs": 604800000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "stat",
+        "tileSettings": {
+          "showBorder": false,
+          "titleContent": {
+            "columnMatch": "avg_invocables",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" }
+          },
+          "leftContent": {
+            "columnMatch": "avg_invocables",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" },
+            "numberFormat": { "unit": 17, "options": { "style": "decimal", "maximumFractionDigits": 1 } }
+          }
+        }
+      },
+      "customWidth": "25",
+      "name": "avg-invocables"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents\n| where name == \"chat_complete\"\n| extend tool_calls = toint(customDimensions[\"tool_calls_total\"])\n| summarize total = count(), with_tools = countif(tool_calls > 0)\n| extend success_rate_pct = round(todouble(with_tools) * 100.0 / todouble(total), 1)\n| project success_rate_pct",
+        "size": 4,
+        "title": "Tool call success rate %",
+        "timeContext": {
+          "durationMs": 604800000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "stat",
+        "tileSettings": {
+          "showBorder": false,
+          "titleContent": {
+            "columnMatch": "success_rate_pct",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" }
+          },
+          "leftContent": {
+            "columnMatch": "success_rate_pct",
+            "formatter": 12,
+            "formatOptions": { "palette": "auto" },
+            "numberFormat": { "unit": 1, "options": { "style": "decimal", "maximumFractionDigits": 1 } }
+          }
+        }
+      },
+      "customWidth": "25",
+      "name": "tool-call-success-rate"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents\n| where name in (\"discovery_complete\", \"generate_complete\", \"chat_complete\")\n| extend dur = toint(customDimensions[\"duration_ms\"])\n| where isnotnull(dur)\n| summarize avg_ms = round(avg(dur), 0), p95_ms = round(percentile(dur, 95), 0), job_count = count() by operation = name\n| order by avg_ms desc",
+        "size": 4,
+        "title": "Avg & P95 duration by operation (ms)",
+        "timeContext": {
+          "durationMs": 604800000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "avg_ms",
+              "formatter": 8,
+              "formatOptions": { "palette": "blue" }
+            },
+            {
+              "columnMatch": "p95_ms",
+              "formatter": 8,
+              "formatOptions": { "palette": "orange" }
+            }
+          ]
+        }
+      },
+      "customWidth": "100",
+      "name": "duration-by-operation"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "customEvents\n| where name in (\"discovery_complete\", \"generate_complete\", \"chat_complete\")\n| summarize count() by name, bin(timestamp, 1h)\n| render timechart",
+        "size": 0,
+        "title": "Event throughput over time",
+        "timeContext": {
+          "durationMs": 604800000
+        },
+        "queryType": 0,
+        "resourceType": "microsoft.insights/components",
+        "visualization": "timechart"
+      },
+      "customWidth": "100",
+      "name": "throughput-timechart"
+    }
+  ]
+}

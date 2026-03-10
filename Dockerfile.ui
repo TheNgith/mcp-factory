@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ui/ ./ui/
 
 # Pipeline API URL – overridden at deploy time via ACA env var
-ENV PIPELINE_URL=https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io
+ENV PIPELINE_URL=https://mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io
 
 EXPOSE 8080
 

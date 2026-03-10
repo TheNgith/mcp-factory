@@ -22,8 +22,8 @@ param githubRepo             = 'evanking12/mcp-factory'
 // runnerToken and runnerVmAdminPassword are @secure() — pass on the CLI:
 //   --parameters runnerToken=<TOKEN> runnerVmAdminPassword=<PW>
 
-// ── GUI bridge (set only when deployWindowsRunner=true) ───────────────────
-// After VNet integration, the VM gets static private IP 10.0.2.4.
-// guiBridgeSecret is @secure() — pass on the CLI:
-//   --parameters guiBridgeSecret=<SECRET>
-param guiBridgeUrl = 'http://10.0.2.4:8090'
+// ── GUI bridge ────────────────────────────────────────────────────────────
+// URL and secret are stored in Key Vault (gui-bridge-url, gui-bridge-secret).
+// The pipeline reads them via secretref — no parameter needed here.
+// After VNet integration the VM gets static private IP 10.0.2.4; update the
+// KV secret if the VM is redeployed and the IP changes.

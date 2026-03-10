@@ -41,7 +41,7 @@ logger = logging.getLogger("mcp_factory.copilot")
 
 PIPELINE_URL = os.getenv(
     "PIPELINE_URL",
-    "https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io",
+    "https://mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io",
 ).rstrip("/")
 
 # GitHub Copilot token verification endpoint

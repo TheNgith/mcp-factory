@@ -25,7 +25,7 @@ UI_API_KEY = os.getenv("UI_API_KEY", "")
 
 PIPELINE_URL = os.getenv(
     "PIPELINE_URL",
-    "https://mcp-factory-pipeline.calmsmoke-c4f97e21.eastus.azurecontainerapps.io",
+    "https://mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io",
 ).rstrip("/")
 
 app = FastAPI(title="MCP Factory UI", version="1.0.0")

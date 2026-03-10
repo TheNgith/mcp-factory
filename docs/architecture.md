@@ -1,5 +1,80 @@
 # Architecture
 
+## Azure Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph User["User / Browser"]
+        B[Web Browser]
+    end
+
+    subgraph GitHub["GitHub"]
+        GH[GitHub Actions CI/CD]
+        GHR[Self-Hosted Windows Runner]
+    end
+
+    subgraph Azure["Azure — mcp-factory-rg (East US)"]
+        subgraph Identity["Identity & Secrets"]
+            MI[Managed Identity\nmcp-factory-identity]
+            KV[Key Vault\nmcp-factory-kv\nguiBridgeUrl · guiBridgeSecret\nopenai-endpoint · storage-account\nappinsights-connection · clientId]
+        end
+
+        subgraph Containers["Azure Container Apps — mcp-factory-env"]
+            UI[UI Container App\nmcp-factory-ui\nFastAPI SPA]
+            PIPE[Pipeline Container App\nmcp-factory-pipeline\nFastAPI + discovery engine]
+        end
+
+        subgraph Storage["Storage"]
+            BLOB[Blob Storage\nmcpfactorystore\nuploads · artifacts]
+            QUEUE[Storage Queue\nanalysis-jobs]
+        end
+
+        subgraph AI["AI Services"]
+            AOAI[Azure OpenAI\nmcp-factory-openai\ngpt-4o deployment]
+            SEARCH[Azure AI Search\nmcpfactory-search\nfree tier]
+        end
+
+        subgraph Observability["Observability"]
+            AI2[Application Insights\nmcp-factory-insights]
+            LOG[Log Analytics\nmcp-factory-logs]
+        end
+
+        ACR[Container Registry\nmcpfactoryacr]
+
+        subgraph VNet["Virtual Network — mcpfactory-vnet 10.0.0.0/16"]
+            ACA_SUBNET["aca-infra subnet\n10.0.0.0/23\n(ACA outbound)"]
+            subgraph VMSubnet["vm subnet — 10.0.2.0/24"]
+                VM[Windows 11 Runner VM\nmcpfactory-runner-vm\n10.0.2.4\nGUI Bridge :8090\npywinauto · COM · Registry]
+                NSG[NSG: allow 8090\nfrom aca-infra only]
+            end
+        end
+    end
+
+    B -->|HTTPS| UI
+    UI -->|proxy /api/*| PIPE
+    PIPE -->|secretref| KV
+    KV -->|secrets| MI
+    MI -->|RBAC| BLOB
+    MI -->|RBAC| QUEUE
+    MI -->|RBAC| AOAI
+    MI -->|RBAC| SEARCH
+    MI -->|RBAC| ACR
+    PIPE -->|upload / download| BLOB
+    PIPE -->|enqueue job| QUEUE
+    QUEUE -->|worker poll| PIPE
+    PIPE -->|gpt-4o chat + tools| AOAI
+    PIPE -->|tool retrieval| SEARCH
+    PIPE -->|telemetry| AI2
+    UI -->|telemetry| AI2
+    AI2 --> LOG
+    GH -->|push image| ACR
+    ACR -->|pull image| PIPE
+    ACR -->|pull image| UI
+    GHR -->|CI: GUI tests| VM
+    ACA_SUBNET -->|private HTTP :8090| VM
+    NSG -.->|blocks internet| VM
+```
+
 ## Goal
 Generate an MCP server/tool schema from existing binaries (DLL/EXE/CLI/repo) by discovering invocable surfaces, normalizing them, enriching metadata, and generating deployable MCP components.
 

@@ -65,31 +65,14 @@ $BridgeUser = "$env:COMPUTERNAME\$env:USERNAME"
 Write-Host "[INFO] Bridge will run as: $BridgeUser"
 $BridgePassRaw = Read-Host "Enter Windows password for '$BridgeUser' (needed for task scheduler)"
 
-$principal = New-ScheduledTaskPrincipal -UserId $BridgeUser -LogonType Password -RunLevel Highest
-Register-ScheduledTask `
-    -TaskName  $TaskName `
-    -Action    $action `
-    -Trigger   $trigger `
-    -Settings  $settings `
-    -Principal $principal `
-    -Force | Out-Null
+# Use schtasks.exe directly — avoids Register-ScheduledTask PS5 parameter ambiguity.
+# Build the command string that the task will run.
+$BridgeCmd = "cmd.exe /c set BRIDGE_SECRET=$BridgeSecret && set BRIDGE_PORT=$BridgePort && `"$PythonExe`" `"$BridgePy`""
 
-# Set the password separately (Register-ScheduledTask -Password is ambiguous on PS5)
-$svc = New-Object -ComObject Schedule.Service
-$svc.Connect()
-$t = $svc.GetFolder('\').GetTask($TaskName)
-$def = $t.Definition
-$def.Principal.UserId = $BridgeUser
-$def.Principal.LogonType = 1  # TASK_LOGON_PASSWORD
-$t.GetFolder = $null
-$svc.GetFolder('\').RegisterTaskDefinition(
-    $TaskName, $def,
-    6,           # TASK_CREATE_OR_UPDATE
-    $BridgeUser,
-    $BridgePassRaw,
-    1            # TASK_LOGON_PASSWORD
-) | Out-Null
-
+schtasks.exe /Create /TN $TaskName /TR $BridgeCmd /SC ONSTART /RU $BridgeUser /RP $BridgePassRaw /RL HIGHEST /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "schtasks /Create failed (exit $LASTEXITCODE). Check username/password."
+}
 Write-Host "[OK] Scheduled task registered: $TaskName"
 
 # 4. Open firewall

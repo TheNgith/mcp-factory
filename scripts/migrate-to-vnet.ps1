@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Migrates the MCP Factory deployment to a VNet-integrated ACA environment.
 
@@ -13,8 +13,8 @@
     The new environment will have a different default domain suffix.
     CI/CD will redeploy the container images after this script completes.
 
-.PARAMETER GuiBridgeSecret
-    The shared secret for the GUI bridge (matches BRIDGE_SECRET on the VM).
+    GUI bridge credentials (gui-bridge-url, gui-bridge-secret) are read from
+    Key Vault by the pipeline container via secretref — no parameter needed.
 
 .PARAMETER RunnerToken
     Ephemeral GitHub Actions runner registration token (only needed if
@@ -33,20 +33,16 @@
 
 .EXAMPLE
     # Minimal — just migrate ACA + VNet (VM already exists):
-    .\scripts\migrate-to-vnet.ps1 -GuiBridgeSecret "my-secret"
+    .\scripts\migrate-to-vnet.ps1
 
     # Full — also redeploy the runner VM:
     .\scripts\migrate-to-vnet.ps1 `
-        -GuiBridgeSecret "my-secret" `
         -RunnerToken "AABB..." `
         -RunnerVmAdminPassword "P@ssw0rd123!" `
         -DeployWindowsRunner
 #>
 
 param(
-    [Parameter(Mandatory)]
-    [string] $GuiBridgeSecret,
-
     [string] $RunnerToken             = '',
     [string] $RunnerVmAdminPassword   = '',
     [switch] $DeployWindowsRunner
@@ -55,10 +51,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$RG       = 'MCP-FACTORY-RG'
+$RG       = 'mcp-factory-rg'
 $ENV_NAME = 'mcp-factory-env'
-$PIPELINE = 'mcpfactory-pipeline'
-$UI       = 'mcpfactory-ui'
+$PIPELINE = 'mcp-factory-pipeline'
+$UI       = 'mcp-factory-ui'
 
 Write-Host "`n=== MCP Factory VNet Migration ===" -ForegroundColor Cyan
 Write-Host "This script will briefly take the deployment offline." -ForegroundColor Yellow
@@ -101,9 +97,7 @@ $bicepRoot  = Join-Path $PSScriptRoot '..' 'infra'
 $templateFile = Join-Path $bicepRoot 'main.bicep'
 $paramsFile   = Join-Path $bicepRoot 'main.bicepparam'
 
-$extraParams = @(
-    "guiBridgeSecret=$GuiBridgeSecret"
-)
+$extraParams = @()
 
 if ($DeployWindowsRunner) {
     if (-not $RunnerToken)           { Write-Error "-RunnerToken is required with -DeployWindowsRunner"; exit 1 }
@@ -139,7 +133,7 @@ $vnetConfig = az containerapp env show `
 if ($vnetConfig -and $vnetConfig.infrastructureSubnetId) {
     Write-Host "  VNet integrated: $($vnetConfig.infrastructureSubnetId)" -ForegroundColor Green
 } else {
-    Write-Warning "  VNet config not detected — check the deployment output."
+    Write-Warning "  VNet config not detected - check the deployment output."
 }
 
 $newDomain = az containerapp env show `
@@ -152,7 +146,6 @@ Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Trigger the CI/CD pipeline to rebuild and redeploy the container images."
 Write-Host "     (push an empty commit or re-run the latest workflow run)"
-Write-Host "  2. Update GUI_BRIDGE_URL on the pipeline ACA app if the VM was NOT redeployed:"
-Write-Host "     az containerapp update --name $PIPELINE --resource-group $RG \"
-Write-Host "       --set-env-vars GUI_BRIDGE_URL=http://10.0.2.4:8090"
-Write-Host "  3. Smoke-test: curl https://<new-ui-fqdn>/health"
+Write-Host "  2. GUI_BRIDGE_URL and GUI_BRIDGE_SECRET are now read from Key Vault via secretref."
+Write-Host "     No manual env var update needed — the KV secret gui-bridge-url holds the VM address."
+Write-Host "  3. Smoke-test: curl https://{new-ui-fqdn}/health  (fqdn printed above)"

@@ -384,7 +384,11 @@ def _execute_cli_bridge(execution: dict, name: str, args: dict) -> str:
         except Exception:
             pass
         try:
-            subprocess.Popen([target], creationflags=no_window)
+            # Use shell `start ""` for MSIX/UWP stubs (e.g. calc.exe on Win10+)
+            # which exit immediately when called via direct Popen. `start`
+            # triggers proper COM/Shell activation and is safe for classic EXEs too.
+            # Never use CREATE_NO_WINDOW here — it suppresses MSIX activation.
+            subprocess.Popen(f'start "" "{target}"', shell=True)
             return f"Launched {Path(target).name}"
         except Exception as exc:
             return f"CLI error: {exc}"
@@ -495,10 +499,43 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     action_type = execution.get("action_type", "launch")
     if action_type in ("launch", "open_app") or not exe_path:
         try:
-            # Don't hide the window — GUI apps need a visible desktop window
-            # so subsequent connect() calls can find them by title.
-            subprocess.Popen([exe_path])
-            import time; time.sleep(3)  # UWP apps need ~3s to render UIA tree
+            # Use shell `start ""` so MSIX/UWP stubs get proper COM/Explorer
+            # activation instead of a direct Popen (which exits immediately for
+            # UWP stubs and is silently dropped in Session 0).
+            subprocess.Popen(f'start "" "{exe_path}"', shell=True)
+            # Poll for a visible window so callers get a meaningful error when
+            # running in Session 0 (where the window never materialises).
+            deadline = time.time() + 6
+            window_found = False
+            while time.time() < deadline:
+                time.sleep(0.5)
+                try:
+                    _connect_app(exe_path)
+                    window_found = True
+                    break
+                except Exception:
+                    pass
+            if not window_found:
+                # Check whether the bridge itself is in a Session 0 (no desktop).
+                try:
+                    import ctypes
+                    _sid = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+                    _process_session = ctypes.c_ulong(0)
+                    ctypes.windll.kernel32.ProcessIdToSessionId(
+                        os.getpid(), ctypes.byref(_process_session))
+                    if _process_session.value == 0:
+                        return (
+                            f"GUI launch error: bridge is running in Session 0 "
+                            f"(SYSTEM service) — GUI windows cannot appear on the desktop. "
+                            f"Restart gui_bridge.py as an interactive user: "
+                            f"run install-bridge-service.ps1 on the VM."
+                        )
+                except Exception:
+                    pass
+                return (
+                    f"Launched {Path(exe_path).name} but no window appeared within 6 s "
+                    f"(possible Session 0 isolation or UWP activation failure)."
+                )
             return f"Launched {Path(exe_path).name}"
         except Exception as exc:
             return f"GUI launch error: {exc}"
@@ -565,6 +602,66 @@ async def execute(
 @app.get("/health")
 async def health():
     return {"status": "ok", "platform": "windows"}
+
+
+@app.get("/debug_session")
+async def debug_session(x_bridge_key: str = Header(default="")):
+    """Return the bridge process's Windows session info and visible desktop windows.
+
+    GET http://<vm>:8090/debug_session  (with X-Bridge-Key header)
+
+    Use this to confirm:
+      - session_id == 1 (interactive desktop, not Session 0 SYSTEM)
+      - visible windows include expected apps
+    """
+    _check_auth(x_bridge_key)
+    import ctypes
+
+    info: dict = {}
+
+    # Session ID of the bridge process itself
+    try:
+        sid = ctypes.c_ulong(0)
+        ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(sid))
+        info["bridge_session_id"] = sid.value
+        info["is_session_0"] = sid.value == 0
+    except Exception as exc:
+        info["bridge_session_id"] = f"error: {exc}"
+
+    # Active console session (the one attached to the physical/RDP display)
+    try:
+        info["active_console_session"] = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+    except Exception as exc:
+        info["active_console_session"] = f"error: {exc}"
+
+    # Enumerate visible top-level windows in this session
+    try:
+        import win32gui  # type: ignore
+        windows = []
+        def _cb(hwnd, _):
+            try:
+                if win32gui.IsWindowVisible(hwnd):
+                    t = win32gui.GetWindowText(hwnd)
+                    if t:
+                        windows.append(t)
+            except Exception:
+                pass
+        win32gui.EnumWindows(_cb, None)
+        info["visible_windows"] = windows[:40]
+        info["visible_window_count"] = len(windows)
+    except Exception as exc:
+        info["visible_windows"] = f"win32gui error: {exc}"
+
+    # Quick check: is CalculatorApp.exe (the real calc process) running?
+    try:
+        import psutil  # type: ignore
+        calc_procs = [p.name() for p in psutil.process_iter(["name"])
+                      if "calc" in (p.info["name"] or "").lower()]
+        info["calc_processes"] = calc_procs
+    except Exception as exc:
+        info["calc_processes"] = f"psutil error: {exc}"
+
+    return JSONResponse(info)
 
 
 @app.get("/debug_uia")

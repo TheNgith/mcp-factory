@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "notepad": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/generated/notepad/mcp_stdio.py"]
+    }
+  }
+}
