@@ -64,19 +64,31 @@ $settings = New-ScheduledTaskSettingsSet `
 $BridgeUser = "$env:COMPUTERNAME\$env:USERNAME"
 Write-Host "[INFO] Bridge will run as: $BridgeUser"
 $BridgePassRaw = Read-Host "Enter Windows password for '$BridgeUser' (needed for task scheduler)"
-$principal = New-ScheduledTaskPrincipal `
-    -UserId $BridgeUser `
-    -LogonType Password `
-    -RunLevel Highest
 
+$principal = New-ScheduledTaskPrincipal -UserId $BridgeUser -LogonType Password -RunLevel Highest
 Register-ScheduledTask `
     -TaskName  $TaskName `
     -Action    $action `
     -Trigger   $trigger `
     -Settings  $settings `
     -Principal $principal `
-    -Password  $BridgePassRaw `
     -Force | Out-Null
+
+# Set the password separately (Register-ScheduledTask -Password is ambiguous on PS5)
+$svc = New-Object -ComObject Schedule.Service
+$svc.Connect()
+$t = $svc.GetFolder('\').GetTask($TaskName)
+$def = $t.Definition
+$def.Principal.UserId = $BridgeUser
+$def.Principal.LogonType = 1  # TASK_LOGON_PASSWORD
+$t.GetFolder = $null
+$svc.GetFolder('\').RegisterTaskDefinition(
+    $TaskName, $def,
+    6,           # TASK_CREATE_OR_UPDATE
+    $BridgeUser,
+    $BridgePassRaw,
+    1            # TASK_LOGON_PASSWORD
+) | Out-Null
 
 Write-Host "[OK] Scheduled task registered: $TaskName"
 
