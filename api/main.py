@@ -146,9 +146,124 @@ app.add_middleware(
 
 UPLOAD_CONTAINER   = "uploads"
 ARTIFACT_CONTAINER = "artifacts"
+ANALYSIS_QUEUE     = "analysis-jobs"
 SRC_DISCOVERY_DIR  = Path(__file__).parent.parent / "src" / "discovery"
 
-# ── Per-job invocable registries ───────────────────────────────────────────
+# ── Azure Storage Queue client ────────────────────────────────────────────
+def _queue_service_client():
+    """Return an authenticated QueueServiceClient, or None if not configured."""
+    if not STORAGE_ACCOUNT:
+        return None
+    try:
+        from azure.storage.queue import QueueServiceClient
+        return QueueServiceClient(
+            account_url=f"https://{STORAGE_ACCOUNT}.queue.core.windows.net",
+            credential=_get_credential(),
+        )
+    except Exception as exc:
+        logger.warning("Queue service client init failed: %s", exc)
+        return None
+
+
+def _enqueue_analysis(job_id: str, blob_name: str, hints: str, original_name: str) -> bool:
+    """Push an analysis job onto the Storage Queue. Returns True on success."""
+    svc = _queue_service_client()
+    if not svc:
+        return False
+    try:
+        qc = svc.get_queue_client(ANALYSIS_QUEUE)
+        msg = json.dumps({
+            "job_id":        job_id,
+            "blob_name":     blob_name,
+            "hints":         hints,
+            "original_name": original_name,
+        })
+        qc.send_message(msg, visibility_timeout=0)
+        logger.info("[%s] Enqueued analysis job.", job_id)
+        return True
+    except Exception as exc:
+        logger.warning("[%s] Failed to enqueue: %s", job_id, exc)
+        return False
+
+
+def _queue_worker_loop() -> None:
+    """Background thread: poll the analysis queue and process jobs durably.
+
+    - Picks one message at a time with a 10-minute visibility timeout.
+    - Downloads the uploaded binary from Blob Storage, runs _analyze_worker.
+    - Deletes the message only after the worker finishes (done OR error).
+    - If the container restarts mid-analysis the msg becomes visible again
+      and is retried automatically by the next instance.
+    """
+    svc = _queue_service_client()
+    if not svc:
+        logger.info("No queue configured — queue worker not started.")
+        return
+
+    qc = svc.get_queue_client(ANALYSIS_QUEUE)
+    try:
+        qc.create_queue()
+    except Exception:
+        pass  # already exists
+
+    logger.info("Queue worker started — polling '%s'.", ANALYSIS_QUEUE)
+    while True:
+        try:
+            messages = list(qc.receive_messages(max_messages=1, visibility_timeout=600))
+            if not messages:
+                time.sleep(3)
+                continue
+
+            msg = messages[0]
+            try:
+                data         = json.loads(msg.content)
+                job_id        = data["job_id"]
+                blob_name     = data["blob_name"]
+                hints         = data.get("hints", "")
+                original_name = data.get("original_name", "upload.bin")
+            except Exception as exc:
+                logger.error("Malformed queue message, discarding: %s", exc)
+                qc.delete_message(msg)
+                continue
+
+            # Download the uploaded file from Blob Storage.
+            try:
+                content = _download_blob(UPLOAD_CONTAINER, blob_name)
+            except Exception as exc:
+                logger.error("[%s] Blob download failed, skipping job: %s", job_id, exc)
+                _persist_job_status(job_id, {
+                    "status": "error", "progress": 0,
+                    "message": "Blob download failed",
+                    "result": None, "error": str(exc),
+                    "created_at": time.time(), "updated_at": time.time(),
+                })
+                qc.delete_message(msg)
+                continue
+
+            suffix   = Path(original_name).suffix or ".bin"
+            tmp_dir  = Path(tempfile.mkdtemp(prefix=f"queue_{job_id}_"))
+            tmp_path = tmp_dir / original_name
+            tmp_path.write_bytes(content)
+
+            # Run synchronously in this thread (one job at a time per worker).
+            t = threading.Thread(
+                target=_analyze_worker,
+                args=(job_id, tmp_path, hints, original_name, tmp_dir),
+                daemon=True,
+                name=f"queue-job-{job_id}",
+            )
+            t.start()
+            t.join()  # wait before deleting — ensures at-least-once delivery
+
+            qc.delete_message(msg)
+            logger.info("[%s] Queue message deleted after completion.", job_id)
+
+        except Exception as exc:
+            logger.warning("Queue worker poll error: %s", exc)
+            time.sleep(5)
+
+
+# ── Per-job invocable registries ─────────────────────────────────────────────
 # Backed by both in-memory cache and Blob Storage so state survives container
 # recycles (scale-to-zero, deployments, crashes).  P7.
 # Structure: {job_id: {tool_name: invocable_dict}}
@@ -697,6 +812,17 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     }
 
 
+# ── Startup ────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def _startup():
+    """Start the durable queue worker in a background thread."""
+    t = threading.Thread(
+        target=_queue_worker_loop, daemon=True, name="queue-worker"
+    )
+    t.start()
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -776,19 +902,17 @@ async def analyze(
 
     logger.info(f"[{job_id}] Received {file.filename} ({len(content)} bytes)")
 
-    # Save to Blob Storage immediately (before spawning worker)
+    original_name = Path(file.filename).name or f"upload{suffix}"
+
+    # Save to Blob Storage immediately — the queue worker re-downloads from here.
+    blob_uploaded = False
     try:
         _upload_to_blob(UPLOAD_CONTAINER, blob_name, content)
+        blob_uploaded = True
     except Exception as exc:
         logger.warning("[%s] Blob upload failed: %s", job_id, exc)
 
-    # Write to temp file preserving the original filename
-    original_name = Path(file.filename).name or f"upload{suffix}"
-    tmp_dir  = Path(tempfile.mkdtemp(prefix=f"upload_{job_id}_"))
-    tmp_path = tmp_dir / original_name
-    tmp_path.write_bytes(content)
-
-    # Seed status so poll endpoint responds immediately
+    # Seed status so poll endpoint responds immediately.
     _persist_job_status(job_id, {
         "status": "queued",
         "progress": 0,
@@ -799,13 +923,21 @@ async def analyze(
         "updated_at": time.time(),
     })
 
-    t = threading.Thread(
-        target=_analyze_worker,
-        args=(job_id, tmp_path, hints, original_name, tmp_dir),
-        daemon=True,
-        name=f"worker-{job_id}",
-    )
-    t.start()
+    # Primary path: enqueue onto Azure Storage Queue for durable processing.
+    # The queue worker thread picks it up, downloads the blob, and runs analysis.
+    # Fallback: spawn a direct thread (local/dev mode or if queue unavailable).
+    enqueued = blob_uploaded and _enqueue_analysis(job_id, blob_name, hints, original_name)
+    if not enqueued:
+        logger.info("[%s] Queue unavailable — falling back to direct thread.", job_id)
+        tmp_dir  = Path(tempfile.mkdtemp(prefix=f"upload_{job_id}_"))
+        tmp_path = tmp_dir / original_name
+        tmp_path.write_bytes(content)
+        threading.Thread(
+            target=_analyze_worker,
+            args=(job_id, tmp_path, hints, original_name, tmp_dir),
+            daemon=True,
+            name=f"worker-{job_id}",
+        ).start()
 
     return JSONResponse({
         "job_id": job_id,

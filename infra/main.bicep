@@ -150,10 +150,22 @@ module storage 'br/public:avm/res/storage/storage-account:0.9.1' = {
         { name: 'artifacts', publicAccess: 'None' }
       ]
     }
+    queueServices: {
+      queues: [
+        { name: 'analysis-jobs' }
+      ]
+    }
     roleAssignments: [
       {
         // Storage Blob Data Contributor — Managed Identity
         roleDefinitionIdOrName: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+        principalId:            identity.outputs.principalId
+        principalType:          'ServicePrincipal'
+      }
+      {
+        // Storage Queue Data Contributor — Managed Identity
+        // Required for the queue worker to send/receive/delete messages.
+        roleDefinitionIdOrName: '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
         principalId:            identity.outputs.principalId
         principalType:          'ServicePrincipal'
       }
