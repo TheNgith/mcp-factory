@@ -78,6 +78,11 @@ jobs:
               --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
               --image "$IMAGE_TAG" \
               --set-env-vars "PIPELINE_URL=${{ env.PIPELINE_URL }}"
+            az containerapp ingress update \
+              --name ${{ env.APP_NAME }} \
+              --resource-group ${{ env.RG }} \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+              --target-port 8080
           else
             echo "→ Creating Container App for the first time"
             az containerapp create \

@@ -186,6 +186,11 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }}
+          az containerapp ingress update \
+            --name ${{ env.PIPELINE_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+            --target-port 8080
 
       - name: Deploy UI container
         run: |
@@ -194,6 +199,11 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.UI_IMAGE }}:${{ needs.build.outputs.image-tag }}
+          az containerapp ingress update \
+            --name ${{ env.UI_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+            --target-port 8080
 
       - name: Wait for revision to stabilise
         run: sleep 30
@@ -202,3 +212,13 @@ jobs:
         run: |
           curl -sf ${{ env.HEALTH_URL }} | grep -q '"status":"ok"'
           echo "Pipeline health check passed"
+
+      - name: Smoke-test UI health
+        run: |
+          UI_URL="https://$(az containerapp show \
+            --name ${{ env.UI_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+            --query properties.configuration.ingress.fqdn -o tsv)"
+          curl -sf "$UI_URL/health" | grep -q '"status":"ok"'
+          echo "UI health check passed"
