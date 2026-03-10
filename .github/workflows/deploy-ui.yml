@@ -69,11 +69,13 @@ jobs:
           if az containerapp show \
                --name ${{ env.APP_NAME }} \
                --resource-group ${{ env.RG }} \
+               --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
                --query name -o tsv 2>/dev/null; then
             echo "→ Updating existing Container App"
             az containerapp update \
               --name ${{ env.APP_NAME }} \
               --resource-group ${{ env.RG }} \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
               --image "$IMAGE_TAG" \
               --set-env-vars "PIPELINE_URL=${{ env.PIPELINE_URL }}"
           else
@@ -81,6 +83,7 @@ jobs:
             az containerapp create \
               --name "${{ env.APP_NAME }}" \
               --resource-group "${{ env.RG }}" \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
               --environment "${{ env.ACA_ENV }}" \
               --image "$IMAGE_TAG" \
               --registry-server "${{ env.ACR }}" \
@@ -99,6 +102,7 @@ jobs:
           URL=$(az containerapp show \
             --name ${{ env.APP_NAME }} \
             --resource-group ${{ env.RG }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --query properties.configuration.ingress.fqdn -o tsv)
           echo "🌐 UI → https://$URL"
           # Wait up to 60 s for /health

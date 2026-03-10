@@ -184,6 +184,7 @@ jobs:
           az containerapp update \
             --name ${{ env.PIPELINE_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }}
 
       - name: Deploy UI container
@@ -191,6 +192,7 @@ jobs:
           az containerapp update \
             --name ${{ env.UI_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.UI_IMAGE }}:${{ needs.build.outputs.image-tag }}
 
       - name: Wait for revision to stabilise
