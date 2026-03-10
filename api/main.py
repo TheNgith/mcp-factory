@@ -23,7 +23,8 @@ from typing import Any
 
 IS_WINDOWS = platform.system() == "Windows"
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import secrets as _secrets
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -89,6 +90,16 @@ def _ai_span(name: str, **props):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_factory.api")
 
+# ── Allowed base paths for /api/analyze-path ─────────────────────────────
+# Restrict server-side path analysis to safe upload/temp directories so a
+# caller cannot read arbitrary container filesystem paths (e.g. /proc/self/environ).
+_SAFE_PATH_PREFIXES: tuple[Path, ...] = (
+    Path(tempfile.gettempdir()),
+    Path("/app"),          # container working directory
+    Path("C:/"),           # Windows local runs
+    Path("D:/"),
+)
+
 # ── Config from environment ────────────────────────────────────────────────
 STORAGE_ACCOUNT   = os.getenv("AZURE_STORAGE_ACCOUNT", "mcpfactorystore")
 OPENAI_ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT", "")
@@ -102,6 +113,12 @@ MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity client
 # If either is absent the pipeline works normally (Linux-only analysis).
 GUI_BRIDGE_URL    = os.getenv("GUI_BRIDGE_URL", "").rstrip("/")
 GUI_BRIDGE_SECRET = os.getenv("GUI_BRIDGE_SECRET", "")
+
+# ── Pipeline API key guard (optional) ────────────────────────────────────
+# Set PIPELINE_API_KEY on the container to require a shared key on every
+# request.  Leave unset for open access during local development.
+# The UI container forwards X-Pipeline-Key from its own UI_API_KEY secret.
+PIPELINE_API_KEY = os.getenv("PIPELINE_API_KEY", "")
 
 # ── Generation module (P1: MCP SDK server emit) ───────────────────────────
 _GEN_DIR = Path(__file__).parent.parent / "src" / "generation"
@@ -143,6 +160,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def _pipeline_api_key_guard(request: Request, call_next):
+    """If PIPELINE_API_KEY is set, every non-health request must present it."""
+    if not PIPELINE_API_KEY:
+        return await call_next(request)
+    if request.url.path == "/health":
+        return await call_next(request)
+    provided = request.headers.get("X-Pipeline-Key", "")
+    if not provided or not _secrets.compare_digest(provided, PIPELINE_API_KEY):
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 UPLOAD_CONTAINER   = "uploads"
 ARTIFACT_CONTAINER = "artifacts"
@@ -845,7 +874,16 @@ async def analyze_path(body: dict[str, Any]):
     if not path_str:
         raise HTTPException(400, "path is required")
 
-    target = Path(path_str)
+    # ── Path traversal guard ───────────────────────────────────────
+    # Resolve symlinks and ".." components before checking the prefix so a
+    # caller cannot sneak past the allowlist with e.g. /tmp/../etc/passwd.
+    target = Path(path_str).resolve()
+    if not any(str(target).startswith(str(p.resolve())) for p in _SAFE_PATH_PREFIXES):
+        raise HTTPException(
+            403,
+            f"Path {path_str!r} is outside the allowed directories. "
+            "Upload the file instead.",
+        )
     if not target.exists():
         raise HTTPException(
             400,
