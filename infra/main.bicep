@@ -296,6 +296,19 @@ resource searchRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 }
 
 // ---------------------------------------------------------------------------
+// Virtual Network (shared by ACA environment + Windows runner VM)
+// ---------------------------------------------------------------------------
+
+module vnetDeploy 'vnet.bicep' = {
+  name:  'vnet'
+  scope: rg
+  params: {
+    location: location
+    prefix:   prefix
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Container Apps Environment
 // ---------------------------------------------------------------------------
 
@@ -307,6 +320,10 @@ module acaEnv 'br/public:avm/res/app/managed-environment:0.4.5' = {
     location:                     location
     logAnalyticsWorkspaceResourceId: logAnalytics.outputs.resourceId
     zoneRedundant:                false
+    // VNet integration — ACA outbound traffic flows through the VNet,
+    // enabling private connectivity to the Windows runner VM.
+    infrastructureSubnetId:       vnetDeploy.outputs.acaSubnetId
+    internal:                     false  // environment remains externally reachable
   }
 }
 
@@ -427,11 +444,15 @@ module runnerVm 'runner-vm.bicep' = if (deployWindowsRunner) {
   name:  'runnerVm'
   scope: rg
   params: {
-    location:      location
-    prefix:        prefix
-    githubRepo:    githubRepo
-    runnerToken:   runnerToken
-    adminPassword: runnerVmAdminPassword
+    location:       location
+    prefix:         prefix
+    githubRepo:     githubRepo
+    runnerToken:    runnerToken
+    adminPassword:  runnerVmAdminPassword
+    // Place VM in the shared VNet; assign static private IP so
+    // GUI_BRIDGE_URL can be hardcoded as http://10.0.2.4:8090
+    vmSubnetId:     vnetDeploy.outputs.vmSubnetId
+    staticPrivateIp: '10.0.2.4'
   }
 }
 
