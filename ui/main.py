@@ -21,7 +21,8 @@ logger = logging.getLogger("mcp_factory.ui")
 # ── Optional API-key guard ─────────────────────────────────────────────────
 # Set UI_API_KEY env var on the container to require a shared key on every
 # request.  Leave unset (or empty) for open access during local development.
-UI_API_KEY = os.getenv("UI_API_KEY", "")
+UI_API_KEY   = os.getenv("UI_API_KEY", "")
+PIPELINE_KEY = os.getenv("PIPELINE_KEY", "")  # forwarded as X-Pipeline-Key
 
 PIPELINE_URL = os.getenv(
     "PIPELINE_URL",
@@ -982,7 +983,8 @@ _http: httpx.AsyncClient | None = None
 def _client() -> httpx.AsyncClient:
     global _http
     if _http is None or _http.is_closed:
-        _http = httpx.AsyncClient(base_url=PIPELINE_URL, timeout=180.0)
+        headers = {"X-Pipeline-Key": PIPELINE_KEY} if PIPELINE_KEY else {}
+        _http = httpx.AsyncClient(base_url=PIPELINE_URL, timeout=180.0, headers=headers)
     return _http
 
 
