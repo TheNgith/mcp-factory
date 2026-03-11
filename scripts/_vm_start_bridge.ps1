@@ -51,7 +51,7 @@ $ErrorActionPreference = "SilentlyContinue"
 schtasks /delete /tn $TaskName /f 2>&1 | Out-Null
 $ErrorActionPreference = "Stop"
 
-$createResult = schtasks /Create /TN $TaskName /TR "`"$WrapperBat`"" /SC ONLOGON /RU "$env:COMPUTERNAME\$BridgeUser" /RP $UserPass /RL HIGHEST /DELAY 0:10 /F 2>&1
+$createResult = schtasks /Create /TN $TaskName /TR "`"$WrapperBat`"" /SC ONLOGON /RU "$env:COMPUTERNAME\$BridgeUser" /RP $UserPass /RL HIGHEST /F 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Error "[FAIL] schtasks /Create failed: $createResult"
 }
