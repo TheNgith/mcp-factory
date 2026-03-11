@@ -45,7 +45,11 @@ Set-ItemProperty -Path $LockKey -Name "NoLockScreen" -Value 1 -Type DWord
 Write-Host "[OK] Lock screen / sleep / screensaver disabled"
 
 # ---- 4. Register scheduled task as azureuser (ONLOGON = Session 1)
+# /delete fails with exit 1 if the task does not exist yet -- that is fine.
+# Temporarily silence $ErrorActionPreference so PS5.1 does not throw on it.
+$ErrorActionPreference = "SilentlyContinue"
 schtasks /delete /tn $TaskName /f 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
 
 $createResult = schtasks /Create /TN $TaskName /TR "`"$WrapperBat`"" /SC ONLOGON /RU "$env:COMPUTERNAME\$BridgeUser" /RP $UserPass /RL HIGHEST /DELAY 0:10 /F 2>&1
 if ($LASTEXITCODE -ne 0) {
