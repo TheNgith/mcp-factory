@@ -861,39 +861,81 @@ async function sendMessage() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
 
+  // Streaming response — create a placeholder bubble and fill it live
+  let assistantBubble = null;
+  let assistantText   = '';
+  let roundCount      = 1;
+
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: state.messages,
-        tools: state.tools,
-        // Pass full invocable metadata so the pipeline can actually execute tool calls
+        messages:   state.messages,
+        tools:      state.tools,
         invocables: state.invocables,
-        job_id: state.jobId,
+        job_id:     state.jobId,
       }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-    const data = await res.json();
 
-    if (data.tool_results?.length) {
-      data.tool_results.forEach(tr => {
-        const argStr = typeof tr.arguments === 'string' ? tr.arguments : JSON.stringify(tr.arguments ?? {});
-        appendChatMsg('tool-call', `🔧 ${tr.name}(${argStr}) → ${tr.result ?? ''}`);
-      });
-    } else if (data.tool_calls?.length) {
-      data.tool_calls.forEach(tc => {
-        appendChatMsg('tool-call', `🔧 ${tc.name}(${tc.arguments ?? JSON.stringify(tc)})`);
-      });
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE lines are separated by \n\n; process every complete event
+      let boundary;
+      while ((boundary = buf.indexOf('\n\n')) !== -1) {
+        const raw = buf.slice(0, boundary).trim();
+        buf = buf.slice(boundary + 2);
+
+        if (!raw.startsWith('data:')) continue;
+        let evt;
+        try { evt = JSON.parse(raw.slice(5).trim()); }
+        catch { continue; }
+
+        if (evt.type === 'token') {
+          // Append to the live assistant bubble
+          assistantText += evt.content;
+          if (!assistantBubble) {
+            assistantBubble = appendChatBubble('assistant', assistantText);
+          } else {
+            assistantBubble.textContent = assistantText;
+            $('chat-window').scrollTop = $('chat-window').scrollHeight;
+          }
+
+        } else if (evt.type === 'tool_call') {
+          const argStr = typeof evt.args === 'string' ? evt.args : JSON.stringify(evt.args ?? {});
+          appendChatMsg('tool-call', `🔧 ${evt.name}(${argStr})`);
+
+        } else if (evt.type === 'tool_result') {
+          appendChatMsg('tool-call', `   ↳ ${evt.result ?? ''}`);
+
+        } else if (evt.type === 'done') {
+          roundCount = evt.rounds ?? 1;
+
+        } else if (evt.type === 'error') {
+          throw new Error(evt.message);
+        }
+      }
     }
-    const content = data.content ?? '*(no text content)*';
-    appendChatMsg('assistant', content);
-    // show round count when the model needed multiple tool-call loops
-    if ((data.rounds ?? 1) > 1) {
-      appendChatMsg('tool-call',
-        `ℹ️ Completed in ${data.rounds} agentic round(s)`);
+
+    // If no text tokens came through (pure tool-call response), show placeholder
+    if (!assistantBubble && !assistantText) {
+      assistantText = '*(actions completed)*';
+      assistantBubble = appendChatBubble('assistant', assistantText);
     }
-    state.messages.push({ role: 'assistant', content });
+    if (roundCount > 1) {
+      appendChatMsg('tool-call', `ℹ️ Completed in ${roundCount} agentic round(s)`);
+    }
+    state.messages.push({ role: 'assistant', content: assistantText });
+
   } catch(e) {
     showError('chat-error', `Chat error: ${e.message}`);
   } finally {
@@ -902,15 +944,19 @@ async function sendMessage() {
   }
 }
 
-function appendChatMsg(role, text) {
+function appendChatBubble(role, text) {
   const win = $('chat-window');
   $('chat-empty')?.remove();
-
   const div = document.createElement('div');
   div.className = `chat-msg ${role}`;
   div.textContent = text;
   win.appendChild(div);
   win.scrollTop = win.scrollHeight;
+  return div;
+}
+
+function appendChatMsg(role, text) {
+  appendChatBubble(role, text);
 }
 
 $('send-btn').addEventListener('click', sendMessage);
@@ -1035,6 +1081,25 @@ async def proxy_generate(body: dict[str, Any]) -> JSONResponse:
 async def proxy_chat(body: dict[str, Any]) -> JSONResponse:
     """Proxy chat request to the pipeline /api/chat."""
     return await _proxy_json("/api/chat", body)
+
+
+@app.post("/api/chat/stream")
+async def proxy_chat_stream(request: Request):
+    """Proxy the streaming SSE chat endpoint — pipes bytes through as they arrive."""
+    body = await request.json()
+    headers = {"X-Pipeline-Key": PIPELINE_KEY} if PIPELINE_KEY else {}
+
+    async def _stream():
+        async with httpx.AsyncClient(base_url=PIPELINE_URL, timeout=300.0, headers=headers) as c:
+            async with c.stream("POST", "/api/chat/stream", json=body) as r:
+                async for chunk in r.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/jobs/{job_id}")

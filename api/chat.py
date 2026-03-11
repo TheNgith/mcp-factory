@@ -1,11 +1,17 @@
 """api/chat.py – Agentic chat completions with tool-call execution loop.
 
-run_chat(body) implements everything inside the /api/chat handler beyond
-routing: system-prompt injection, semantic tool selection, the tool-call loop,
-loop detection, and the forced summary on MAX_TOOL_ROUNDS.
+run_chat(body)    – blocking JSON response (kept for backward compat).
+stream_chat(body) – async generator yielding SSE events in real time so the
+                    UI can render tokens / tool calls as they happen instead
+                    of waiting for all rounds to complete.
 
-Returns a plain dict suitable for wrapping in JSONResponse by the caller.
-Raises fastapi.HTTPException on validation errors or Azure OpenAI failures.
+SSE event format:  data: <json>\n\n
+Event types:
+  {"type": "token",       "content": "..."}          – streamed text chunk
+  {"type": "tool_call",   "name": "...", "args": {}}  – tool about to execute
+  {"type": "tool_result", "name": "...", "result": "..."} – tool output
+  {"type": "done",        "rounds": N}                – final event
+  {"type": "error",       "message": "..."}           – fatal error
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncGenerator
 
 from fastapi import HTTPException
 
@@ -24,6 +30,37 @@ from api.storage import _register_invocables, _get_invocable
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
+
+# Keep only the last N conversation turns sent to the model each round.
+# This trims token bloat on long sessions while keeping enough context for the
+# model to know what it just did.  System prompt is always prepended separately.
+_CONTEXT_WINDOW_TURNS = 20
+
+
+def _sse(event: dict) -> str:
+    """Format a dict as a single SSE data line."""
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def _build_system_message(invocables: list) -> dict:
+    tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
+    return {
+        "role": "system",
+        "content": (
+            "You are an AI agent with direct control over a Windows application via MCP tools. "
+            "RULES YOU MUST FOLLOW:\n"
+            "1. When asked to perform actions, call tools immediately — never describe what you would do.\n"
+            "2. Do NOT launch an application that is already open. Only call the launch tool once. "
+            "If the tool result says the app was launched or is already running, "
+            "NEVER call that launch tool again in this session under any circumstances.\n"
+            "3. You can call MULTIPLE tools in a single response — do this to perform sequences faster. "
+            "For example, to press 4 then × then 3, issue all three tool calls at once.\n"
+            "4. After completing all actions, report the final result shown on screen.\n"
+            "5. If the user asks a question about your tools or capabilities (e.g. 'list your tools', "
+            "'what can you do'), respond with a plain text answer — do NOT call any tools.\n"
+            "You have access to these tools: " + tool_names + "."
+        ),
+    }
 
 
 def run_chat(body: dict[str, Any]) -> dict[str, Any]:
@@ -58,24 +95,7 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
     _last_call_signature: str = ""    # for loop detection
     # actually call tools instead of narrating what the user should do.
     if not any(m.get("role") == "system" for m in conversation):
-        tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
-        conversation.insert(0, {
-            "role": "system",
-            "content": (
-                "You are an AI agent with direct control over a Windows application via MCP tools. "
-                "RULES YOU MUST FOLLOW:\n"
-                "1. When asked to perform actions, call tools immediately — never describe what you would do.\n"
-                "2. Do NOT launch an application that is already open. Only call the launch tool once. "
-                "If the tool result says the app was launched or is already running, "
-                "NEVER call that launch tool again in this session under any circumstances.\n"
-                "3. You can call MULTIPLE tools in a single response — do this to perform sequences faster. "
-                "For example, to press 4 then × then 3, issue all three tool calls at once.\n"
-                "4. After completing all actions, report the final result shown on screen.\n"
-                "5. If the user asks a question about your tools or capabilities (e.g. 'list your tools', "
-                "'what can you do'), respond with a plain text answer — do NOT call any tools.\n"
-                "You have access to these tools: " + tool_names + "."
-            ),
-        })
+        conversation.insert(0, _build_system_message(invocables))
 
     try:
         client = _openai_client()
@@ -259,3 +279,170 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(500, f"Chat failed: {e}")
+
+
+async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
+    """Async generator: runs the same agentic loop as run_chat but yields SSE
+    events immediately as tokens arrive and tools are executed.
+
+    The caller wraps this in a FastAPI StreamingResponse with
+    media_type="text/event-stream" so the browser receives chunks in real time.
+    """
+    messages: list   = body.get("messages", [])
+    tools: list      = body.get("tools", [])
+    invocables: list = body.get("invocables", [])
+    job_id: str      = body.get("job_id", "")
+
+    if not messages:
+        yield _sse({"type": "error", "message": "No messages provided"})
+        return
+    if not OPENAI_ENDPOINT:
+        yield _sse({"type": "error", "message": "Azure OpenAI endpoint not configured"})
+        return
+
+    inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
+    if job_id and invocables:
+        _register_invocables(job_id, invocables)
+
+    MAX_TOOL_ROUNDS = 10
+    _last_call_signature = ""
+    _tool_calls_total = 0
+
+    # Build conversation: always start with system prompt, then keep last
+    # _CONTEXT_WINDOW_TURNS non-system messages to bound token growth.
+    sys_msgs  = [m for m in messages if m.get("role") == "system"]
+    user_msgs = [m for m in messages if m.get("role") != "system"]
+    if not sys_msgs:
+        sys_msgs = [_build_system_message(invocables)]
+    conversation = sys_msgs + user_msgs[-_CONTEXT_WINDOW_TURNS:]
+
+    _active_tools = list(tools)
+    _called_launchers: set[str] = set()
+
+    try:
+        client = _openai_client()
+
+        for _round in range(MAX_TOOL_ROUNDS):
+            # Remove de-duped launcher tools from active set each round
+            if _called_launchers:
+                _active_tools = [t for t in _active_tools
+                                 if t.get("function", {}).get("name") not in _called_launchers]
+
+            kwargs: dict = {
+                "model": OPENAI_DEPLOYMENT,
+                "messages": conversation,
+                "temperature": 0,
+                "stream": True,
+            }
+            if _active_tools:
+                kwargs["tools"] = _active_tools
+                kwargs["tool_choice"] = "auto"
+
+            # ── Stream the response ────────────────────────────────────────
+            # Accumulate tool call deltas; forward text tokens immediately.
+            tool_call_accum: dict[int, dict] = {}   # index → {id, name, arguments}
+            assistant_content = ""
+            finish_reason = None
+
+            response = client.chat.completions.create(**kwargs)
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                finish_reason = chunk.choices[0].finish_reason or finish_reason
+
+                # Stream text tokens immediately
+                if delta.content:
+                    assistant_content += delta.content
+                    yield _sse({"type": "token", "content": delta.content})
+
+                # Accumulate tool call argument deltas
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_call_accum:
+                            tool_call_accum[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc_delta.id:
+                            tool_call_accum[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_call_accum[idx]["name"] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
+
+            # No tool calls this round → final answer
+            if not tool_call_accum:
+                yield _sse({"type": "done", "rounds": _round + 1})
+                return
+
+            # Append assistant turn with accumulated tool calls to conversation
+            assistant_turn: dict[str, Any] = {
+                "role": "assistant",
+                "content": assistant_content or "",
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in tool_call_accum.values()
+                ],
+            }
+            conversation.append(assistant_turn)
+            _tool_calls_total += len(tool_call_accum)
+
+            # Loop detection
+            _this_sig = "|".join(
+                f"{tc['name']}:{tc['arguments']}" for tc in tool_call_accum.values()
+            )
+            if _this_sig == _last_call_signature:
+                logger.warning("[stream_chat] Loop detected — stopping")
+                yield _sse({"type": "done", "rounds": _round + 1})
+                return
+            _last_call_signature = _this_sig
+
+            # ── Execute each tool call and stream results immediately ──────
+            for tc in tool_call_accum.values():
+                fn_name = tc["name"]
+                try:
+                    fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                yield _sse({"type": "tool_call", "name": fn_name, "args": fn_args})
+
+                inv = inv_map.get(fn_name)
+                if inv is None and job_id:
+                    inv = _get_invocable(job_id, fn_name)
+
+                if inv is not None:
+                    tool_result = _execute_tool(inv, fn_args)
+                    if inv.get("source_type") == "cli" and \
+                            Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():
+                        _called_launchers.add(fn_name)
+                else:
+                    tool_result = (
+                        f"Tool '{fn_name}' executed (no invocable metadata — "
+                        f"pass 'invocables' in the request body). "
+                        f"Raw arguments: {json.dumps(fn_args)}"
+                    )
+
+                yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
+                logger.info("[stream_chat/%d] %s → %s", _round, fn_name, tool_result[:120])
+
+                conversation.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": tool_result,
+                })
+
+            # Trim conversation to bound token size — keep system prompt + last N turns
+            _sys  = [m for m in conversation if m.get("role") == "system"]
+            _rest = [m for m in conversation if m.get("role") != "system"]
+            conversation = _sys + _rest[-_CONTEXT_WINDOW_TURNS:]
+
+        yield _sse({"type": "done", "rounds": MAX_TOOL_ROUNDS})
+
+    except Exception as exc:
+        logger.error("stream_chat error: %s", exc)
+        yield _sse({"type": "error", "message": str(exc)})

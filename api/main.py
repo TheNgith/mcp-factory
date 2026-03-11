@@ -40,7 +40,7 @@ from api.storage import (
 )
 from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
-from api.chat import run_chat
+from api.chat import run_chat, stream_chat
 from api.generate import run_generate
 
 logging.basicConfig(level=logging.INFO)
@@ -255,17 +255,25 @@ async def execute_tool(body: dict[str, Any]):
 
 @app.post("/api/chat")
 async def chat(body: dict[str, Any]):
-    """
-    Section 5: Agentic chat interface.
-    Sends messages to Azure OpenAI with MCP tool definitions attached.
-    When the model emits tool_calls, actually executes them and feeds the
-    results back for a second completion — up to MAX_TOOL_ROUNDS rounds.
-    Body: {messages, tools, invocables?, job_id?}
-      invocables: full invocable dicts (with execution metadata) needed to
-                  dispatch tool calls. If omitted, execution falls back to
-                  /api/execute with job_id lookup.
+    """Blocking agentic chat — kept for backward compatibility.
+    Prefer /api/chat/stream for real-time feedback.
     """
     return JSONResponse(run_chat(body))
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(body: dict[str, Any]):
+    """Streaming SSE variant of /api/chat.  Yields events as they happen so
+    the UI can render tokens and tool results in real time instead of waiting
+    for the full agentic loop to complete."""
+    return StreamingResponse(
+        stream_chat(body),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx/proxy buffering
+        },
+    )
 
 
 @app.get("/api/download/{job_id}/{filename}")
@@ -283,59 +291,3 @@ def download(job_id: str, filename: str):
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
-    if not tool_name:
-        raise HTTPException(400, "tool_name is required")
-
-    if inline_inv:
-        inv = inline_inv
-    elif job_id:
-        inv = _get_invocable(job_id, tool_name)
-        if inv is None:
-            raise HTTPException(
-                404,
-                f"Tool '{tool_name}' not found for job '{job_id}'. "
-                "Register invocables via /api/generate first.",
-            )
-    else:
-        raise HTTPException(400, "Provide job_id or invocable")
-
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            arguments = {}
-
-    logger.info(f"[execute] {tool_name} args={arguments}")
-    result = _execute_tool(inv, arguments)
-    return JSONResponse({"tool_name": tool_name, "result": result})
-
-
-@app.post("/api/chat")
-async def chat(body: dict[str, Any]):
-    """
-    Section 5: Agentic chat interface.
-    Sends messages to Azure OpenAI with MCP tool definitions attached.
-    When the model emits tool_calls, actually executes them and feeds the
-    results back for a second completion — up to MAX_TOOL_ROUNDS rounds.
-    Body: {messages, tools, invocables?, job_id?}
-      invocables: full invocable dicts (with execution metadata) needed to
-                  dispatch tool calls. If omitted, execution falls back to
-                  /api/execute with job_id lookup.
-    """
-    return JSONResponse(run_chat(body))
-
-
-@app.get("/api/download/{job_id}/{filename}")
-def download(job_id: str, filename: str):
-    """Section 5: Download a generated artifact from Blob Storage."""
-    blob_name = f"{job_id}/{filename}"
-    try:
-        data = _download_blob(ARTIFACT_CONTAINER, blob_name)
-    except Exception as e:
-        raise HTTPException(404, f"Artifact not found: {e}")
-
-    return StreamingResponse(
-        iter([data]),
-        media_type="application/json",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
