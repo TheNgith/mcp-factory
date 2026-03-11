@@ -81,16 +81,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[OK] Scheduled task registered: $TaskName (runs as $BridgeUser at logon)"
 
-# Also enable auto-restart on failure via XML tweak (schtasks CLI can't do this)
+# Enable auto-restart on failure via XML patch (schtasks CLI has no flag for this)
 $xml = (schtasks /Query /TN $TaskName /XML ONE 2>&1) -join "`n"
 if ($xml -notmatch "RestartOnFailure") {
-    $xml = $xml -replace '</Settings>', @"
-  <RestartOnFailure>
-    <Interval>PT1M</Interval>
-    <Count>99</Count>
-  </RestartOnFailure>
-</Settings>
-"@
+    $restartBlock = "  <RestartOnFailure><Interval>PT1M</Interval><Count>99</Count></RestartOnFailure></Settings>"
+    $xml = $xml -replace '</Settings>', $restartBlock
     $tmpXml = [System.IO.Path]::GetTempFileName() + ".xml"
     [System.IO.File]::WriteAllText($tmpXml, $xml, [System.Text.Encoding]::Unicode)
     schtasks /Create /TN $TaskName /XML $tmpXml /RU "$env:COMPUTERNAME\$BridgeUser" /RP $UserPass /F 2>&1 | Out-Null
@@ -126,8 +121,9 @@ if ($conn) {
     $wmi   = Get-WmiObject Win32_Process -Filter "ProcessId=$($conn.OwningProcess)"
     $owner = $wmi.GetOwner()
     Write-Host ""
+    $sessionLabel = if ($wmi.SessionId -eq 1) { "GOOD: interactive" } else { "BAD: Session 0!" }
     Write-Host "Bridge PID     : $($conn.OwningProcess)"
-    Write-Host "Session ID     : $($wmi.SessionId)  $(if ($wmi.SessionId -eq 1) { '<-- GOOD: interactive' } else { '<-- BAD: Session 0!' })"
+    Write-Host "Session ID     : $($wmi.SessionId)  <-- $sessionLabel"
     Write-Host "Running as     : $($owner.Domain)\$($owner.User)"
     try {
         $h = Invoke-RestMethod -Uri "http://localhost:$Port/health" -TimeoutSec 8
