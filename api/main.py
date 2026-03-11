@@ -735,6 +735,13 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
         return invocables
     except Exception as exc:
         logger.warning("[%s] GUI bridge call failed (non-fatal): %s", job_id, exc)
+        # Persist the warning into the job record so the caller can surface it
+        try:
+            existing = _get_job_status(job_id) or {}
+            existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {exc}"
+            _persist_job_status(job_id, existing)
+        except Exception:
+            pass
         return []
 
 
