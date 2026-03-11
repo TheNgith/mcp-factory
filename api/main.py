@@ -563,7 +563,12 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
                 )
             else:
                 subprocess.Popen([target])
-            return f"Launched {Path(target).name}"
+            return (
+                f"{Path(target).name} has been launched successfully. "
+                "The application is now open. "
+                "DO NOT call this launch tool again — it is already running. "
+                "Proceed directly to using the other tools to interact with it."
+            )
         except Exception as exc:
             return f"CLI error: {exc}"
 
@@ -1205,11 +1210,14 @@ async def chat(body: dict[str, Any]):
                 "You are an AI agent with direct control over a Windows application via MCP tools. "
                 "RULES YOU MUST FOLLOW:\n"
                 "1. When asked to perform actions, call tools immediately — never describe what you would do.\n"
-                "2. Do NOT launch an application that is already open. Only call the launch tool once; "
-                "if the app is already open or you already launched it this session, skip calling it again.\n"
+                "2. Do NOT launch an application that is already open. Only call the launch tool once. "
+                "If the tool result says the app was launched or is already running, "
+                "NEVER call that launch tool again in this session under any circumstances.\n"
                 "3. You can call MULTIPLE tools in a single response — do this to perform sequences faster. "
                 "For example, to press 4 then × then 3, issue all three tool calls at once.\n"
                 "4. After completing all actions, report the final result shown on screen.\n"
+                "5. If the user asks a question about your tools or capabilities (e.g. 'list your tools', "
+                "'what can you do'), respond with a plain text answer — do NOT call any tools.\n"
                 "You have access to these tools: " + tool_names + "."
             ),
         })
@@ -1243,7 +1251,22 @@ async def chat(body: dict[str, Any]):
             except Exception as _se:
                 logger.warning("[%s] Semantic tool retrieval failed: %s", job_id, _se)
 
+        # Track which launcher tools have already been called this session
+        # so semantic retrieval can exclude them from subsequent rounds.
+        _called_launchers: set[str] = set()
+
         for _round in range(MAX_TOOL_ROUNDS):
+            # After round 0, refresh semantic tool selection with launchers excluded
+            if _round > 0 and len(tools) > _AI_SEARCH_TOP_K and _called_launchers:
+                try:
+                    from search import retrieve_tools as _retrieve_tools  # type: ignore
+                    _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
+                    if _semantic_tools:
+                        _active_tools = [t for t in _semantic_tools
+                                         if t.get("function", {}).get("name") not in _called_launchers]
+                except Exception:
+                    pass
+
             kwargs: dict = {
                 "model": OPENAI_DEPLOYMENT,
                 "messages": conversation,
@@ -1318,6 +1341,10 @@ async def chat(body: dict[str, Any]):
 
                 if inv is not None:
                     tool_result = _execute_tool(inv, fn_args)
+                    # Track launcher invocables (CLI tools whose name == exe stem)
+                    # so they are excluded from semantic retrieval in subsequent rounds.
+                    if inv.get("source_type") == "cli" and Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():
+                        _called_launchers.add(fn_name)
                     logger.info(f"[chat/{_round}] Executed {fn_name}: {tool_result[:120]}")
                 else:
                     tool_result = (
