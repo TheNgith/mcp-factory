@@ -2,12 +2,15 @@
 
 run_chat(body)    – blocking JSON response (kept for backward compat).
 stream_chat(body) – async generator yielding SSE events in real time so the
-                    UI can render tokens / tool calls as they happen instead
+                    UI can render tool calls and results as they happen instead
                     of waiting for all rounds to complete.
+
+Each round the OpenAI call runs in a thread executor so the event loop is
+never blocked — SSE events are flushed to the client between rounds.
 
 SSE event format:  data: <json>\n\n
 Event types:
-  {"type": "token",       "content": "..."}          – streamed text chunk
+  {"type": "token",       "content": "..."}          – final text content
   {"type": "tool_call",   "name": "...", "args": {}}  – tool about to execute
   {"type": "tool_result", "name": "...", "result": "..."} – tool output
   {"type": "done",        "rounds": N}                – final event
@@ -16,6 +19,7 @@ Event types:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -31,9 +35,8 @@ from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
 
-# Keep only the last N conversation turns sent to the model each round.
-# This trims token bloat on long sessions while keeping enough context for the
-# model to know what it just did.  System prompt is always prepended separately.
+# Keep only the last N non-system conversation turns sent to the model each
+# round to bound token growth on long sessions.
 _CONTEXT_WINDOW_TURNS = 20
 
 
@@ -282,11 +285,13 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
 
 
 async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
-    """Async generator: runs the same agentic loop as run_chat but yields SSE
-    events immediately as tokens arrive and tools are executed.
+    """Async generator: runs the agentic tool-call loop yielding SSE events
+    between rounds so the browser sees progress in real time.
 
-    The caller wraps this in a FastAPI StreamingResponse with
-    media_type="text/event-stream" so the browser receives chunks in real time.
+    Each OpenAI call runs in a thread executor so the async event loop is
+    never blocked — SSE events flush to the client immediately after each
+    yield.  No OpenAI stream=True is used; we get per-round feedback instead
+    of per-token, which is much more reliable with the sync AzureOpenAI client.
     """
     messages: list   = body.get("messages", [])
     tools: list      = body.get("tools", [])
@@ -306,10 +311,8 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
     MAX_TOOL_ROUNDS = 10
     _last_call_signature = ""
-    _tool_calls_total = 0
 
-    # Build conversation: always start with system prompt, then keep last
-    # _CONTEXT_WINDOW_TURNS non-system messages to bound token growth.
+    # Build conversation: system prompt first, then last N user/assistant turns.
     sys_msgs  = [m for m in messages if m.get("role") == "system"]
     user_msgs = [m for m in messages if m.get("role") != "system"]
     if not sys_msgs:
@@ -319,81 +322,44 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     _active_tools = list(tools)
     _called_launchers: set[str] = set()
 
+    loop = asyncio.get_event_loop()
+
     try:
         client = _openai_client()
 
         for _round in range(MAX_TOOL_ROUNDS):
-            # Remove de-duped launcher tools from active set each round
+            # Exclude already-fired launcher tools so the model can't re-launch.
             if _called_launchers:
                 _active_tools = [t for t in _active_tools
                                  if t.get("function", {}).get("name") not in _called_launchers]
 
             kwargs: dict = {
-                "model": OPENAI_DEPLOYMENT,
-                "messages": conversation,
+                "model":       OPENAI_DEPLOYMENT,
+                "messages":    conversation,
                 "temperature": 0,
-                "stream": True,
             }
             if _active_tools:
-                kwargs["tools"] = _active_tools
+                kwargs["tools"]       = _active_tools
                 kwargs["tool_choice"] = "auto"
 
-            # ── Stream the response ────────────────────────────────────────
-            # Accumulate tool call deltas; forward text tokens immediately.
-            tool_call_accum: dict[int, dict] = {}   # index → {id, name, arguments}
-            assistant_content = ""
-            finish_reason = None
+            # Run the blocking OpenAI call in a thread so the event loop stays
+            # free to flush already-yielded SSE events to the client.
+            response = await loop.run_in_executor(
+                None,
+                lambda kw=kwargs: client.chat.completions.create(**kw),
+            )
+            msg = response.choices[0].message
 
-            response = client.chat.completions.create(**kwargs)
-            for chunk in response:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                finish_reason = chunk.choices[0].finish_reason or finish_reason
-
-                # Stream text tokens immediately
-                if delta.content:
-                    assistant_content += delta.content
-                    yield _sse({"type": "token", "content": delta.content})
-
-                # Accumulate tool call argument deltas
-                if delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        idx = tc_delta.index
-                        if idx not in tool_call_accum:
-                            tool_call_accum[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tc_delta.id:
-                            tool_call_accum[idx]["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                tool_call_accum[idx]["name"] += tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                tool_call_accum[idx]["arguments"] += tc_delta.function.arguments
-
-            # No tool calls this round → final answer
-            if not tool_call_accum:
+            # ── No tool calls → final text answer ─────────────────────────
+            if not msg.tool_calls:
+                if msg.content:
+                    yield _sse({"type": "token", "content": msg.content})
                 yield _sse({"type": "done", "rounds": _round + 1})
                 return
 
-            # Append assistant turn with accumulated tool calls to conversation
-            assistant_turn: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_content or "",
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    }
-                    for tc in tool_call_accum.values()
-                ],
-            }
-            conversation.append(assistant_turn)
-            _tool_calls_total += len(tool_call_accum)
-
-            # Loop detection
+            # ── Loop detection ─────────────────────────────────────────────
             _this_sig = "|".join(
-                f"{tc['name']}:{tc['arguments']}" for tc in tool_call_accum.values()
+                f"{tc.function.name}:{tc.function.arguments}" for tc in msg.tool_calls
             )
             if _this_sig == _last_call_signature:
                 logger.warning("[stream_chat] Loop detected — stopping")
@@ -401,11 +367,28 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 return
             _last_call_signature = _this_sig
 
-            # ── Execute each tool call and stream results immediately ──────
-            for tc in tool_call_accum.values():
-                fn_name = tc["name"]
+            # Append assistant turn with tool_calls to conversation
+            conversation.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+
+            # ── Execute each tool call, streaming result events immediately ─
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name
                 try:
-                    fn_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                    fn_args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
                     fn_args = {}
 
@@ -416,15 +399,18 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     inv = _get_invocable(job_id, fn_name)
 
                 if inv is not None:
-                    tool_result = _execute_tool(inv, fn_args)
+                    # Tool execution can be slow (pywinauto, GUI interaction) —
+                    # run in executor so the SSE response stays live.
+                    tool_result = await loop.run_in_executor(
+                        None, lambda i=inv, a=fn_args: _execute_tool(i, a)
+                    )
                     if inv.get("source_type") == "cli" and \
                             Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():
                         _called_launchers.add(fn_name)
                 else:
                     tool_result = (
-                        f"Tool '{fn_name}' executed (no invocable metadata — "
-                        f"pass 'invocables' in the request body). "
-                        f"Raw arguments: {json.dumps(fn_args)}"
+                        f"Tool '{fn_name}' not found — pass 'invocables' in the "
+                        f"request body or call /api/generate first."
                     )
 
                 yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
@@ -432,11 +418,11 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
                 conversation.append({
                     "role": "tool",
-                    "tool_call_id": tc["id"],
+                    "tool_call_id": tc.id,
                     "content": tool_result,
                 })
 
-            # Trim conversation to bound token size — keep system prompt + last N turns
+            # Trim conversation to bound token size each round.
             _sys  = [m for m in conversation if m.get("role") == "system"]
             _rest = [m for m in conversation if m.get("role") != "system"]
             conversation = _sys + _rest[-_CONTEXT_WINDOW_TURNS:]
