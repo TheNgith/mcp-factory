@@ -149,166 +149,6 @@ def score_confidence(export: Invocable, matches: dict, is_signed: bool, forwarde
     return confidence, reasons
 
 
-def generate_confidence_summary(
-    exports: List[ExportedFunc],
-    matches: dict,
-    is_signed: bool,
-    forwarding_chain: dict,
-    base_name: str,
-    out_dir: Path
-) -> str:
-    """Generate human-readable confidence summary and write to file."""
-    
-    # Check if this is a well-known system DLL
-    is_system_dll = any(base_name.lower().endswith(name.replace('.dll', '')) for name in [
-        'kernel32.dll', 'kernelbase.dll', 'user32.dll', 'gdi32.dll',
-        'advapi32.dll', 'ntdll.dll', 'shell32.dll', 'ole32.dll',
-        'oleaut32.dll', 'combase.dll', 'rpcrt4.dll', 'ws2_32.dll',
-        'winhttp.dll', 'wininet.dll', 'bcrypt.dll', 'crypt32.dll',
-        'msvcrt.dll', 'ucrtbase.dll'
-    ])
-    
-    # Score all exports
-    confidence_data = {'guaranteed': [], 'high': [], 'medium': [], 'low': []}
-    reason_counts = {}
-    
-    for exp in exports:
-        # Convert ExportedFunc to Invocable-like object for scoring
-        forwarded_resolved = exp.name in forwarding_chain and forwarding_chain[exp.name] != exp.name
-        score, reasons = score_confidence(
-            type('Export', (), {
-                'name': exp.name,
-                'source_type': 'export',
-                'doc_comment': getattr(exp, 'doc_comment', None),
-                'demangled': getattr(exp, 'demangled', None)
-            })(),
-            matches,
-            is_signed,
-            forwarded_resolved,
-            is_system_dll  # Pass system DLL flag
-        )
-        
-        confidence_data[score].append({
-            'name': exp.name,
-            'reasons': reasons
-        })
-        
-        # Track reason frequency
-        for reason in reasons:
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
-    
-    # Calculate percentages
-    total = len(exports)
-    guar_pct = (len(confidence_data['guaranteed']) / total * 100) if total > 0 else 0
-    high_pct = (len(confidence_data['high']) / total * 100) if total > 0 else 0
-    med_pct = (len(confidence_data['medium']) / total * 100) if total > 0 else 0
-    low_pct = (len(confidence_data['low']) / total * 100) if total > 0 else 0
-    
-    # ANSI color codes for terminal output
-    RED = '\033[91m'      # Bright red
-    YELLOW = '\033[93m'   # Bright yellow
-    GREEN = '\033[92m'    # Bright green
-    CYAN = '\033[96m'     # Bright cyan
-    BLUE = '\033[94m'     # Bright blue
-    RESET = '\033[0m'     # Reset to default
-    
-    # Generate summary text
-    lines = [
-        f"CONFIDENCE ANALYSIS SUMMARY",
-        f"{'=' * 60}",
-        f"",
-        f"DLL: {base_name}",
-        f"Total Exports: {total}",
-        f"Analysis Date: {__import__('datetime').datetime.now().isoformat()}",
-        f"",
-        f"CONFIDENCE BREAKDOWN",
-        f"{'-' * 60}",
-        f"{RED}LOW     Confidence: {len(confidence_data['low']):3d} exports ({low_pct:5.1f}%){RESET}",
-        f"{YELLOW}MEDIUM  Confidence: {len(confidence_data['medium']):3d} exports ({med_pct:5.1f}%){RESET}",
-        f"{GREEN}HIGH    Confidence: {len(confidence_data['high']):3d} exports ({high_pct:5.1f}%){RESET}",
-        f"{CYAN}GUARANT Confidence: {len(confidence_data['guaranteed']):3d} exports ({guar_pct:5.1f}%){RESET}",
-        f"",
-    ]
-    
-    # Add reason breakdown
-    if reason_counts:
-        lines.extend([
-            f"CONFIDENCE FACTORS (by frequency)",
-            f"{'-' * 60}",
-        ])
-        for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
-            pct = (count / total * 100) if total > 0 else 0
-            lines.append(f"  • {reason:<40s} {count:3d} ({pct:5.1f}%)")
-        lines.append("")
-    
-    # Add improvement opportunities
-    lines.extend([
-        f"WAYS TO IMPROVE CONFIDENCE",
-        f"{'-' * 60}",
-    ])
-    
-    improvements = []
-    if len(matches) < total:
-        improvements.append(f"  • Provide header files (.h/.hpp): Would match function prototypes")
-        improvements.append(f"    and increase HIGH confidence exports")
-    if not is_signed:
-        improvements.append(f"  • Obtain signed binaries: Digital signatures boost confidence")
-    if 'forwarded reference resolved' not in reason_counts:
-        improvements.append(f"  • Document forwarder chains: Track indirect function references")
-    
-    if improvements:
-        for imp in improvements:
-            lines.append(imp)
-    else:
-        lines.append("  • All major confidence factors are present!")
-    
-    lines.extend([
-        "",
-        f"EXPORT DETAILS BY CONFIDENCE LEVEL",
-        f"{'-' * 60}",
-    ])
-    
-    # Add sample exports from each tier (LOW, MEDIUM, HIGH, GUARANTEED)
-    for level in ['low', 'medium', 'high', 'guaranteed']:
-        data = confidence_data[level]
-        
-        # Select color based on confidence level
-        if level == 'low':
-            color = RED
-            level_text = "LOW"
-        elif level == 'medium':
-            color = YELLOW
-            level_text = "MEDIUM"
-        elif level == 'high':
-            color = GREEN
-            level_text = "HIGH"
-        else:
-            color = CYAN
-            level_text = "GUARANTEED"
-        
-        lines.append(f"\n{color}{level_text} CONFIDENCE ({len(data)} exports):{RESET}")
-        
-        if data:
-            # Show first 5 and last 2 if more than 7
-            shown = data[:5] if len(data) <= 7 else data[:5] + [{'name': '...', 'reasons': []}] + data[-2:]
-            for item in shown:
-                if item['name'] == '...':
-                    lines.append(f"  ... ({len(data) - 7} more)")
-                else:
-                    reasons_str = ', '.join(item['reasons']) if item['reasons'] else 'no info'
-                    lines.append(f"{BLUE}  * {item['name']}")
-                    lines.append(f"      -> {reasons_str}{RESET}")
-    
-    lines.append("")
-    
-    # Write to file
-    summary_text = '\n'.join(lines)
-    summary_file = out_dir / f"{base_name}_confidence_summary.txt"
-    summary_file.write_text(summary_text, encoding='utf-8')
-    
-    return summary_text
-
-
 def get_default_output_dir() -> Path:
     """Get default output directory for analysis results."""
     return Path.cwd() / "mcp_dumpbin_out"
@@ -434,48 +274,7 @@ def analyze_com_object(dll_path: Path, out_dir: Path, base_name: str, args) -> i
     print(f"COM objects found: {len(invocables)}")
     print(f"Markdown: {tier4_md}")
     print(f"MCP JSON: {tier4_json}")
-    
-    return 0
-    
-    if not com_objects:
-        logger.warning(f"No COM objects found registered for {dll_path.name}")
-        logger.info("File imports ole32/oleaut32 but has no registry entries")
-    else:
-        logger.info(f"Found {len(com_objects)} COM objects")
-    
-    # Convert to invocables
-    invocables = com_objects_to_invocables(com_objects)
-    
-    # Write outputs
-    tier4_md = out_dir / f"{base_name}_com_objects.md"
-    with open(tier4_md, 'w', encoding='utf-8') as f:
-        f.write(f"# COM Object Analysis: {dll_path.name}\\n\\n")
-        f.write(f"Total COM objects: {len(com_objects)}\\n\\n")
-        
-        if com_objects:
-            f.write("## Registered COM Objects\\n\\n")
-            for obj in com_objects:
-                f.write(f"### {obj.get('name', 'Unknown')}\\n\\n")
-                f.write(f"- **CLSID:** `{obj['clsid']}`\\n")
-                if obj.get('progid'):
-                    f.write(f"- **ProgID:** `{obj['progid']}`\\n")
-                f.write(f"- **Server:** `{obj['server_path']}`\\n")
-                f.write(f"- **Type:** {'In-process' if obj['inproc'] else 'Out-of-process'}\\n\\n")
-        else:
-            f.write("_No COM objects registered for this DLL._\\n\\n")
-            f.write("Note: This file was detected as COM due to ole32/oleaut32 imports.\\n")
-    
-    # Write JSON output
-    tier4_json = out_dir / f"{base_name}_com_objects.json"
-    import json
-    with open(tier4_json, 'w', encoding='utf-8') as f:
-        json.dump(com_objects, f, indent=2)
-    
-    logger.info(f"Results written to {out_dir}")
-    print(f"\\nCOM Analysis Complete")
-    print(f"COM objects found: {len(com_objects)}")
-    print(f"Output: {tier4_md}")
-    
+
     return 0
 
 
@@ -830,6 +629,7 @@ def _run_registry_scan(out_dir: Path, base_name: str, hints: str = "") -> None:
 
 def main():
     """Main entry point."""
+    import platform as _platform
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
     parser = argparse.ArgumentParser(
         description=(
@@ -958,7 +758,6 @@ def main():
             # because many COM DLLs (shell32, oleaut32) also have standard exports
             analyze_com_object(dll_path, out_dir, base_name, args)
         elif file_type == FileType.PE_EXE:
-            import platform as _platform
             if _platform.system() == "Windows":
                 # On Windows (local dev), run CLI + GUI analysis directly.
                 logger.info("Analyzing PE executable (try CLI)...")
@@ -994,7 +793,6 @@ def main():
         # For PE files (DLL or EXE) that weren't classified as COM_OBJECT,
         # still check if they are registered as COM servers (InProc or LocalServer).
         # Registry checks only make sense on Windows — skip on Linux ACA container.
-        import platform as _platform
         if file_type in [FileType.PE_DLL, FileType.PE_EXE] and _platform.system() == "Windows":
              # analyze_com_object is safe to call, it checks registry
              logger.info("Checking for associated COM objects (Registry)...")
@@ -1209,20 +1007,10 @@ def main():
     summary_md = out_dir / f"{base_name}_tiers.md"
     write_tier_summary(summary_md, tier_entries)
 
-    # Phase 5: Generate confidence summary
-    confidence_summary = generate_confidence_summary(
-        exports, matches, is_signed, forwarding_chain, base_name, out_dir
-    )
-
     logger.info(f"Analysis complete. Results in: {out_dir}")
     logger.info(f"Exports found: {len(exports)}")
     logger.info(f"Matched to headers: {sum(1 for e in exports if e.name in matches)}")
     logger.info(f"Demangled: {sum(1 for e in exports if e.demangled)}")
-    
-    # Print confidence summary to console
-    print("\n" + "=" * 60)
-    print(confidence_summary)
-    print("=" * 60)
 
     return 0
 
