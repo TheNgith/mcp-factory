@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_MAX_TOOLS
 from api.executor import _execute_tool
 from api.storage import _register_invocables, _get_invocable
 from api.telemetry import _openai_client
@@ -84,10 +84,10 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
         _chat_t0 = time.perf_counter()
 
         # ── P5: Semantic tool selection ─────────────────────────────────────
-        # If the tool list is large (> 15), retrieve only the top-15 most
-        # semantically relevant tools per user turn to stay inside the GPT-4o
-        # 128-tool limit and reduce prompt tokens.
-        _AI_SEARCH_TOP_K = 15
+        # Only filter when the tool list exceeds the model's hard API limit.
+        # Below that ceiling every tool is passed directly so the model always
+        # has the full set available.
+        _AI_SEARCH_TOP_K = OPENAI_MAX_TOOLS
         _active_tools = list(tools)  # per-turn tool subset
         _last_user_message = next(
             (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
@@ -111,16 +111,11 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
         _called_launchers: set[str] = set()
 
         for _round in range(MAX_TOOL_ROUNDS):
-            # After round 0, refresh semantic tool selection with launchers excluded
-            if _round > 0 and len(tools) > _AI_SEARCH_TOP_K and _called_launchers:
-                try:
-                    from search import retrieve_tools as _retrieve_tools  # type: ignore
-                    _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
-                    if _semantic_tools:
-                        _active_tools = [t for t in _semantic_tools
-                                         if t.get("function", {}).get("name") not in _called_launchers]
-                except Exception as exc:
-                    logger.warning("[%s] Semantic tool retrieval refresh failed: %s", job_id, exc)
+            # After round 0, simply drop any already-called launcher tools from
+            # the active set without making another embedding/search call.
+            if _round > 0 and _called_launchers:
+                _active_tools = [t for t in _active_tools
+                                 if t.get("function", {}).get("name") not in _called_launchers]
 
             kwargs: dict = {
                 "model": OPENAI_DEPLOYMENT,

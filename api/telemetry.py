@@ -73,13 +73,28 @@ def _ai_span(name: str, **props):
         threading.Thread(target=_emit_telemetry, daemon=True, name="ai-log").start()
 
 
+_CLIENT_LOCK = threading.Lock()
+_cached_client = None
+_token_expires_at: float = 0.0  # Unix timestamp
+
+
 def _openai_client():
-    from openai import AzureOpenAI
-    credential = _get_credential()
-    # Get token for Azure OpenAI
-    token = credential.get_token("https://cognitiveservices.azure.com/.default")
-    return AzureOpenAI(
-        azure_endpoint=OPENAI_ENDPOINT,
-        api_version="2024-10-21",
-        azure_ad_token=token.token,
-    )
+    """Return a cached AzureOpenAI client, refreshing the token when it is
+    within 5 minutes of expiry to avoid per-request credential round trips."""
+    global _cached_client, _token_expires_at
+    now = time.time()
+    if _cached_client is None or now >= _token_expires_at - 300:
+        with _CLIENT_LOCK:
+            # Re-check inside the lock to avoid double init
+            if _cached_client is None or now >= _token_expires_at - 300:
+                from openai import AzureOpenAI
+                credential = _get_credential()
+                tok = credential.get_token("https://cognitiveservices.azure.com/.default")
+                _cached_client = AzureOpenAI(
+                    azure_endpoint=OPENAI_ENDPOINT,
+                    api_version="2024-10-21",
+                    azure_ad_token=tok.token,
+                )
+                _token_expires_at = float(tok.expires_on)
+                logger.debug("[telemetry] OpenAI client (re)created, token valid until %s", _token_expires_at)
+    return _cached_client

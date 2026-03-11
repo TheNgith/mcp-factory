@@ -21,6 +21,10 @@ OPENAI_ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
+# Maximum number of tools the deployed model accepts in a single API call.
+# GPT-4o supports 128; override via env if you switch to a different model.
+OPENAI_MAX_TOOLS  = int(os.getenv("OPENAI_MAX_TOOLS", "128"))
+
 # ── Windows GUI bridge (optional) ─────────────────────────────────────────
 # Set GUI_BRIDGE_URL to the Windows runner VM's bridge address, e.g.:
 #   http://<vm-public-ip>:8090
