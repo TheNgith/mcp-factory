@@ -50,17 +50,16 @@ def _build_system_message(invocables: list) -> dict:
     return {
         "role": "system",
         "content": (
-            "You are an AI agent with direct control over a Windows application via MCP tools. "
-            "RULES YOU MUST FOLLOW:\n"
-            "1. When asked to perform actions, call tools immediately — never describe what you would do.\n"
-            "2. Do NOT launch an application that is already open. Only call the launch tool once. "
-            "If the tool result says the app was launched or is already running, "
-            "NEVER call that launch tool again in this session under any circumstances.\n"
-            "3. You can call MULTIPLE tools in a single response — do this to perform sequences faster. "
-            "For example, to press 4 then × then 3, issue all three tool calls at once.\n"
-            "4. After completing all actions, report the final result shown on screen.\n"
-            "5. If the user asks a question about your tools or capabilities (e.g. 'list your tools', "
-            "'what can you do'), respond with a plain text answer — do NOT call any tools.\n"
+            "You are an AI agent with direct control over a Windows application via MCP tools.\n"
+            "RULES:\n"
+            "1. When asked to perform an action, call the appropriate tool(s) immediately. "
+            "You may call multiple tools in a single response to perform sequences faster "
+            "(e.g. to press 4, then ×, then 3, issue all three calls at once).\n"
+            "2. After all tool calls finish, always write a plain-text sentence summarising "
+            "what happened and the result visible on screen.\n"
+            "3. Never launch an application that is already open — call the launch tool only once per session.\n"
+            "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
+            "reply with plain text only — do not call any tools.\n"
             "You have access to these tools: " + tool_names + "."
         ),
     }
@@ -321,6 +320,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
     _active_tools = list(tools)
     _called_launchers: set[str] = set()
+    _tools_executed: list[str] = []  # names of tool calls that actually ran
 
     loop = asyncio.get_event_loop()
 
@@ -354,6 +354,13 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
             if not msg.tool_calls:
                 if msg.content:
                     yield _sse({"type": "token", "content": msg.content})
+                elif _tools_executed:
+                    # Model finished all tool calls but returned no summary text
+                    # (common Azure OpenAI behaviour at temperature=0).  Emit a
+                    # synthetic token so the UI shows something useful instead
+                    # of a placeholder.
+                    names = ", ".join(_tools_executed[-3:])
+                    yield _sse({"type": "token", "content": f"Done — ran: {names}."})
                 yield _sse({"type": "done", "rounds": _round + 1})
                 return
 
@@ -415,6 +422,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
                 yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
                 logger.info("[stream_chat/%d] %s → %s", _round, fn_name, tool_result[:120])
+                _tools_executed.append(fn_name)
 
                 conversation.append({
                     "role": "tool",

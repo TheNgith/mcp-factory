@@ -926,9 +926,10 @@ async function sendMessage() {
       }
     }
 
-    // If no text tokens came through (pure tool-call response), show placeholder
+    // If no text tokens came through at all (shouldn't happen after server fix,
+    // but keep a non-alarming fallback just in case).
     if (!assistantBubble && !assistantText) {
-      assistantText = '*(actions completed)*';
+      assistantText = 'Done.';
       assistantBubble = appendChatBubble('assistant', assistantText);
     }
     if (roundCount > 1) {
