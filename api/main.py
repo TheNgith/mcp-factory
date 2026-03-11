@@ -256,12 +256,12 @@ async def execute_tool(body: dict[str, Any]):
 @app.post("/api/chat")
 async def chat(body: dict[str, Any]):
     """Blocking agentic chat — kept for backward compatibility.
-    Prefer /api/chat/stream for real-time feedback.
+    Prefer /api/chatstream for real-time feedback.
     """
     return JSONResponse(run_chat(body))
 
 
-@app.post("/api/chat/stream")
+@app.post("/api/chatstream")
 async def chat_stream(body: dict[str, Any]):
     """Streaming SSE variant of /api/chat.  Yields SSE events as they happen
     so the UI can render tokens and tool results in real time instead of

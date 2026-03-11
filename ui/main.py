@@ -1092,7 +1092,11 @@ async def proxy_chat_stream(request: Request):
 
     async def _stream():
         async with httpx.AsyncClient(base_url=PIPELINE_URL, timeout=300.0, headers=headers) as c:
-            async with c.stream("POST", "/api/chat/stream", json=body) as r:
+            async with c.stream("POST", "/api/chatstream", json=body) as r:
+                if r.status_code != 200:
+                    err = await r.aread()
+                    yield f'data: {{"type":"error","message":"Pipeline {r.status_code}: {err.decode()[:200]}"}}\n\n'.encode()
+                    return
                 async for chunk in r.aiter_bytes():
                     yield chunk
 
