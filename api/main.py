@@ -709,6 +709,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
     unreachable so the rest of the pipeline always completes.
     """
     if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
+        logger.warning("[%s] GUI bridge skipped — GUI_BRIDGE_URL or GUI_BRIDGE_SECRET not set", job_id)
         return []
 
     import httpx  # already in api/requirements.txt
@@ -747,7 +748,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
         logger.info("[%s] Bridge returned %d invocables", job_id, len(invocables))
         return invocables
     except Exception as exc:
-        logger.warning("[%s] GUI bridge call failed (non-fatal): %s", job_id, exc)
+        logger.warning("[%s] GUI bridge call failed: %s", job_id, exc, exc_info=True)
         # Persist the warning into the job record so the caller can surface it
         try:
             existing = _get_job_status(job_id) or {}
@@ -793,6 +794,8 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     logger.info(f"[{job_id}] Discovery stdout: {result.stdout[-1000:]}")
     if result.returncode != 0:
         logger.warning(f"[{job_id}] Discovery stderr: {result.stderr[-1000:]}")
+    elif result.stderr.strip():
+        logger.info(f"[{job_id}] Discovery stderr (rc=0): {result.stderr[-500:]}")
 
     # ── Collect ALL *_mcp.json files produced (EXEs emit cli + gui + exports)
     mcp_files = sorted(out_dir.glob("*_mcp.json"))
@@ -835,6 +838,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         print(f"[DIAG {job_id}] artifact upload done {mcp_file.name}", flush=True)
 
     print(f"[DIAG {job_id}] all artifacts uploaded, calling bridge", flush=True)
+    print(f"[DIAG {job_id}] GUI_BRIDGE_URL={'SET' if GUI_BRIDGE_URL else 'NOT SET'}", flush=True)
     # Use plain logger.info (no custom_dimensions) here — the AzureLogHandler
     # flushes synchronously and can block 90s if App Insights is slow.
     logger.info(
