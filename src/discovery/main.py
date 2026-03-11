@@ -958,8 +958,20 @@ def main():
             # because many COM DLLs (shell32, oleaut32) also have standard exports
             analyze_com_object(dll_path, out_dir, base_name, args)
         elif file_type == FileType.PE_EXE:
-            logger.info("Analyzing PE executable (try CLI)...")
-            analyze_cli_tool(dll_path, out_dir, base_name, args)
+            import platform as _platform
+            if _platform.system() == "Windows":
+                # On Windows (local dev), run CLI + GUI analysis directly.
+                logger.info("Analyzing PE executable (try CLI)...")
+                analyze_cli_tool(dll_path, out_dir, base_name, args)
+            else:
+                # On Linux (ACA container) the EXE cannot be executed —
+                # CLI, GUI, COM, and registry analysis are all delegated to
+                # the Windows GUI bridge.  Skip here to avoid 20-60s of
+                # blocked subprocess.run attempts that always time out.
+                logger.info(
+                    "PE EXE on Linux — skipping CLI/GUI execution "
+                    "(handled by Windows GUI bridge)."
+                )
         elif file_type in _SCRIPT_DISPATCH:
             # JIT / scripting / query file — route to language-specific analyzer
             logger.info("Routing to scripting language analyzer: %s", file_type.value)
@@ -967,7 +979,9 @@ def main():
 
         # For PE files (DLL or EXE) that weren't classified as COM_OBJECT,
         # still check if they are registered as COM servers (InProc or LocalServer).
-        if file_type in [FileType.PE_DLL, FileType.PE_EXE]:
+        # Registry checks only make sense on Windows — skip on Linux ACA container.
+        import platform as _platform
+        if file_type in [FileType.PE_DLL, FileType.PE_EXE] and _platform.system() == "Windows":
              # analyze_com_object is safe to call, it checks registry
              logger.info("Checking for associated COM objects (Registry)...")
              analyze_com_object(dll_path, out_dir, base_name, args)
