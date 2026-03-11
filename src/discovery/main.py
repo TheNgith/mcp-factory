@@ -972,6 +972,20 @@ def main():
                     "PE EXE on Linux — skipping CLI/GUI execution "
                     "(handled by Windows GUI bridge)."
                 )
+                # Write a stub MCP JSON so _run_discovery finds a valid output
+                # file and proceeds to call the GUI bridge.  Without this, EXEs
+                # with no exports (e.g. calc.exe) produce zero *_mcp.json files,
+                # causing _run_discovery to raise RuntimeError and skip the bridge
+                # entirely — which is exactly the bug we're fixing here.
+                stub_path = out_dir / f"{base_name}_cli_mcp.json"
+                write_invocables_json(
+                    stub_path,
+                    [],
+                    dll_path=dll_path,
+                    tier=4,
+                    schema_version="2.0.0",
+                )
+                return 0
         elif file_type in _SCRIPT_DISPATCH:
             # JIT / scripting / query file — route to language-specific analyzer
             logger.info("Routing to scripting language analyzer: %s", file_type.value)
