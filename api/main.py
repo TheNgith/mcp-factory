@@ -263,9 +263,9 @@ async def chat(body: dict[str, Any]):
 
 @app.post("/api/chat/stream")
 async def chat_stream(body: dict[str, Any]):
-    """Streaming SSE variant of /api/chat.  Yields events as they happen so
-    the UI can render tokens and tool results in real time instead of waiting
-    for the full agentic loop to complete."""
+    """Streaming SSE variant of /api/chat.  Yields SSE events as they happen
+    so the UI can render tokens and tool results in real time instead of
+    waiting for the full agentic loop to complete."""
     return StreamingResponse(
         stream_chat(body),
         media_type="text/event-stream",
