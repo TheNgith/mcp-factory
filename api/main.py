@@ -81,11 +81,15 @@ def _ai_span(name: str, **props):
             except Exception:
                 pass
         dims = {"event": name, "duration_ms": elapsed_ms, **{k: str(v) for k, v in props.items()}}
-        logger.info(
-            "[telemetry] %s completed in %dms",
-            name, elapsed_ms,
-            extra={"custom_dimensions": dims},
-        )
+        # Fire the custom_dimensions log in a daemon thread — AzureLogHandler
+        # flushes synchronously and can block 90s if App Insights is slow.
+        def _emit_telemetry(d=dims, n=name, ms=elapsed_ms):
+            logger.info(
+                "[telemetry] %s completed in %dms",
+                n, ms,
+                extra={"custom_dimensions": d},
+            )
+        threading.Thread(target=_emit_telemetry, daemon=True, name="ai-log").start()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp_factory.api")
@@ -306,17 +310,21 @@ _JOB_STATUS_LOCK = threading.Lock()
 
 
 def _persist_job_status(job_id: str, payload: dict) -> None:
-    """Write job status to in-memory cache AND Blob Storage."""
+    """Write job status to in-memory cache AND Blob Storage (non-blocking)."""
     with _JOB_STATUS_LOCK:
         _JOB_STATUS[job_id] = payload
-    try:
-        _upload_to_blob(
-            ARTIFACT_CONTAINER,
-            f"{job_id}/status.json",
-            json.dumps(payload).encode(),
-        )
-    except Exception as exc:
-        logger.warning("[%s] Failed to persist status to Blob: %s", job_id, exc)
+    # Upload in a daemon thread — synchronous blob I/O in the worker thread
+    # adds 2-10s per call and there are 3 calls per job.
+    def _bg_upload(jid=job_id, p=payload):
+        try:
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{jid}/status.json",
+                json.dumps(p).encode(),
+            )
+        except Exception as exc:
+            logger.warning("[%s] Failed to persist status to Blob: %s", jid, exc)
+    threading.Thread(target=_bg_upload, daemon=True, name=f"persist-{job_id}").start()
 
 
 def _get_job_status(job_id: str) -> dict | None:
