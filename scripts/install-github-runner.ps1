@@ -113,12 +113,40 @@ if (Test-Path `$src) { Copy-Item `$src -Destination '$bridgePy' -Force }
 & 'C:\Python310\python.exe' '$bridgePy'
 "@ | Set-Content $bridgeScript -Encoding UTF8
 
-# Register as a scheduled task that starts at system boot (survives reboots)
+# ── Configure Windows auto-logon so the VM logs in on reboot without RDP ──
+# This is required for pywinauto / UIA — they need an interactive desktop
+# (Session 1). A SYSTEM/Session 0 task cannot launch visible windows or read
+# the UIA accessibility tree of apps like Calculator.
+$_user     = 'azureuser'
+$_password = (Get-Content 'C:\mcp-bridge\.env' -ErrorAction SilentlyContinue |
+              Where-Object { $_ -match '^VM_PASSWORD=' } |
+              ForEach-Object { $_.Split('=', 2)[1] }) -join ''
+if (-not $_password) { $_password = 'McpBridge@2026!' }  # safe fallback
+
+$_wl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+Set-ItemProperty $_wl -Name AutoAdminLogon    -Value '1'
+Set-ItemProperty $_wl -Name DefaultUserName   -Value $_user
+Set-ItemProperty $_wl -Name DefaultPassword   -Value $_password
+Set-ItemProperty $_wl -Name DefaultDomainName -Value $env:COMPUTERNAME
+Write-Host "Auto-logon configured for $_user — VM will sign in automatically on reboot." -ForegroundColor Green
+
+# ── Register the bridge as an AtLogOn task running as azureuser ───────────
+# AtLogOn fires when azureuser's interactive session starts (auto-logon or
+# manual RDP).  The task runs in Session 1 with a real desktop, so pywinauto
+# and UIA work correctly.  RestartCount 99 means "always restart" after a crash.
 $action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
                -Argument "-NonInteractive -WindowStyle Hidden -File `"$bridgeScript`""
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $_user
+$settings = New-ScheduledTaskSettingsSet `
+    -RestartCount 99 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -StartWhenAvailable
+
+$principal = New-ScheduledTaskPrincipal `
+    -UserId "$env:COMPUTERNAME\$_user" `
+    -LogonType Password `
+    -RunLevel Highest
 
 Register-ScheduledTask `
     -TaskName   'MCPFactoryGUIBridge' `
@@ -126,9 +154,10 @@ Register-ScheduledTask `
     -Trigger    $trigger `
     -Settings   $settings `
     -Principal  $principal `
+    -Password   $_password `
     -Force | Out-Null
 
-# Start immediately so the bridge is available without a reboot
+# Start immediately (user is already logged on during provisioning)
 Start-ScheduledTask -TaskName 'MCPFactoryGUIBridge'
 Write-Host "GUI bridge service registered and started on port 8090." -ForegroundColor Green
 Write-Host "Set BRIDGE_SECRET in C:\mcp-bridge\.env  (BRIDGE_SECRET=<value>)"

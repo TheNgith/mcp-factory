@@ -264,17 +264,27 @@ async def analyze(
                 target, target.stat().st_size,
             )
             # Prefer the real system-path binary for GUI analysis — temp copies
-            # of UWP stubs (e.g. calc.exe) won't launch a visible window.
-            sys_candidate = _resolve_exe_path(str(target))
-            if sys_candidate != str(target) and Path(sys_candidate).exists():
-                logger.info("Using system path %s for analysis instead of temp copy", sys_candidate)
-                target = Path(sys_candidate)
-                # Clean up the temp dir immediately since we won't use it
-                try:
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                except Exception:
-                    pass
-                tmp_dir = None
+            # of UWP/MSIX stubs (e.g. calc.exe) can't trigger package activation
+            # from arbitrary temp directories.  Search system paths directly by
+            # filename instead of using _resolve_exe_path(), which short-circuits
+            # when the temp file itself already exists on disk.
+            _sys_paths = [
+                Path(r"C:\Windows\System32") / target.name,
+                Path(r"C:\Windows") / target.name,
+                Path(r"C:\Windows\SysWOW64") / target.name,
+                Path(r"C:\Program Files") / target.name,
+                Path(r"C:\Program Files (x86)") / target.name,
+            ]
+            for _sys_candidate in _sys_paths:
+                if _sys_candidate.exists() and _sys_candidate.resolve() != target.resolve():
+                    logger.info("Using system path %s for analysis instead of temp copy", _sys_candidate)
+                    target = _sys_candidate
+                    try:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                    tmp_dir = None
+                    break
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Could not decode content: {exc}")
     else:
