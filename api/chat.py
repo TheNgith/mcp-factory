@@ -111,9 +111,30 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
         _called_launchers: set[str] = set()
 
         for _round in range(MAX_TOOL_ROUNDS):
-            # After round 0, simply drop any already-called launcher tools from
-            # the active set without making another embedding/search call.
-            if _round > 0 and _called_launchers:
+            # After round 0, if the tool list is large enough to need filtering,
+            # re-run semantic retrieval using the model's last assistant message
+            # as the query — this keeps the retrieved set aligned with whatever
+            # step the model is currently working on rather than the original
+            # user prompt (critical for long multi-step tasks over large tool sets).
+            if _round > 0 and len(tools) > _AI_SEARCH_TOP_K and job_id:
+                _rolling_query = _last_user_message
+                # Use the last assistant content as a better query if available
+                for m in reversed(conversation):
+                    if m.get("role") == "assistant" and m.get("content"):
+                        _rolling_query = m["content"]
+                        break
+                try:
+                    from search import retrieve_tools as _retrieve_tools  # type: ignore
+                    _semantic_tools = _retrieve_tools(job_id, _rolling_query, client, top_k=_AI_SEARCH_TOP_K)
+                    if _semantic_tools:
+                        _active_tools = [t for t in _semantic_tools
+                                         if t.get("function", {}).get("name") not in _called_launchers]
+                except Exception as exc:
+                    logger.warning("[%s] Semantic tool retrieval refresh failed: %s", job_id, exc)
+                    # Fall back to filtering in-memory without a new retrieval
+                    _active_tools = [t for t in _active_tools
+                                     if t.get("function", {}).get("name") not in _called_launchers]
+            elif _round > 0 and _called_launchers:
                 _active_tools = [t for t in _active_tools
                                  if t.get("function", {}).get("name") not in _called_launchers]
 
