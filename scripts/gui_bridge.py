@@ -156,17 +156,28 @@ def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
             analyze_gui_fn = _import_gui()
             # Enforce a hard time-box: pywinauto retries can add up to 90+ s on
             # headless Server 2022 where UWP windows never appear.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _gui_pool:
-                _gui_future = _gui_pool.submit(analyze_gui_fn, target, 20)
-                try:
-                    gui_results = _gui_future.result(timeout=GUI_ANALYZE_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    logger.warning(
-                        "GUI analysis timed out after %ds for %s — skipping",
-                        GUI_ANALYZE_TIMEOUT, target.name,
-                    )
-                    errors["gui"] = f"timed out after {GUI_ANALYZE_TIMEOUT}s"
-                    gui_results = []
+            # NOTE: do NOT use `with ThreadPoolExecutor(…) as pool` here.
+            # The context-manager calls shutdown(wait=True) on __exit__, which
+            # blocks until the underlying thread finishes even when .result()
+            # already raised TimeoutError.  On a cold UWP start that can add
+            # 90–200 s, pushing the total bridge response time past the API's
+            # httpx timeout (180 s) and causing a silent failure on the caller.
+            # shutdown(wait=False) lets the thread finish in the background.
+            _gui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            _gui_future = _gui_pool.submit(analyze_gui_fn, target, 20)
+            try:
+                gui_results = _gui_future.result(timeout=GUI_ANALYZE_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "GUI analysis timed out after %ds for %s — skipping",
+                    GUI_ANALYZE_TIMEOUT, target.name,
+                )
+                errors["gui"] = f"timed out after {GUI_ANALYZE_TIMEOUT}s"
+                gui_results = []
+            finally:
+                # Don't block — let the analysis thread finish in the background.
+                # pywinauto's own finally block will kill the launched app.
+                _gui_pool.shutdown(wait=False)
             invocables.extend(_inv_to_dict(i) for i in gui_results)
             logger.info("GUI: %d invocables from %s", len(gui_results), target.name)
         except Exception as exc:

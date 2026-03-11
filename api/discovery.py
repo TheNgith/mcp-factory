@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -82,31 +83,54 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
         "types":   ["gui", "com", "cli", "registry"],
         "content": content_b64,   # None → bridge falls back to system-path lookup
     }
-    try:
-        logger.info("[%s] Calling GUI bridge at %s for %s", job_id, GUI_BRIDGE_URL, binary_path.name)
-        resp = httpx.post(
-            f"{GUI_BRIDGE_URL}/analyze",
-            json=payload,
-            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=180,  # 30s GUI timeout on bridge + other analyzers + network margin
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        invocables = data.get("invocables", [])
-        if data.get("errors"):
-            logger.warning("[%s] Bridge reported partial errors: %s", job_id, data["errors"])
-        logger.info("[%s] Bridge returned %d invocables", job_id, len(invocables))
-        return invocables
-    except Exception as exc:
-        logger.warning("[%s] GUI bridge call failed: %s", job_id, exc, exc_info=True)
-        # Persist the warning into the job record so the caller can surface it
+    # Retry up to _BRIDGE_MAX_RETRIES times.  On a cold first upload the bridge
+    # analysis can take 60-120 s; if the first HTTP connection times out or is
+    # dropped by network infrastructure, the bridge will have finished and
+    # *cached* the result by the time the retry arrives, so the retry returns
+    # almost immediately.
+    _BRIDGE_MAX_RETRIES = 2
+    _last_exc: Exception | None = None
+    for _attempt in range(_BRIDGE_MAX_RETRIES):
         try:
-            existing = _get_job_status(job_id) or {}
-            existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {exc}"
-            _persist_job_status(job_id, existing)
-        except Exception as _e:
-            logger.warning("[%s] Failed to persist bridge warning to job status: %s", job_id, _e)
-        return []
+            logger.info(
+                "[%s] Calling GUI bridge at %s for %s (attempt %d/%d)",
+                job_id, GUI_BRIDGE_URL, binary_path.name, _attempt + 1, _BRIDGE_MAX_RETRIES,
+            )
+            resp = httpx.post(
+                f"{GUI_BRIDGE_URL}/analyze",
+                json=payload,
+                headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+                timeout=180,  # 60s GUI timeout on bridge + other analyzers + network margin
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            invocables = data.get("invocables", [])
+            if data.get("errors"):
+                logger.warning("[%s] Bridge reported partial errors: %s", job_id, data["errors"])
+            logger.info("[%s] Bridge returned %d invocables", job_id, len(invocables))
+            return invocables
+        except Exception as exc:
+            _last_exc = exc
+            if _attempt < _BRIDGE_MAX_RETRIES - 1:
+                logger.warning(
+                    "[%s] Bridge attempt %d failed (%s) — retrying in 10 s "
+                    "(bridge likely cached the result; retry should be near-instant)",
+                    job_id, _attempt + 1, exc,
+                )
+                time.sleep(10)
+    # All attempts exhausted
+    logger.warning(
+        "[%s] GUI bridge call failed after %d attempt(s): %s",
+        job_id, _BRIDGE_MAX_RETRIES, _last_exc, exc_info=True,
+    )
+    # Persist the warning into the job record so the caller can surface it
+    try:
+        existing = _get_job_status(job_id) or {}
+        existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {_last_exc}"
+        _persist_job_status(job_id, existing)
+    except Exception as _e:
+        logger.warning("[%s] Failed to persist bridge warning to job status: %s", job_id, _e)
+    return []
 
 
 def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
