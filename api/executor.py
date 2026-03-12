@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import subprocess
+import time
 from pathlib import Path
 
 from api.config import IS_WINDOWS, GUI_BRIDGE_URL, GUI_BRIDGE_SECRET
@@ -209,15 +210,18 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
     )
 
 
-# Cache bridge reachability so one dead-host TCP timeout doesn't plague every
-# tool call for the rest of the process lifetime.
+# Cache bridge reachability briefly to avoid hammering /health on every call,
+# but never pin failures forever (transient network blips are common).
 _bridge_reachable: bool | None = None  # None = untested
+_bridge_checked_at: float = 0.0
+_BRIDGE_CACHE_TTL_SECONDS = 20.0
 
 
 def _check_bridge_alive() -> bool:
-    """Quick /health probe — result is cached for the process lifetime."""
-    global _bridge_reachable
-    if _bridge_reachable is not None:
+    """Quick /health probe with short TTL caching."""
+    global _bridge_reachable, _bridge_checked_at
+    now = time.monotonic()
+    if _bridge_reachable is not None and (now - _bridge_checked_at) < _BRIDGE_CACHE_TTL_SECONDS:
         return _bridge_reachable
     import httpx
     try:
@@ -229,6 +233,7 @@ def _check_bridge_alive() -> bool:
         _bridge_reachable = r.status_code == 200
     except Exception:
         _bridge_reachable = False
+    _bridge_checked_at = now
     logger.info("Bridge reachability: %s", _bridge_reachable)
     return _bridge_reachable
 
@@ -241,6 +246,7 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
     Uses explicit connect/read timeouts so a dead host fails in ~5 s instead
     of the OS default ~2 min TCP timeout.
     """
+    global _bridge_reachable, _bridge_checked_at
     if not _check_bridge_alive():
         return None
     import httpx
@@ -255,6 +261,10 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         return resp.json().get("result", "")
     except Exception as exc:
         logger.warning("Bridge /execute failed (falling through to local): %s", exc)
+        # Mark unreachable for the next short TTL window so we fail fast,
+        # then automatically re-probe afterward.
+        _bridge_reachable = False
+        _bridge_checked_at = time.monotonic()
         return None
 
 
