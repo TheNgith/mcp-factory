@@ -50,6 +50,60 @@ def _extract_invocables(data: Any) -> list:
     return []
 
 
+# ── Required / default fields for every invocable dict ────────────────────
+_INVOCABLE_DEFAULTS: dict[str, Any] = {
+    "name":        "",
+    "source_type": "unknown",
+    "confidence":  "low",
+    "description": "",
+    "parameters":  [],
+    "execution":   {},
+}
+
+
+def _normalize_invocable(raw: Any) -> dict | None:
+    """Coerce a bridge/discovery invocable into a canonical dict shape.
+
+    Returns None if *raw* cannot be salvaged (no name, wrong type, etc.).
+    Ensures every value is JSON-serializable (stringifies anything exotic).
+    """
+    if not isinstance(raw, dict):
+        # dataclass / namedtuple → dict
+        if hasattr(raw, "to_dict"):
+            raw = raw.to_dict()
+        elif hasattr(raw, "__dict__"):
+            raw = {k: v for k, v in vars(raw).items() if not k.startswith("_")}
+        else:
+            return None
+
+    name = raw.get("name", "")
+    if not name or not isinstance(name, str):
+        return None
+
+    out: dict[str, Any] = {}
+    for key, default in _INVOCABLE_DEFAULTS.items():
+        val = raw.get(key, default)
+        # Stringify non-serializable values (e.g. Path objects)
+        if isinstance(val, Path):
+            val = str(val)
+        out[key] = val
+
+    # Carry over extra keys the pipeline may use (signature, return_type, …)
+    for key, val in raw.items():
+        if key not in out:
+            if isinstance(val, Path):
+                val = str(val)
+            out[key] = val
+
+    # Ensure execution.dll_path / exe_path are strings, not Path objects
+    if isinstance(out.get("execution"), dict):
+        for pk in ("dll_path", "exe_path", "executable_path", "target_path"):
+            if pk in out["execution"] and not isinstance(out["execution"][pk], str):
+                out["execution"][pk] = str(out["execution"][pk])
+
+    return out
+
+
 def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[dict]:
     """Dispatch Windows-only analysis to the GUI bridge VM.
 
@@ -104,10 +158,34 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
             )
             resp.raise_for_status()
             data = resp.json()
-            invocables = data.get("invocables", [])
-            if data.get("errors"):
+
+            # ── Normalize the bridge response ──
+            # The bridge may return:
+            #   {"invocables": [...], "count": N, "errors": {...}}
+            #   [...] (bare list)
+            #   {"invocables": [...]} (minimal)
+            # Accept all of these shapes.
+            if isinstance(data, list):
+                raw_invocables = data
+            elif isinstance(data, dict):
+                raw_invocables = data.get("invocables", [])
+                if not isinstance(raw_invocables, list):
+                    raw_invocables = []
+            else:
+                raw_invocables = []
+
+            if isinstance(data, dict) and data.get("errors"):
                 logger.warning("[%s] Bridge reported partial errors: %s", job_id, data["errors"])
-            logger.info("[%s] Bridge returned %d invocables", job_id, len(invocables))
+
+            # Validate and normalize each invocable to a canonical shape
+            invocables = []
+            for raw_inv in raw_invocables:
+                normed = _normalize_invocable(raw_inv)
+                if normed is not None:
+                    invocables.append(normed)
+
+            logger.info("[%s] Bridge returned %d invocables (%d after normalization)",
+                        job_id, len(raw_invocables), len(invocables))
             return invocables
         except Exception as exc:
             _last_exc = exc

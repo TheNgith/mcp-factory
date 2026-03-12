@@ -122,17 +122,35 @@ def _import_registry():
 
 
 def _inv_to_dict(inv: Any) -> dict:
-    """Convert an Invocable dataclass (or dict) to a plain dict.
+    """Convert an Invocable dataclass (or dict) to a plain JSON-safe dict.
 
     Uses to_dict() when available so parameters is always a list
     (not the raw Optional[str] dataclass field) and all fields are
-    in the canonical pipeline format.
+    in the canonical pipeline format.  Stringifies non-serializable
+    values (Path objects, etc.) to prevent JSONResponse failures.
     """
     if isinstance(inv, dict):
-        return inv
-    if hasattr(inv, "to_dict"):
-        return inv.to_dict()
-    return {k: v for k, v in vars(inv).items() if not k.startswith("_")}
+        d = inv
+    elif hasattr(inv, "to_dict"):
+        d = inv.to_dict()
+    else:
+        d = {k: v for k, v in vars(inv).items() if not k.startswith("_")}
+
+    # Recursively ensure everything is JSON-serializable
+    return _make_serializable(d)
+
+
+def _make_serializable(obj: Any) -> Any:
+    """Recursively coerce Path / non-primitive objects to strings."""
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_serializable(v) for v in obj]
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    return str(obj)
 
 
 # How long (seconds) to allow the GUI analyzer before giving up.

@@ -214,40 +214,46 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
 # but never pin failures forever (transient network blips are common).
 _bridge_reachable: bool | None = None  # None = untested
 _bridge_checked_at: float = 0.0
-_BRIDGE_CACHE_TTL_SECONDS = 20.0
+_BRIDGE_CACHE_TTL_SECONDS = 120.0  # 2 min — long enough to skip probes during chat
+_BRIDGE_FAIL_TTL_SECONDS = 15.0   # re-probe sooner after a failure
+
+# Persistent httpx client with connection pooling — avoids TCP/TLS handshake
+# on every call.  Created lazily so module import doesn't require httpx.
+_bridge_client = None  # httpx.Client | None
+
+
+def _get_bridge_client():
+    """Return (or lazily create) a persistent httpx.Client for the bridge."""
+    global _bridge_client
+    if _bridge_client is None:
+        import httpx
+        _bridge_client = httpx.Client(
+            base_url=GUI_BRIDGE_URL,
+            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=120),
+        )
+    return _bridge_client
 
 
 def _check_bridge_alive() -> bool:
-    """Quick /health probe with short TTL caching."""
+    """Quick /health probe with TTL caching."""
     global _bridge_reachable, _bridge_checked_at
     now = time.monotonic()
-    if _bridge_reachable is not None and (now - _bridge_checked_at) < _BRIDGE_CACHE_TTL_SECONDS:
+    ttl = _BRIDGE_CACHE_TTL_SECONDS if _bridge_reachable else _BRIDGE_FAIL_TTL_SECONDS
+    if _bridge_reachable is not None and (now - _bridge_checked_at) < ttl:
         return _bridge_reachable
-    import httpx
     _bridge_reachable = False
-    for attempt in range(1, 4):
-        try:
-            t0 = time.perf_counter()
-            r = httpx.get(
-                f"{GUI_BRIDGE_URL}/health",
-                headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-                timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
-            )
-            dt_ms = (time.perf_counter() - t0) * 1000.0
-            _bridge_reachable = r.status_code == 200
-            logger.info(
-                "[bridge] /health attempt=%d status=%s latency=%.1f ms",
-                attempt,
-                r.status_code,
-                dt_ms,
-            )
-            if _bridge_reachable:
-                break
-        except Exception:
-            logger.info("[bridge] /health attempt=%d failed", attempt)
-            time.sleep(0.2)
+    try:
+        client = _get_bridge_client()
+        t0 = time.perf_counter()
+        r = client.get("/health", timeout=5.0)
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        _bridge_reachable = r.status_code == 200
+        logger.info("[bridge] /health status=%s latency=%.1f ms", r.status_code, dt_ms)
+    except Exception:
+        logger.info("[bridge] /health probe failed")
     _bridge_checked_at = now
-    logger.info("Bridge reachability: %s", _bridge_reachable)
     return _bridge_reachable
 
 
@@ -256,23 +262,24 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
 
     Returns the result string on success, or None if the bridge is
     unavailable / returns an error (caller falls through to local execution).
-    Uses explicit connect/read timeouts so a dead host fails in ~5 s instead
-    of the OS default ~2 min TCP timeout.
+    Uses the persistent httpx client with keep-alive pooling.
     """
     global _bridge_reachable, _bridge_checked_at
     if not _check_bridge_alive():
         return None
-    import httpx
     try:
+        client = _get_bridge_client()
         t0 = time.perf_counter()
-        resp = httpx.post(
-            f"{GUI_BRIDGE_URL}/execute",
+        resp = client.post(
+            "/execute",
             json={"invocable": inv, "args": args},
-            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
         )
         dt_ms = (time.perf_counter() - t0) * 1000.0
         resp.raise_for_status()
+        # Successful call — refresh the reachability cache so subsequent
+        # calls skip the health probe entirely.
+        _bridge_reachable = True
+        _bridge_checked_at = time.monotonic()
         logger.info(
             "[bridge] /execute tool=%s status=%s latency=%.1f ms",
             inv.get("name", "<unknown>"),
@@ -282,8 +289,6 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         return resp.json().get("result", "")
     except Exception as exc:
         logger.warning("Bridge /execute failed (falling through to local): %s", exc)
-        # Mark unreachable for the next short TTL window so we fail fast,
-        # then automatically re-probe afterward.
         _bridge_reachable = False
         _bridge_checked_at = time.monotonic()
         return None

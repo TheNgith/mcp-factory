@@ -282,7 +282,7 @@ async def generate(body: dict[str, Any]):
 
 
 @app.post("/api/execute")
-async def execute_tool(body: dict[str, Any]):
+def execute_tool(body: dict[str, Any]):
     """Execute a tool call. Body: {job_id?, tool_name, arguments, invocable?}."""
     tool_name  = body.get("tool_name", "")
     arguments  = body.get("arguments", {})
