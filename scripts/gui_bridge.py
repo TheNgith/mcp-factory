@@ -406,6 +406,7 @@ async def analyze(
         _active_target_stem = target.stem.lower()
 
     async def _generate():
+        global _active_kill_event, _active_target_stem
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(
             None,  # default ThreadPoolExecutor
@@ -431,7 +432,6 @@ async def analyze(
             return
         finally:
             # Release the global slot so the next request doesn't see a stale event.
-            global _active_kill_event, _active_target_stem
             with _active_lock:
                 if _active_kill_event is kill_event:
                     _active_kill_event = None
