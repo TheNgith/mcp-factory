@@ -220,6 +220,19 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         job_id, len(mcp_files), len(merged_invocables),
     )
 
+    # ── Update progress before the bridge call so the UI doesn't freeze at 30% ──
+    # _call_gui_bridge can block for up to 180s (+ 10s retry sleep); without this
+    # update the job appears stuck at the "running 30%" status written in worker.py.
+    if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
+        existing = _get_job_status(job_id) or {}
+        _persist_job_status(job_id, {
+            **existing,
+            "status": "running",
+            "progress": 60,
+            "message": "Local analysis complete — calling Windows GUI bridge…",
+            "updated_at": time.time(),
+        })
+
     # ── Augment with Windows-only analysis via GUI bridge (if configured) ──
     # The bridge covers GUI buttons, COM/TLB interfaces, Windows EXE CLI help,
     # and registry scan — none of which run in the Linux container.

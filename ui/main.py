@@ -677,11 +677,18 @@ $('analyze-btn').addEventListener('click', async () => {
 
     // Poll GET /api/jobs/{id} until status is done or error
     let jobResult = null;
+    let _pollMisses = 0;
     for (let i = 0; i < 150; i++) {
       await new Promise(r => setTimeout(r, 3000));
       btn.innerHTML = `<span class="spinner"></span> Analyzing… (${(i+1)*3}s)`;
       const poll = await fetch(`/api/jobs/${jobId}`);
-      if (!poll.ok) throw new Error(`Poll failed: ${poll.status}`);
+      if (!poll.ok) {
+        // Tolerate transient cross-pod 404s and proxy/network blips (502/503/504)
+        // up to 5 consecutive misses before giving up.
+        if ([404, 502, 503, 504].includes(poll.status) && ++_pollMisses <= 5) continue;
+        throw new Error(`Poll failed: ${poll.status}`);
+      }
+      _pollMisses = 0;
       const s = await poll.json();
       if (s.status === 'done') { jobResult = s.result; break; }
       if (s.status === 'error') throw new Error(s.error || 'Discovery failed');

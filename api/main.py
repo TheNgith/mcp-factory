@@ -198,7 +198,11 @@ async def analyze(
     # Enqueue for durable processing; fall back to a direct thread if unavailable.
     enqueued = blob_uploaded and _enqueue_analysis(job_id, blob_name, hints, original_name)
     if not enqueued:
-        logger.info("[%s] Queue unavailable — falling back to direct thread.", job_id)
+        logger.warning(
+            "[%s] Queue/Blob unavailable (blob_uploaded=%s, enqueued=%s) — "
+            "falling back to direct thread. Job status may be lost on pod restart or cross-pod poll.",
+            job_id, blob_uploaded, enqueued,
+        )
         tmp_dir  = Path(tempfile.mkdtemp(prefix=f"upload_{job_id}_"))
         tmp_path = tmp_dir / original_name
         tmp_path.write_bytes(content)

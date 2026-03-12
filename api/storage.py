@@ -63,22 +63,39 @@ def _download_blob(container: str, blob_name: str) -> bytes:
     return cc.download_blob(blob_name).readall()
 
 
-def _persist_job_status(job_id: str, payload: dict) -> None:
-    """Write job status to in-memory cache AND Blob Storage (non-blocking)."""
+def _persist_job_status(job_id: str, payload: dict) -> bool:
+    """Write job status to in-memory cache AND Blob Storage (synchronous, with retry).
+
+    Always updates the in-memory cache immediately so same-pod polls are instant.
+    Retries the Blob write up to 3 times so cross-pod polls (load-balanced replicas
+    and scale-to-zero restarts) can also find the status.
+
+    Returns True if the Blob write succeeded, False if all retries were exhausted
+    (status is still available in-memory for the lifetime of this pod).
+    """
     with _JOB_STATUS_LOCK:
         _JOB_STATUS[job_id] = payload
-    # Upload in a daemon thread — synchronous blob I/O in the worker thread
-    # adds 2-10s per call and there are 3 calls per job.
-    def _bg_upload(jid=job_id, p=payload):
+    _MAX_RETRIES = 3
+    _RETRY_DELAY = 2  # seconds between attempts
+    data = json.dumps(payload).encode()
+    for attempt in range(_MAX_RETRIES):
         try:
-            _upload_to_blob(
-                ARTIFACT_CONTAINER,
-                f"{jid}/status.json",
-                json.dumps(p).encode(),
-            )
+            _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/status.json", data)
+            return True
         except Exception as exc:
-            logger.warning("[%s] Failed to persist status to Blob: %s", jid, exc)
-    threading.Thread(target=_bg_upload, daemon=True, name=f"persist-{job_id}").start()
+            if attempt < _MAX_RETRIES - 1:
+                logger.warning(
+                    "[%s] Failed to persist status to Blob (attempt %d/%d): %s — retrying in %ds",
+                    job_id, attempt + 1, _MAX_RETRIES, exc, _RETRY_DELAY,
+                )
+                time.sleep(_RETRY_DELAY)
+            else:
+                logger.error(
+                    "[%s] Failed to persist status to Blob after %d attempts: %s — "
+                    "job visible only on this pod until Blob storage is restored.",
+                    job_id, _MAX_RETRIES, exc,
+                )
+    return False
 
 
 def _get_job_status(job_id: str) -> dict | None:
