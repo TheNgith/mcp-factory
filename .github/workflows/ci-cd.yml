@@ -197,7 +197,8 @@ jobs:
             --name ${{ env.PIPELINE_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
-            --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }}
+            --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }} \
+            --min-replicas 1
           az containerapp ingress update \
             --name ${{ env.PIPELINE_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \

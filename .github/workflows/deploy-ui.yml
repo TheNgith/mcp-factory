@@ -95,7 +95,7 @@ jobs:
               --user-assigned "${{ env.IDENTITY_ID }}" \
               --target-port 8080 \
               --ingress external \
-              --min-replicas 0 \
+              --min-replicas 1 \
               --max-replicas 3 \
               --cpu 0.25 \
               --memory 0.5Gi \
