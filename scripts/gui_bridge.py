@@ -41,6 +41,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,32 @@ logger = logging.getLogger("gui_bridge")
 # which matters most for UWP stubs that require a full cold-start window wait.
 _ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
 _ANALYSIS_CACHE_TTL = 3600  # seconds — 1 hour
+
+# ── Active analysis cancellation ─────────────────────────────────────────────
+# Only one analysis runs at a time.  When a new /analyze request arrives,
+# the current one is signalled to abort via kill_event and its launched
+# process is killed so pywinauto unblocks from COM/UIA waits immediately.
+# _run_analysis_sync checks kill_event between phases and returns early.
+_active_kill_event: "threading.Event | None" = None
+_active_target_stem: "str | None" = None
+_active_lock = threading.Lock()
+
+
+def _kill_processes_by_stem(stem: str) -> None:
+    """Kill any running process whose name contains *stem* (case-insensitive)."""
+    try:
+        import psutil
+        for proc in psutil.process_iter(["name", "pid"]):
+            pname = (proc.info["name"] or "").lower()
+            if stem in pname or pname.startswith(stem):
+                try:
+                    proc.kill()
+                    logger.info("Killed lingering process %s (pid=%d)",
+                                proc.info["name"], proc.info["pid"])
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 BRIDGE_SECRET = os.getenv("BRIDGE_SECRET", "")
@@ -159,42 +186,50 @@ def _make_serializable(obj: Any) -> Any:
 GUI_ANALYZE_TIMEOUT = 60
 
 
-def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
+def _run_analysis_sync(target: Path, requested: set, hints: str,
+                       kill_event: threading.Event) -> dict:
     """Synchronous analysis worker — runs in a thread pool executor.
 
     Keeping all blocking I/O (pywinauto, COM, subprocess) in a plain function
     avoids stalling the uvicorn async event loop.
+
+    kill_event is checked between each analysis phase.  When set (because a
+    newer upload arrived), the function returns whatever partial results it has
+    collected so far, freeing the thread immediately.
     """
     invocables: list[dict] = []
     errors: dict[str, str] = {}
 
+    def _aborted() -> bool:
+        if kill_event.is_set():
+            logger.info("Analysis of %s superseded by newer request — stopping early",
+                        target.name)
+            errors["aborted"] = "superseded by newer upload"
+            return True
+        return False
+
     # ── GUI ──────────────────────────────────────────────────────────────────
-    if "gui" in requested and target.suffix.lower() == ".exe":
+    if not _aborted() and "gui" in requested and target.suffix.lower() == ".exe":
         try:
             analyze_gui_fn = _import_gui()
             # Enforce a hard time-box: pywinauto retries can add up to 90+ s on
             # headless Server 2022 where UWP windows never appear.
-            # NOTE: do NOT use `with ThreadPoolExecutor(…) as pool` here.
-            # The context-manager calls shutdown(wait=True) on __exit__, which
-            # blocks until the underlying thread finishes even when .result()
-            # already raised TimeoutError.  On a cold UWP start that can add
-            # 90–200 s, pushing the total bridge response time past the API's
-            # httpx timeout (180 s) and causing a silent failure on the caller.
-            # shutdown(wait=False) lets the thread finish in the background.
+            # NOTE: do NOT use `with ThreadPoolExecutor(…) as pool` here —
+            # shutdown(wait=True) blocks even after TimeoutError fires.
+            # shutdown(wait=False) lets the hanging thread die in the background.
             _gui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             _gui_future = _gui_pool.submit(analyze_gui_fn, target, 20)
             try:
                 gui_results = _gui_future.result(timeout=GUI_ANALYZE_TIMEOUT)
             except concurrent.futures.TimeoutError:
                 logger.warning(
-                    "GUI analysis timed out after %ds for %s — skipping",
+                    "GUI analysis timed out after %ds for %s — killing process",
                     GUI_ANALYZE_TIMEOUT, target.name,
                 )
+                _kill_processes_by_stem(target.stem.lower())
                 errors["gui"] = f"timed out after {GUI_ANALYZE_TIMEOUT}s"
                 gui_results = []
             finally:
-                # Don't block — let the analysis thread finish in the background.
-                # pywinauto's own finally block will kill the launched app.
                 _gui_pool.shutdown(wait=False)
             invocables.extend(_inv_to_dict(i) for i in gui_results)
             logger.info("GUI: %d invocables from %s", len(gui_results), target.name)
@@ -203,11 +238,10 @@ def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
             errors["gui"] = str(exc)
 
     # ── COM / Type Library ───────────────────────────────────────────────────
-    if "com" in requested:
+    if not _aborted() and "com" in requested:
         try:
             scan_type_library = _import_tlb()
             tlb_results = scan_type_library(target)
-            # tlb_analyzer returns raw dicts — convert to Invocable-style dicts
             for entry in tlb_results:
                 for method in entry.get("methods", []):
                     invocables.append({
@@ -232,7 +266,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
             errors["com"] = str(exc)
 
     # ── CLI ──────────────────────────────────────────────────────────────────
-    if "cli" in requested and target.suffix.lower() == ".exe":
+    if not _aborted() and "cli" in requested and target.suffix.lower() == ".exe":
         try:
             analyze_cli = _import_cli()
             results = analyze_cli(target)
@@ -243,7 +277,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str) -> dict:
             errors["cli"] = str(exc)
 
     # ── Registry ─────────────────────────────────────────────────────────────
-    if "registry" in requested:
+    if not _aborted() and "registry" in requested:
         try:
             analyze_registry = _import_registry()
             results = analyze_registry(hints=hints or target.stem)
@@ -351,6 +385,23 @@ async def analyze(
             logger.info("Cache hit for %s (%d invocables)", target.name, _res["count"])
             return JSONResponse(_res)
 
+    # ── Cancel any in-progress analysis and start fresh ───────────────────────
+    # If another upload is being analysed right now, signal it to stop and kill
+    # whatever process it launched.  This frees COM/UIA locks immediately so
+    # the new analysis can start without queuing behind a stuck pywinauto thread.
+    global _active_kill_event, _active_target_stem
+    kill_event = threading.Event()
+    with _active_lock:
+        if _active_kill_event is not None and not _active_kill_event.is_set():
+            prev_stem = _active_target_stem or ""
+            logger.info("New upload (%s) — aborting in-progress analysis of %s",
+                        target.name, prev_stem or "unknown")
+            _active_kill_event.set()
+            if prev_stem:
+                _kill_processes_by_stem(prev_stem)
+        _active_kill_event = kill_event
+        _active_target_stem = target.stem.lower()
+
     try:
         # Run all blocking analysis in a thread pool — keeps the uvicorn async
         # event loop free to service health checks and concurrent requests.
@@ -361,8 +412,14 @@ async def analyze(
             target,
             requested,
             body.hints,
+            kill_event,
         )
     finally:
+        # Release the global slot so the next request doesn't see a stale event.
+        with _active_lock:
+            if _active_kill_event is kill_event:
+                _active_kill_event = None
+                _active_target_stem = None
         if tmp_dir is not None:
             try:
                 import shutil
