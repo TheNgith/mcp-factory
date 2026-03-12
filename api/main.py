@@ -69,6 +69,22 @@ async def _pipeline_api_key_guard(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _request_timing(request: Request, call_next):
+    """Emit per-request latency so az containerapp logs can act as an APM-lite."""
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    dt_ms = (time.perf_counter() - t0) * 1000.0
+    logger.info(
+        "[http] %s %s -> %s in %.1f ms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        dt_ms,
+    )
+    return response
+
+
 # ── Startup ────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")

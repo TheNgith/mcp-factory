@@ -225,14 +225,18 @@ def _check_bridge_alive() -> bool:
         return _bridge_reachable
     import httpx
     try:
+        t0 = time.perf_counter()
         r = httpx.get(
             f"{GUI_BRIDGE_URL}/health",
             headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
             timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
         )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
         _bridge_reachable = r.status_code == 200
+        logger.info("[bridge] /health status=%s latency=%.1f ms", r.status_code, dt_ms)
     except Exception:
         _bridge_reachable = False
+        logger.info("[bridge] /health failed")
     _bridge_checked_at = now
     logger.info("Bridge reachability: %s", _bridge_reachable)
     return _bridge_reachable
@@ -251,13 +255,21 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         return None
     import httpx
     try:
+        t0 = time.perf_counter()
         resp = httpx.post(
             f"{GUI_BRIDGE_URL}/execute",
             json={"invocable": inv, "args": args},
             headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
         )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
         resp.raise_for_status()
+        logger.info(
+            "[bridge] /execute tool=%s status=%s latency=%.1f ms",
+            inv.get("name", "<unknown>"),
+            resp.status_code,
+            dt_ms,
+        )
         return resp.json().get("result", "")
     except Exception as exc:
         logger.warning("Bridge /execute failed (falling through to local): %s", exc)

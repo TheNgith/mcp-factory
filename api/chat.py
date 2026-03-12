@@ -346,11 +346,20 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
             # Run the blocking OpenAI call in a thread so the event loop stays
             # free to flush already-yielded SSE events to the client.
+            _openai_t0 = time.perf_counter()
             response = await loop.run_in_executor(
                 None,
                 lambda kw=kwargs: client.chat.completions.create(**kw),
             )
+            _openai_ms = (time.perf_counter() - _openai_t0) * 1000.0
             msg = response.choices[0].message
+            logger.info(
+                "[stream_chat/%d] openai latency=%.1f ms tool_calls=%d content=%s",
+                _round,
+                _openai_ms,
+                len(msg.tool_calls or []),
+                bool(msg.content),
+            )
 
             # ── No tool calls → final text answer ─────────────────────────
             if not msg.tool_calls:
@@ -410,9 +419,11 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 if inv is not None:
                     # Tool execution can be slow (pywinauto, GUI interaction) —
                     # run in executor so the SSE response stays live.
+                    _tool_t0 = time.perf_counter()
                     tool_result = await loop.run_in_executor(
                         None, lambda i=inv, a=fn_args: _execute_tool(i, a)
                     )
+                    _tool_ms = (time.perf_counter() - _tool_t0) * 1000.0
                     if inv.get("source_type") == "cli" and \
                             Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():
                         _called_launchers.add(fn_name)
@@ -421,9 +432,16 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         f"Tool '{fn_name}' not found — pass 'invocables' in the "
                         f"request body or call /api/generate first."
                     )
+                    _tool_ms = 0.0
 
                 yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
-                logger.info("[stream_chat/%d] %s → %s", _round, fn_name, tool_result[:120])
+                logger.info(
+                    "[stream_chat/%d] tool=%s latency=%.1f ms result=%s",
+                    _round,
+                    fn_name,
+                    _tool_ms,
+                    tool_result[:120],
+                )
                 _tools_executed.append(fn_name)
 
                 conversation.append({
