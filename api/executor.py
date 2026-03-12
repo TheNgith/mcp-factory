@@ -260,12 +260,12 @@ def _check_bridge_alive() -> bool:
 def _call_execute_bridge(inv: dict, args: dict) -> str | None:
     """Forward a tool-call to the Windows VM bridge /execute endpoint.
 
-    Returns the result string on success, or None if the bridge is
-    unavailable / returns an error (caller falls through to local execution).
-    Uses the persistent httpx client with keep-alive pooling.
+    Attempts the call directly — no pre-flight health check — so execution
+    reaches the bridge the same way analysis does (discovery.py calls /analyze
+    directly without a health gate).  Returns the result string on success,
+    or None on any failure so the caller falls through to local execution.
     """
-    global _bridge_reachable, _bridge_checked_at
-    if not _check_bridge_alive():
+    if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
         return None
     try:
         client = _get_bridge_client()
@@ -276,10 +276,6 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         )
         dt_ms = (time.perf_counter() - t0) * 1000.0
         resp.raise_for_status()
-        # Successful call — refresh the reachability cache so subsequent
-        # calls skip the health probe entirely.
-        _bridge_reachable = True
-        _bridge_checked_at = time.monotonic()
         logger.info(
             "[bridge] /execute tool=%s status=%s latency=%.1f ms",
             inv.get("name", "<unknown>"),
@@ -289,8 +285,6 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         return resp.json().get("result", "")
     except Exception as exc:
         logger.warning("Bridge /execute failed (falling through to local): %s", exc)
-        _bridge_reachable = False
-        _bridge_checked_at = time.monotonic()
         return None
 
 
