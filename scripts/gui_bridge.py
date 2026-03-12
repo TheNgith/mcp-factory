@@ -431,6 +431,7 @@ async def analyze(
             return
         finally:
             # Release the global slot so the next request doesn't see a stale event.
+            global _active_kill_event, _active_target_stem
             with _active_lock:
                 if _active_kill_event is kill_event:
                     _active_kill_event = None
