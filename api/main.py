@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets as _secrets
+import sys
 import tempfile
 import threading
 import time
@@ -43,8 +44,19 @@ from api.executor import _execute_tool
 from api.chat import run_chat, stream_chat
 from api.generate import run_generate
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger("mcp_factory.api")
+# Attach a dedicated stdout handler so our logs survive uvicorn's
+# logging.config.dictConfig() which resets root handlers on startup.
+if not logger.handlers:
+    _stdout_handler = logging.StreamHandler(sys.stdout)
+    _stdout_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_stdout_handler)
+    logger.propagate = False  # don't double-log through the root logger
+
+# Serialize analyze-path requests so concurrent calls don't compete on the
+# bridge's cancel-and-replace logic (_active_kill_event / _active_target_stem).
+_analyze_path_lock = threading.Lock()
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(title="MCP Factory API", version="1.0.0")
@@ -179,9 +191,13 @@ async def analyze_path(body: dict[str, Any]):
         "updated_at": time.time(),
     })
 
+    def _guarded_analyze():
+        """Run under _analyze_path_lock so concurrent path-analyses are serialized."""
+        with _analyze_path_lock:
+            _analyze_worker(job_id, target, hints, target.name, None)
+
     t = threading.Thread(
-        target=_analyze_worker,
-        args=(job_id, target, hints, target.name, None),
+        target=_guarded_analyze,
         daemon=True,
         name=f"worker-{job_id}",
     )

@@ -29,6 +29,16 @@ from api.storage import _upload_to_blob, _get_job_status, _persist_job_status
 logger = logging.getLogger("mcp_factory.api")
 
 
+def _persist_bridge_warning(job_id: str, message: str) -> None:
+    """Write a bridge_warning field into the job status blob."""
+    try:
+        existing = _get_job_status(job_id) or {}
+        existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {message}"
+        _persist_job_status(job_id, existing, sync=True)
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist bridge warning: %s", job_id, exc)
+
+
 def _extract_invocables(data: Any) -> list:
     """Normalise a discovery JSON payload to a flat list of invocable dicts.
 
@@ -119,6 +129,28 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
 
     import httpx  # already in api/requirements.txt
 
+    # ── Fast /health pre-check (5 s timeout) — fail fast instead of blocking
+    # 70 s per job when the bridge is down.
+    try:
+        probe_resp = httpx.get(
+            f"{GUI_BRIDGE_URL}/health",
+            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+            timeout=5.0,
+        )
+        if probe_resp.status_code != 200:
+            msg = f"Bridge /health returned status {probe_resp.status_code}"
+            print(f"[DIAG {job_id}] BRIDGE PRE-CHECK FAILED: {msg}", flush=True)
+            logger.warning("[%s] %s — skipping bridge call", job_id, msg)
+            _persist_bridge_warning(job_id, msg)
+            return []
+        print(f"[DIAG {job_id}] bridge /health OK", flush=True)
+    except Exception as health_exc:
+        msg = f"Bridge /health unreachable: {health_exc}"
+        print(f"[DIAG {job_id}] BRIDGE PRE-CHECK FAILED: {msg}", flush=True)
+        logger.warning("[%s] %s — skipping bridge call", job_id, msg)
+        _persist_bridge_warning(job_id, msg)
+        return []
+
     # Base64-encode the binary so the bridge can write it to a local temp file
     # on the Windows VM — avoids the "Linux path not found" problem for any
     # arbitrary uploaded EXE (not just Windows system executables).
@@ -208,6 +240,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
             return invocables
         except Exception as exc:
             _last_exc = exc
+            print(f"[DIAG {job_id}] bridge attempt {_attempt + 1} failed: {exc}", flush=True)
             if _attempt < _BRIDGE_MAX_RETRIES - 1:
                 logger.warning(
                     "[%s] Bridge attempt %d failed (%s) — retrying in 10 s "
@@ -216,17 +249,13 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
                 )
                 time.sleep(10)
     # All attempts exhausted
+    print(f"[DIAG {job_id}] bridge ALL ATTEMPTS EXHAUSTED: {_last_exc}", flush=True)
     logger.warning(
         "[%s] GUI bridge call failed after %d attempt(s): %s",
         job_id, _BRIDGE_MAX_RETRIES, _last_exc, exc_info=True,
     )
     # Persist the warning into the job record so the caller can surface it
-    try:
-        existing = _get_job_status(job_id) or {}
-        existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {_last_exc}"
-        _persist_job_status(job_id, existing, sync=True)
-    except Exception as _e:
-        logger.warning("[%s] Failed to persist bridge warning to job status: %s", job_id, _e)
+    _persist_bridge_warning(job_id, str(_last_exc))
     return []
 
 
