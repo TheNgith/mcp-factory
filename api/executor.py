@@ -260,13 +260,14 @@ def _check_bridge_alive() -> bool:
 def _call_execute_bridge(inv: dict, args: dict) -> str | None:
     """Forward a tool-call to the Windows VM bridge /execute endpoint.
 
-    Attempts the call directly — no pre-flight health check — so execution
-    reaches the bridge the same way analysis does (discovery.py calls /analyze
-    directly without a health gate).  Returns the result string on success,
-    or None on any failure so the caller falls through to local execution.
+    Returns the result string on success, or None only when the bridge is not
+    configured.  On a transport/HTTP failure, returns an error string so the
+    caller never silently falls through to Linux execution (which would
+    produce misleading 'No such file or directory' errors for Windows paths).
     """
     if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
         return None
+    global _bridge_client
     try:
         client = _get_bridge_client()
         t0 = time.perf_counter()
@@ -284,8 +285,11 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
         )
         return resp.json().get("result", "")
     except Exception as exc:
-        logger.warning("Bridge /execute failed (falling through to local): %s", exc)
-        return None
+        # Reset the pooled client so the next call gets a fresh connection
+        # instead of retrying a dead keepalive socket.
+        _bridge_client = None
+        logger.warning("[bridge] /execute failed for tool=%s: %s", inv.get("name", "<unknown>"), exc)
+        return f"Bridge /execute error: {exc} — the Windows VM bridge is temporarily unreachable. Try again."
 
 
 def _execute_tool(inv: dict, args: dict) -> str:
@@ -297,10 +301,10 @@ def _execute_tool(inv: dict, args: dict) -> str:
     if method == "dll_import":
         return _execute_dll(inv, execution, args)
     # GUI and CLI both need Windows — forward to the bridge when configured.
+    # When the bridge IS configured, never fall through to Linux: Windows paths
+    # don't exist in the Linux container and produce misleading [Errno 2] errors.
     if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
-        result = _call_execute_bridge(inv, args)
-        if result is not None:
-            return result
+        return _call_execute_bridge(inv, args) or "Bridge returned an empty result."
     if method == "gui_action":
         return _execute_gui(execution, name, args)
     return _execute_cli(execution, name, args)
