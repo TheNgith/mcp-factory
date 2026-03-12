@@ -211,6 +211,7 @@ jobs:
             --name ${{ env.UI_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+            --min-replicas 1 \
             --image ${{ env.UI_IMAGE }}:${{ needs.build.outputs.image-tag }}
           az containerapp ingress update \
             --name ${{ env.UI_APP }} \
