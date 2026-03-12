@@ -156,7 +156,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     }
 
     print(f"[DIAG {job_id}] subprocess start", flush=True)
-    logger.info(f"[{job_id}] Running discovery: {' '.join(cmd)}")
+    logger.info("[%s] STEP 7 \u2713  Discovery subprocess launched", job_id)
     result = subprocess.run(
         cmd,
         capture_output=True,
@@ -165,11 +165,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         env=discovery_env,
     )
     print(f"[DIAG {job_id}] subprocess done rc={result.returncode}", flush=True)
-    logger.info(f"[{job_id}] Discovery stdout: {result.stdout[-1000:]}")
-    if result.returncode != 0:
-        logger.warning(f"[{job_id}] Discovery stderr: {result.stderr[-1000:]}")
-    elif result.stderr.strip():
-        logger.info(f"[{job_id}] Discovery stderr (rc=0): {result.stderr[-500:]}")
+
 
     # ── Collect ALL *_mcp.json files produced (EXEs emit cli + gui + exports)
     mcp_files = sorted(out_dir.glob("*_mcp.json"))
@@ -215,10 +211,12 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     print(f"[DIAG {job_id}] GUI_BRIDGE_URL={'SET' if GUI_BRIDGE_URL else 'NOT SET'}", flush=True)
     # Use plain logger.info (no custom_dimensions) here — the AzureLogHandler
     # flushes synchronously and can block 90s if App Insights is slow.
-    logger.info(
-        "[%s] Discovery complete: %d file(s), %d unique invocables",
-        job_id, len(mcp_files), len(merged_invocables),
-    )
+    if result.returncode != 0:
+        logger.error("[%s] STEP 8 \u2717  Discovery subprocess failed rc=%d: %s", job_id, result.returncode, result.stderr[-300:])
+    elif not mcp_files:
+        logger.error("[%s] STEP 8 \u2717  Discovery produced no output files", job_id)
+    else:
+        logger.info("[%s] STEP 8 \u2713  Discovery complete: %d file(s), %d invocables", job_id, len(mcp_files), len(merged_invocables))
 
     # ── Update progress before the bridge call so the UI doesn't freeze at 30% ──
     # _call_gui_bridge can block for up to 180s (+ 10s retry sleep); without this
@@ -237,13 +235,18 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     # The bridge covers GUI buttons, COM/TLB interfaces, Windows EXE CLI help,
     # and registry scan — none of which run in the Linux container.
     bridge_invocables = _call_gui_bridge(binary_path, job_id, hints)
+    if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
+        logger.info("[%s] STEP 9 \u2014  Bridge not configured, skipped", job_id)
+    elif bridge_invocables:
+        logger.info("[%s] STEP 9 \u2713  Bridge returned %d invocables", job_id, len(bridge_invocables))
+    else:
+        logger.error("[%s] STEP 9 \u2717  Bridge returned 0 invocables (check NSG outbound rules for port 8090 / errno 110)", job_id)
     if bridge_invocables:
         for inv in bridge_invocables:
             name = inv.get("name", "")
             if name and name not in seen_names:
                 seen_names.add(name)
                 merged_invocables.append(inv)
-        logger.info("[%s] After bridge merge: %d total invocables", job_id, len(merged_invocables))
 
     return {
         "job_id": job_id,

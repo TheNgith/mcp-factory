@@ -87,13 +87,49 @@ async def _request_timing(request: Request, call_next):
 
 # ── Startup ────────────────────────────────────────────────────────────────
 
+def _startup_probe() -> None:
+    from api.storage import _upload_to_blob, _queue_service_client
+    from api.config import ARTIFACT_CONTAINER, ANALYSIS_QUEUE, GUI_BRIDGE_URL, GUI_BRIDGE_SECRET
+
+    # Probe 1: Blob Storage
+    try:
+        _upload_to_blob(ARTIFACT_CONTAINER, "_probe/startup.txt", b"ok")
+        logger.info("STARTUP ✓ Blob Storage reachable (container: %s)", ARTIFACT_CONTAINER)
+    except Exception as exc:
+        logger.error("STARTUP ✗ Blob Storage unreachable: %s", exc)
+
+    # Probe 2: Storage Queue
+    try:
+        svc = _queue_service_client()
+        if svc:
+            svc.get_queue_client(ANALYSIS_QUEUE).get_queue_properties()
+            logger.info("STARTUP ✓ Storage Queue reachable (queue: %s)", ANALYSIS_QUEUE)
+        else:
+            logger.warning("STARTUP — Storage Queue not configured")
+    except Exception as exc:
+        logger.error("STARTUP ✗ Storage Queue unreachable: %s", exc)
+
+    # Probe 3: GUI Bridge
+    if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
+        try:
+            import httpx
+            r = httpx.get(
+                f"{GUI_BRIDGE_URL}/health",
+                headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+                timeout=10,
+            )
+            r.raise_for_status()
+            logger.info("STARTUP ✓ GUI Bridge reachable (%s)", GUI_BRIDGE_URL)
+        except Exception as exc:
+            logger.error("STARTUP ✗ GUI Bridge unreachable: %s", exc)
+    else:
+        logger.warning("STARTUP — GUI Bridge not configured (GUI_BRIDGE_URL or GUI_BRIDGE_SECRET missing)")
+
+
 @app.on_event("startup")
 async def _startup():
-    """Start the durable queue worker in a background thread."""
-    t = threading.Thread(
-        target=_queue_worker_loop, daemon=True, name="queue-worker"
-    )
-    t.start()
+    threading.Thread(target=_queue_worker_loop, daemon=True, name="queue-worker").start()
+    threading.Thread(target=_startup_probe, daemon=True, name="startup-probe").start()
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -174,7 +210,7 @@ async def analyze(
     if len(content) == 0:
         raise HTTPException(400, "Empty file uploaded")
 
-    logger.info(f"[{job_id}] Received {file.filename} ({len(content)} bytes)")
+    logger.info("[%s] STEP 1 \u2713  Received %s (%d bytes)", job_id, file.filename, len(content))
 
     original_name = Path(file.filename).name or f"upload{suffix}"
 
@@ -182,10 +218,11 @@ async def analyze(
     try:
         _upload_to_blob(UPLOAD_CONTAINER, blob_name, content)
         blob_uploaded = True
+        logger.info("[%s] STEP 2 \u2713  Binary uploaded to Blob (uploads/%s)", job_id, blob_name)
     except Exception as exc:
-        logger.warning("[%s] Blob upload failed: %s", job_id, exc)
+        logger.error("[%s] STEP 2 \u2717  Binary upload to Blob failed: %s", job_id, exc)
 
-    _persist_job_status(job_id, {
+    ok = _persist_job_status(job_id, {
         "status": "queued",
         "progress": 0,
         "message": f"Queued analysis for {original_name}",
@@ -194,14 +231,20 @@ async def analyze(
         "created_at": time.time(),
         "updated_at": time.time(),
     })
+    if ok:
+        logger.info("[%s] STEP 3 \u2713  Initial status written to Blob", job_id)
+    else:
+        logger.error("[%s] STEP 3 \u2717  Initial status failed to write to Blob", job_id)
 
     # Enqueue for durable processing; fall back to a direct thread if unavailable.
     enqueued = blob_uploaded and _enqueue_analysis(job_id, blob_name, hints, original_name)
-    if not enqueued:
+    if enqueued:
+        logger.info("[%s] STEP 4 \u2713  Job enqueued to Storage Queue", job_id)
+    else:
         logger.warning(
-            "[%s] Queue/Blob unavailable (blob_uploaded=%s, enqueued=%s) — "
-            "falling back to direct thread. Job status may be lost on pod restart or cross-pod poll.",
-            job_id, blob_uploaded, enqueued,
+            "[%s] STEP 4 \u2717  Queue unavailable (blob_uploaded=%s) \u2014 falling back to direct thread. "
+            "Job status may be lost on pod restart or cross-pod poll.",
+            job_id, blob_uploaded,
         )
         tmp_dir  = Path(tempfile.mkdtemp(prefix=f"upload_{job_id}_"))
         tmp_path = tmp_dir / original_name

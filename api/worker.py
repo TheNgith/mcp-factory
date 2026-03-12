@@ -61,15 +61,19 @@ def _analyze_worker(
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
             result = _run_discovery(tmp_path, job_id, hints)
         print(f"[DIAG {job_id}] _run_discovery returned {len(result.get('invocables',[]))} invocables", flush=True)
-        _persist_job_status(job_id, {
+        ok = _persist_job_status(job_id, {
             "status": "done",
             "progress": 100,
-            "message": f"Analysis complete — {len(result.get('invocables', []))} invocables found",
+            "message": f"Analysis complete \u2014 {len(result.get('invocables', []))} invocables found",
             "result": result,
             "error": None,
             "created_at": time.time(),
             "updated_at": time.time(),
         }, sync=True)
+        if ok:
+            logger.info("[%s] STEP 10 \u2713  Final status persisted to Blob", job_id)
+        else:
+            logger.error("[%s] STEP 10 \u2717  Final status failed to persist \u2014 result exists in memory only", job_id)
     except Exception as exc:
         logger.error("[%s] Async discovery failed: %s", job_id, exc)
         _persist_job_status(job_id, {
@@ -131,17 +135,20 @@ def _queue_worker_loop() -> None:
                 qc.delete_message(msg)
                 continue
 
+            logger.info("[%s] STEP 5 \u2713  Queue worker picked up job", job_id)
+
             # Download the uploaded file from Blob Storage.
             try:
                 content = _download_blob(UPLOAD_CONTAINER, blob_name)
+                logger.info("[%s] STEP 6 \u2713  Binary downloaded from Blob (%d bytes)", job_id, len(content))
             except Exception as exc:
-                logger.error("[%s] Blob download failed, skipping job: %s", job_id, exc)
+                logger.error("[%s] STEP 6 \u2717  Binary download from Blob failed: %s", job_id, exc)
                 _persist_job_status(job_id, {
                     "status": "error", "progress": 0,
                     "message": "Blob download failed",
                     "result": None, "error": str(exc),
                     "created_at": time.time(), "updated_at": time.time(),
-                })
+                }, sync=True)
                 qc.delete_message(msg)
                 continue
 
