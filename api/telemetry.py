@@ -97,4 +97,49 @@ def _openai_client():
                 )
                 _token_expires_at = float(tok.expires_on)
                 logger.debug("[telemetry] OpenAI client (re)created, token valid until %s", _token_expires_at)
+                # Warm up the endpoint — a token refresh implies idle time long
+                # enough for the Azure OpenAI endpoint to go cold too.
+                threading.Thread(target=_warmup_openai, daemon=True, name="openai-warmup").start()
     return _cached_client
+
+
+def _warmup_openai() -> None:
+    """Send a minimal completion request to eliminate Azure OpenAI cold-start latency.
+
+    Called in a daemon thread after token refresh and at job completion so the
+    endpoint is hot before the user opens the chat panel.
+    """
+    try:
+        client = _openai_client()
+        client.chat.completions.create(
+            model=OPENAI_DEPLOYMENT,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+        )
+        logger.debug("[telemetry] OpenAI endpoint warm-up complete")
+    except Exception as exc:
+        logger.debug("[telemetry] OpenAI warm-up skipped (non-critical): %s", exc)
+
+
+def _proactive_token_refresh() -> None:
+    """Daemon thread: sleep until 10 minutes before token expiry, then pre-refresh.
+
+    Prevents the first chat message after a long gap from paying the 3-8 s Azure
+    AD credential round-trip.  On startup _token_expires_at is 0, so the first
+    iteration fires immediately — eagerly fetching a token and warming the endpoint
+    before any user request arrives.
+    """
+    while True:
+        try:
+            sleep_for = max(0.0, _token_expires_at - time.time() - 600)
+            time.sleep(sleep_for)
+            _openai_client()
+            logger.debug("[telemetry] Proactive token refresh complete")
+        except Exception as exc:
+            logger.warning("[telemetry] Proactive token refresh failed: %s", exc)
+            time.sleep(60)  # back off before retrying
+
+
+# Eagerly fetch the token and warm the endpoint on module import so the very
+# first user message never pays the Azure AD credential round-trip cost.
+threading.Thread(target=_proactive_token_refresh, daemon=True, name="token-refresh").start()

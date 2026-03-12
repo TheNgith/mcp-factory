@@ -76,8 +76,10 @@ def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bo
         _JOB_STATUS[job_id] = payload
 
     def _upload_with_retry() -> bool:
-        _MAX_RETRIES = 3
-        _RETRY_DELAY = 2
+        # Use more retries and a longer delay for blocking (sync) callers such
+        # as the final "done" persist in the worker, where durability matters most.
+        _MAX_RETRIES = 5 if sync else 3
+        _RETRY_DELAY = 3 if sync else 2
         data = json.dumps(payload).encode()
         for attempt in range(_MAX_RETRIES):
             try:

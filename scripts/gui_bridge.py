@@ -48,7 +48,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 # ── ensure the discovery package is importable ───────────────────────────────
@@ -383,7 +383,10 @@ async def analyze(
         _ts, _res = _cached
         if time.time() - _ts < _ANALYSIS_CACHE_TTL:
             logger.info("Cache hit for %s (%d invocables)", target.name, _res["count"])
-            return JSONResponse(_res)
+            # Return single-line NDJSON — same wire format as the streaming path.
+            async def _cached_gen():
+                yield (json.dumps(_res) + "\n").encode()
+            return StreamingResponse(_cached_gen(), media_type="application/x-ndjson")
 
     # ── Cancel any in-progress analysis and start fresh ───────────────────────
     # If another upload is being analysed right now, signal it to stop and kill
@@ -402,42 +405,53 @@ async def analyze(
         _active_kill_event = kill_event
         _active_target_stem = target.stem.lower()
 
-    try:
-        # Run all blocking analysis in a thread pool — keeps the uvicorn async
-        # event loop free to service health checks and concurrent requests.
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,  # default ThreadPoolExecutor
-            _run_analysis_sync,
-            target,
-            requested,
-            body.hints,
-            kill_event,
-        )
-    finally:
-        # Release the global slot so the next request doesn't see a stale event.
-        with _active_lock:
-            if _active_kill_event is kill_event:
-                _active_kill_event = None
-                _active_target_stem = None
-        if tmp_dir is not None:
-            try:
-                import shutil
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            except Exception:
-                pass
+    async def _generate():
+        try:
+            loop = asyncio.get_running_loop()
+            future = loop.run_in_executor(
+                None,  # default ThreadPoolExecutor
+                _run_analysis_sync,
+                target,
+                requested,
+                body.hints,
+                kill_event,
+            )
+            # Send a heartbeat line every 15 s while the analysis runs.
+            # This keeps the TCP connection alive past Azure LB (4-min idle
+            # timeout) and ACA ingress idle timeouts.
+            while True:
+                try:
+                    await asyncio.wait_for(asyncio.shield(future), timeout=15.0)
+                    break
+                except asyncio.TimeoutError:
+                    yield b'{"status":"running"}\n'
+            result = await future
+        finally:
+            # Release the global slot so the next request doesn't see a stale event.
+            with _active_lock:
+                if _active_kill_event is kill_event:
+                    _active_kill_event = None
+                    _active_target_stem = None
+            if tmp_dir is not None:
+                try:
+                    import shutil
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                except Exception:
+                    pass
 
-    # Only cache results with more than 1 invocable — a count of 1 almost always
-    # means the GUI analysis failed (cold-start) and only the CLI stub came back.
-    # Skipping the cache forces a fresh retry on the next request.
-    if result.get("count", 0) > 1:
-        _ANALYSIS_CACHE[_cache_key] = (time.time(), result)
-    else:
-        logger.info(
-            "Skipping cache for %s — only %d invocable(s) found (likely cold-start failure)",
-            target.name, result.get("count", 0),
-        )
-    return JSONResponse(result)
+        # Only cache results with more than 1 invocable — a count of 1 almost always
+        # means the GUI analysis failed (cold-start) and only the CLI stub came back.
+        # Skipping the cache forces a fresh retry on the next request.
+        if result.get("count", 0) > 1:
+            _ANALYSIS_CACHE[_cache_key] = (time.time(), result)
+        else:
+            logger.info(
+                "Skipping cache for %s — only %d invocable(s) found (likely cold-start failure)",
+                target.name, result.get("count", 0),
+            )
+        yield (json.dumps(result) + "\n").encode()
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
 # ── Execution helpers (mirror of api/main.py — runs on Windows) ──────────────

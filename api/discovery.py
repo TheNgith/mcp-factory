@@ -150,14 +150,33 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
                 "[%s] Calling GUI bridge at %s for %s (attempt %d/%d)",
                 job_id, GUI_BRIDGE_URL, binary_path.name, _attempt + 1, _BRIDGE_MAX_RETRIES,
             )
-            resp = httpx.post(
+            result_line: str | None = None
+            with httpx.stream(
+                "POST",
                 f"{GUI_BRIDGE_URL}/analyze",
                 json=payload,
                 headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-                timeout=180,  # 60s GUI timeout on bridge + other analyzers + network margin
-            )
-            resp.raise_for_status()
-            data = resp.json()
+                # connect/write/read are per-operation timeouts.  read=30 is safe
+                # because the bridge sends a heartbeat every 15 s, so we will
+                # never wait more than ~15 s between data chunks.
+                timeout=httpx.Timeout(connect=30.0, read=30.0, write=30.0, pool=10.0),
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("status") == "running":
+                        logger.info("[%s] Bridge heartbeat — analysis in progress", job_id)
+                        continue
+                    result_line = stripped  # last non-heartbeat line is the result
+            if not result_line:
+                raise RuntimeError("Bridge stream closed without returning a result")
+            data = json.loads(result_line)
 
             # ── Normalize the bridge response ──
             # The bridge may return:

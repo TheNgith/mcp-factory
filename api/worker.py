@@ -20,7 +20,7 @@ from api.storage import (
     _download_blob,
     _persist_job_status,
 )
-from api.telemetry import _ai_span
+from api.telemetry import _ai_span, _warmup_openai
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -61,7 +61,7 @@ def _analyze_worker(
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
             result = _run_discovery(tmp_path, job_id, hints)
         print(f"[DIAG {job_id}] _run_discovery returned {len(result.get('invocables',[]))} invocables", flush=True)
-        ok = _persist_job_status(job_id, {
+        _final_payload = {
             "status": "done",
             "progress": 100,
             "message": f"Analysis complete \u2014 {len(result.get('invocables', []))} invocables found",
@@ -69,11 +69,28 @@ def _analyze_worker(
             "error": None,
             "created_at": time.time(),
             "updated_at": time.time(),
-        }, sync=True)
+        }
+        ok = _persist_job_status(job_id, _final_payload, sync=True)
         if ok:
             logger.info("[%s] STEP 10 \u2713  Final status persisted to Blob", job_id)
         else:
-            logger.error("[%s] STEP 10 \u2717  Final status failed to persist \u2014 result exists in memory only", job_id)
+            logger.error("[%s] STEP 10 \u2717  Final status failed to persist \u2014 retrying for up to 60 s", job_id)
+            for _p in range(10):
+                time.sleep(6)
+                _final_payload["updated_at"] = time.time()
+                ok = _persist_job_status(job_id, _final_payload, sync=True)
+                if ok:
+                    logger.info("[%s] STEP 10 \u2713  Final status persisted on retry %d", job_id, _p + 1)
+                    break
+            else:
+                logger.critical(
+                    "[%s] STEP 10 \u2717\u2717  Final status could not be persisted after 10 retries "
+                    "\u2014 result exists in memory only and will be lost on container restart.",
+                    job_id,
+                )
+        # Warm up the Azure OpenAI endpoint now; the user will open the chat
+        # panel shortly and the endpoint is likely cold after the long analysis.
+        threading.Thread(target=_warmup_openai, daemon=True, name=f"warmup-{job_id}").start()
     except Exception as exc:
         logger.error("[%s] Async discovery failed: %s", job_id, exc)
         _persist_job_status(job_id, {
