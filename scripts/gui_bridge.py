@@ -406,26 +406,29 @@ async def analyze(
         _active_target_stem = target.stem.lower()
 
     async def _generate():
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            None,  # default ThreadPoolExecutor
+            _run_analysis_sync,
+            target,
+            requested,
+            body.hints,
+            kill_event,
+        )
         try:
-            loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(
-                None,  # default ThreadPoolExecutor
-                _run_analysis_sync,
-                target,
-                requested,
-                body.hints,
-                kill_event,
-            )
-            # Send a heartbeat line every 15 s while the analysis runs.
-            # This keeps the TCP connection alive past Azure LB (4-min idle
-            # timeout) and ACA ingress idle timeouts.
-            while True:
-                try:
-                    await asyncio.wait_for(asyncio.shield(future), timeout=15.0)
-                    break
-                except asyncio.TimeoutError:
+            # Send a keepalive heartbeat every 15 s while the analysis runs.
+            # Avoids Azure LB / ACA ingress idle-TCP drops on long analyses.
+            # Using future.done() + asyncio.sleep avoids asyncio.wait_for /
+            # asyncio.shield edge cases that can silently abort the generator.
+            while not future.done():
+                await asyncio.sleep(15)
+                if not future.done():
                     yield b'{"status":"running"}\n'
-            result = await future
+            result = future.result()  # non-blocking: future is already done
+        except Exception as exc:
+            logger.error("Bridge analysis raised in generator: %s", exc)
+            yield (json.dumps({"invocables": [], "count": 0, "errors": {"generator": str(exc)}}) + "\n").encode()
+            return
         finally:
             # Release the global slot so the next request doesn't see a stale event.
             with _active_lock:
