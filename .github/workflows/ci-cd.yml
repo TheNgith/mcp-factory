@@ -36,6 +36,19 @@ name: CI / CD
 on:
   push:
     branches: [main]
+    # Only run the full CI/CD pipeline for changes that don't already have a
+    # dedicated deploy workflow (deploy-pipeline.yml, deploy-ui.yml).
+    # api/**, src/**, Dockerfile, and ui/** are handled by those workflows,
+    # avoiding a double-deploy race where two jobs update the same Container App
+    # simultaneously.  ci-cd.yml now owns tests + build only; deploy-pipeline.yml
+    # and deploy-ui.yml own their respective deploys.
+    paths-ignore:
+      - 'api/**'
+      - 'src/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'ui/**'
+      - 'Dockerfile.ui'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -98,13 +111,29 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path C:\mcp-bridge | Out-Null
-          Copy-Item "$env:GITHUB_WORKSPACE\scripts\gui_bridge.py" -Destination C:\mcp-bridge\gui_bridge.py -Force
+          $bridgeSrc = "$env:GITHUB_WORKSPACE\scripts\gui_bridge.py"
+          $bridgeDst = "C:\mcp-bridge\gui_bridge.py"
+          # Only restart the bridge if the script itself changed — avoids
+          # clearing the analysis cache and triggering GUI cold-start on
+          # every push to main that happens to touch any file.
+          $needsRestart = $false
+          if (-not (Test-Path $bridgeDst)) {
+            $needsRestart = $true
+          } elseif ((Get-FileHash $bridgeSrc).Hash -ne (Get-FileHash $bridgeDst).Hash) {
+            $needsRestart = $true
+          }
+          Copy-Item $bridgeSrc -Destination $bridgeDst -Force
           if (Test-Path "$env:GITHUB_WORKSPACE\src\discovery") {
             Copy-Item "$env:GITHUB_WORKSPACE\src\discovery" -Destination C:\mcp-bridge\discovery -Recurse -Force
           }
-          Stop-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 1
-          Start-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
+          if ($needsRestart) {
+            Write-Host "gui_bridge.py changed — restarting bridge service"
+            Stop-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+            Start-ScheduledTask -TaskName MCPFactoryGUIBridge -ErrorAction SilentlyContinue
+          } else {
+            Write-Host "gui_bridge.py unchanged — bridge left running (cache preserved)"
+          }
 
       - uses: actions/setup-python@v5
         with:
@@ -203,7 +232,7 @@ jobs:
             --name ${{ env.PIPELINE_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
-            --target-port 8080
+            --target-port 8000
 
       - name: Deploy UI container
         run: |

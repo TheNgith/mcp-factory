@@ -75,8 +75,15 @@ jobs:
           az containerapp update \
             --name ${{ env.APP_NAME }} \
             --resource-group ${{ env.RG }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.IMAGE }}:${{ github.sha }} \
             --min-replicas 1
+          # Ensure ingress always points at the correct port (pipeline listens on 8000)
+          az containerapp ingress update \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.RG }} \
+            --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
+            --target-port 8000
 
       - name: Verify deployment
         run: |
