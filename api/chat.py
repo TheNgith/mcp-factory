@@ -377,12 +377,43 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 if msg.content:
                     yield _sse({"type": "token", "content": msg.content})
                 elif _tools_executed:
-                    # Model finished all tool calls but returned no summary text
-                    # (common Azure OpenAI behaviour at temperature=0).  Emit a
-                    # synthetic token so the UI shows something useful instead
-                    # of a placeholder.
-                    names = ", ".join(_tools_executed[-3:])
-                    yield _sse({"type": "token", "content": f"Done — ran: {names}."})
+                    # Model returned no summary text (common at temperature=0 after
+                    # tool calls).  Force one final text-only completion so the user
+                    # gets a real conversational response instead of a terse fallback.
+                    try:
+                        _summary_kw = {
+                            "model":       OPENAI_DEPLOYMENT,
+                            "messages":    conversation,
+                            "temperature": 0.3,
+                            "tool_choice": "none",
+                        }
+                        if _active_tools:
+                            _summary_kw["tools"] = _active_tools
+                        _summary_future = loop.run_in_executor(
+                            None,
+                            lambda kw=_summary_kw: client.chat.completions.create(**kw),
+                        )
+                        while True:
+                            try:
+                                _summary_resp = await asyncio.wait_for(
+                                    asyncio.shield(_summary_future), timeout=5.0
+                                )
+                                break
+                            except asyncio.TimeoutError:
+                                yield _sse({"type": "status", "stage": "openai",
+                                            "message": "Generating response..."})
+                        _summary_text = _summary_resp.choices[0].message.content
+                        if _summary_text:
+                            yield _sse({"type": "token", "content": _summary_text})
+                        else:
+                            names = ", ".join(_tools_executed[-3:])
+                            yield _sse({"type": "token",
+                                        "content": f"Done — executed {len(_tools_executed)} step(s): {names}."})
+                    except Exception as _se:
+                        logger.warning("[stream_chat] Summary call failed: %s", _se)
+                        names = ", ".join(_tools_executed[-3:])
+                        yield _sse({"type": "token",
+                                    "content": f"Done — executed {len(_tools_executed)} step(s): {names}."})
                 yield _sse({"type": "done", "rounds": _round + 1})
                 return
 

@@ -111,10 +111,17 @@ def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bo
 
 
 def _get_job_status(job_id: str) -> dict | None:
-    """Return job status from cache; reload from Blob on cache miss."""
+    """Return job status; always reads from Blob for non-terminal states.
+
+    Non-terminal states (anything other than 'done'/'error') are never cached
+    in memory across pods — otherwise a pod that saw 'running' will serve that
+    stale value forever even after the worker pod writes 'done' to Blob.
+    """
     with _JOB_STATUS_LOCK:
         result = _JOB_STATUS.get(job_id)
-    if result is not None:
+    # Only trust the in-memory entry when it is a terminal state; for running/
+    # pending states always go to Blob so cross-pod reads see the latest write.
+    if result is not None and result.get("status") in ("done", "error"):
         return result
     try:
         data = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/status.json"))
@@ -122,6 +129,10 @@ def _get_job_status(job_id: str) -> dict | None:
             _JOB_STATUS[job_id] = data
         return data
     except Exception as exc:
+        # Blob miss is normal during the first seconds before the first persist;
+        # return the in-memory value (which may be 'running') as a fallback.
+        if result is not None:
+            return result
         logger.warning("[%s] get_job_status blob miss: %s", job_id, exc)
         return None
 
