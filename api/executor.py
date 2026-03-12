@@ -224,19 +224,28 @@ def _check_bridge_alive() -> bool:
     if _bridge_reachable is not None and (now - _bridge_checked_at) < _BRIDGE_CACHE_TTL_SECONDS:
         return _bridge_reachable
     import httpx
-    try:
-        t0 = time.perf_counter()
-        r = httpx.get(
-            f"{GUI_BRIDGE_URL}/health",
-            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
-        )
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        _bridge_reachable = r.status_code == 200
-        logger.info("[bridge] /health status=%s latency=%.1f ms", r.status_code, dt_ms)
-    except Exception:
-        _bridge_reachable = False
-        logger.info("[bridge] /health failed")
+    _bridge_reachable = False
+    for attempt in range(1, 4):
+        try:
+            t0 = time.perf_counter()
+            r = httpx.get(
+                f"{GUI_BRIDGE_URL}/health",
+                headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+                timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
+            )
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            _bridge_reachable = r.status_code == 200
+            logger.info(
+                "[bridge] /health attempt=%d status=%s latency=%.1f ms",
+                attempt,
+                r.status_code,
+                dt_ms,
+            )
+            if _bridge_reachable:
+                break
+        except Exception:
+            logger.info("[bridge] /health attempt=%d failed", attempt)
+            time.sleep(0.2)
     _bridge_checked_at = now
     logger.info("Bridge reachability: %s", _bridge_reachable)
     return _bridge_reachable

@@ -13,6 +13,7 @@ Event types:
   {"type": "token",       "content": "..."}          – final text content
   {"type": "tool_call",   "name": "...", "args": {}}  – tool about to execute
   {"type": "tool_result", "name": "...", "result": "..."} – tool output
+    {"type": "status",      "stage": "...", "message": "..."} – keepalive/progress
   {"type": "done",        "rounds": N}                – final event
   {"type": "error",       "message": "..."}           – fatal error
 """
@@ -347,10 +348,20 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
             # Run the blocking OpenAI call in a thread so the event loop stays
             # free to flush already-yielded SSE events to the client.
             _openai_t0 = time.perf_counter()
-            response = await loop.run_in_executor(
+            _openai_future = loop.run_in_executor(
                 None,
                 lambda kw=kwargs: client.chat.completions.create(**kw),
             )
+            while True:
+                try:
+                    response = await asyncio.wait_for(asyncio.shield(_openai_future), timeout=5.0)
+                    break
+                except asyncio.TimeoutError:
+                    yield _sse({
+                        "type": "status",
+                        "stage": "openai",
+                        "message": "Waiting for model response...",
+                    })
             _openai_ms = (time.perf_counter() - _openai_t0) * 1000.0
             msg = response.choices[0].message
             logger.info(
@@ -420,9 +431,22 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     # Tool execution can be slow (pywinauto, GUI interaction) —
                     # run in executor so the SSE response stays live.
                     _tool_t0 = time.perf_counter()
-                    tool_result = await loop.run_in_executor(
+                    _tool_future = loop.run_in_executor(
                         None, lambda i=inv, a=fn_args: _execute_tool(i, a)
                     )
+                    while True:
+                        try:
+                            tool_result = await asyncio.wait_for(
+                                asyncio.shield(_tool_future), timeout=5.0
+                            )
+                            break
+                        except asyncio.TimeoutError:
+                            yield _sse({
+                                "type": "status",
+                                "stage": "tool",
+                                "name": fn_name,
+                                "message": f"Waiting for tool '{fn_name}'...",
+                            })
                     _tool_ms = (time.perf_counter() - _tool_t0) * 1000.0
                     if inv.get("source_type") == "cli" and \
                             Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():

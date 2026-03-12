@@ -917,6 +917,9 @@ async function sendMessage() {
         } else if (evt.type === 'tool_result') {
           appendChatMsg('tool-call', `   ↳ ${evt.result ?? ''}`);
 
+        } else if (evt.type === 'status') {
+          appendChatMsg('tool-call', `⏳ ${evt.message ?? 'Working...'}`);
+
         } else if (evt.type === 'done') {
           roundCount = evt.rounds ?? 1;
 
