@@ -46,7 +46,7 @@ def _analyze_worker(
         "error": None,
         "created_at": time.time(),
         "updated_at": time.time(),
-    })
+    }, sync=True)
     try:
         _persist_job_status(job_id, {
             "status": "running",
@@ -56,7 +56,7 @@ def _analyze_worker(
             "error": None,
             "created_at": time.time(),
             "updated_at": time.time(),
-        })
+        }, sync=True)
         print(f"[DIAG {job_id}] entering _run_discovery", flush=True)
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
             result = _run_discovery(tmp_path, job_id, hints)
@@ -69,7 +69,7 @@ def _analyze_worker(
             "error": None,
             "created_at": time.time(),
             "updated_at": time.time(),
-        })
+        }, sync=True)
     except Exception as exc:
         logger.error("[%s] Async discovery failed: %s", job_id, exc)
         _persist_job_status(job_id, {
@@ -80,7 +80,7 @@ def _analyze_worker(
             "error": str(exc),
             "created_at": time.time(),
             "updated_at": time.time(),
-        })
+        }, sync=True)
     finally:
         try:
             if tmp_path.exists():

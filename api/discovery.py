@@ -127,7 +127,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
     try:
         existing = _get_job_status(job_id) or {}
         existing["bridge_warning"] = f"GUI bridge unreachable — Windows analysis skipped: {_last_exc}"
-        _persist_job_status(job_id, existing)
+        _persist_job_status(job_id, existing, sync=True)
     except Exception as _e:
         logger.warning("[%s] Failed to persist bridge warning to job status: %s", job_id, _e)
     return []
@@ -231,7 +231,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
             "progress": 60,
             "message": "Local analysis complete — calling Windows GUI bridge…",
             "updated_at": time.time(),
-        })
+        }, sync=True)
 
     # ── Augment with Windows-only analysis via GUI bridge (if configured) ──
     # The bridge covers GUI buttons, COM/TLB interfaces, Windows EXE CLI help,

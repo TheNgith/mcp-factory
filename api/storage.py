@@ -1,8 +1,8 @@
-"""api/storage.py – Azure Blob Storage, Storage Queue, and job-status helpers.
+﻿"""api/storage.py â€“ Azure Blob Storage, Storage Queue, and job-status helpers.
 
 State:
-  _JOB_STATUS          – in-memory job-status cache (backed by Blob).
-  _JOB_INVOCABLE_MAPS  – per-job invocable registry (backed by Blob).
+  _JOB_STATUS          â€“ in-memory job-status cache (backed by Blob).
+  _JOB_INVOCABLE_MAPS  â€“ per-job invocable registry (backed by Blob).
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ from api.config import (
 
 logger = logging.getLogger("mcp_factory.api")
 
-# ── Per-job invocable registries ─────────────────────────────────────────────
+# â”€â”€ Per-job invocable registries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Backed by both in-memory cache and Blob Storage so state survives container
 # recycles (scale-to-zero, deployments, crashes).  P7.
 # Structure: {job_id: {tool_name: invocable_dict}}
 _JOB_INVOCABLE_MAPS: dict[str, dict[str, Any]] = {}
 _JOB_MAP_LOCK = threading.Lock()
 
-# ── Async job status store (P3) ─────────────────────────────────────────────
+# â”€â”€ Async job status store (P3) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # status schema: {status, progress, message, result, error, created_at, updated_at}
 _JOB_STATUS: dict[str, dict[str, Any]] = {}
 _JOB_STATUS_LOCK = threading.Lock()
@@ -63,39 +63,49 @@ def _download_blob(container: str, blob_name: str) -> bytes:
     return cc.download_blob(blob_name).readall()
 
 
-def _persist_job_status(job_id: str, payload: dict) -> bool:
-    """Write job status to in-memory cache AND Blob Storage (synchronous, with retry).
 
-    Always updates the in-memory cache immediately so same-pod polls are instant.
-    Retries the Blob write up to 3 times so cross-pod polls (load-balanced replicas
-    and scale-to-zero restarts) can also find the status.
+def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bool:
+    """Write job status to in-memory cache and persist to Blob.
 
-    Returns True if the Blob write succeeded, False if all retries were exhausted
-    (status is still available in-memory for the lifetime of this pod).
+    - Always updates in-memory immediately.
+    - If sync=True: blocking, retrying Blob write (for worker threads).
+    - If sync=False: run the retrying write in a daemon thread so async
+      request handlers never block the event loop.
     """
     with _JOB_STATUS_LOCK:
         _JOB_STATUS[job_id] = payload
-    _MAX_RETRIES = 3
-    _RETRY_DELAY = 2  # seconds between attempts
-    data = json.dumps(payload).encode()
-    for attempt in range(_MAX_RETRIES):
-        try:
-            _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/status.json", data)
-            return True
-        except Exception as exc:
-            if attempt < _MAX_RETRIES - 1:
-                logger.warning(
-                    "[%s] Failed to persist status to Blob (attempt %d/%d): %s — retrying in %ds",
-                    job_id, attempt + 1, _MAX_RETRIES, exc, _RETRY_DELAY,
-                )
-                time.sleep(_RETRY_DELAY)
-            else:
-                logger.error(
-                    "[%s] Failed to persist status to Blob after %d attempts: %s — "
-                    "job visible only on this pod until Blob storage is restored.",
-                    job_id, _MAX_RETRIES, exc,
-                )
-    return False
+
+    def _upload_with_retry() -> bool:
+        _MAX_RETRIES = 3
+        _RETRY_DELAY = 2
+        data = json.dumps(payload).encode()
+        for attempt in range(_MAX_RETRIES):
+            try:
+                _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/status.json", data)
+                return True
+            except Exception as exc:
+                if attempt < _MAX_RETRIES - 1:
+                    logger.warning(
+                        "[%s] Failed to persist status to Blob (attempt %d/%d): %s — retrying in %ds",
+                        job_id, attempt + 1, _MAX_RETRIES, exc, _RETRY_DELAY,
+                    )
+                    time.sleep(_RETRY_DELAY)
+                else:
+                    logger.error(
+                        "[%s] Failed to persist status to Blob after %d attempts: %s — job visible only on this pod until Blob storage is restored.",
+                        job_id, _MAX_RETRIES, exc,
+                    )
+        return False
+
+    if sync:
+        return _upload_with_retry()
+
+    threading.Thread(
+        target=_upload_with_retry,
+        daemon=True,
+        name=f"persist-{job_id}",
+    ).start()
+    return True
 
 
 def _get_job_status(job_id: str) -> dict | None:
@@ -134,7 +144,7 @@ def _get_invocable(job_id: str, name: str) -> dict | None:
         result = _JOB_INVOCABLE_MAPS.get(job_id, {}).get(name)
     if result is not None:
         return result
-    # Cache miss — reload from Blob (handles container restarts, P7)
+    # Cache miss â€” reload from Blob (handles container restarts, P7)
     try:
         data: dict = json.loads(
             _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
@@ -181,3 +191,4 @@ def _enqueue_analysis(job_id: str, blob_name: str, hints: str, original_name: st
     except Exception as exc:
         logger.warning("[%s] Failed to enqueue: %s", job_id, exc)
         return False
+
