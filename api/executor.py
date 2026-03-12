@@ -209,19 +209,47 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
     )
 
 
+# Cache bridge reachability so one dead-host TCP timeout doesn't plague every
+# tool call for the rest of the process lifetime.
+_bridge_reachable: bool | None = None  # None = untested
+
+
+def _check_bridge_alive() -> bool:
+    """Quick /health probe — result is cached for the process lifetime."""
+    global _bridge_reachable
+    if _bridge_reachable is not None:
+        return _bridge_reachable
+    import httpx
+    try:
+        r = httpx.get(
+            f"{GUI_BRIDGE_URL}/health",
+            headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+            timeout=httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0),
+        )
+        _bridge_reachable = r.status_code == 200
+    except Exception:
+        _bridge_reachable = False
+    logger.info("Bridge reachability: %s", _bridge_reachable)
+    return _bridge_reachable
+
+
 def _call_execute_bridge(inv: dict, args: dict) -> str | None:
     """Forward a tool-call to the Windows VM bridge /execute endpoint.
 
     Returns the result string on success, or None if the bridge is
     unavailable / returns an error (caller falls through to local execution).
+    Uses explicit connect/read timeouts so a dead host fails in ~5 s instead
+    of the OS default ~2 min TCP timeout.
     """
+    if not _check_bridge_alive():
+        return None
     import httpx
     try:
         resp = httpx.post(
             f"{GUI_BRIDGE_URL}/execute",
             json={"invocable": inv, "args": args},
             headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=30,
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
         )
         resp.raise_for_status()
         return resp.json().get("result", "")
