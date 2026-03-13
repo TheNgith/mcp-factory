@@ -201,9 +201,16 @@ def _launch_via_start(exe_str: str, backend: str = "uia"):
                 return None, app
             except Exception as exc:
                 logger.debug("HWND-diff connect failed (hwnd=%s): %s", hwnd, exc)
-                # Fall through to title-pattern loop
+        # Strategy A already spawned the process — raise rather than spawn a
+        # second one.  The caller will surface a clean failure.
+        raise RuntimeError(
+            f"HWND-diff: window appeared but pywinauto connect failed for {exe_str!r}"
+        )
 
-    # ── Strategy B: title-pattern loop (win32gui unavailable) ────────────
+    # ── Strategy B (deprecated): title-pattern loop ───────────────────────
+    # Only reached when win32gui is unavailable (Strategy A never ran).
+    # DO NOT add a fallthrough from Strategy A here — that spawns a second
+    # process for the same app.
     subprocess.Popen(f'start "" "{exe_str}"', shell=True)
     time.sleep(4.0)  # allow cold-start apps enough time to create their window
 
@@ -462,75 +469,71 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
     # so two tasks never race to spawn duplicate processes.
     with _get_binary_lock(exe_path.name.lower()):
         try:
-            # ── Step 1: Attach to existing instance or launch fresh ───────────
-            # Primary: connect by process path (classic Win32 apps).
+            # ── Step 1: Launch fresh ──────────────────────────────────────────
+            # No attach-to-existing logic — analysis requests always target a
+            # freshly uploaded binary so no prior window exists.
+            #
+            # Launch path:
+            #   A) _launch_hidden (classic Win32, no visible window)
+            #   B) MSIX orphan poll — if the stub already triggered package
+            #      activation, reuse that window instead of spawning again
+            #   C) _launch_via_start (HWND-diff, last resort)
+            logger.info("Launching %s hidden for menu discovery…", exe_path.name)
+            _orphan_hwnd: Optional[int] = None
             try:
-                _existing = Application(backend="win32").connect(
-                    path=exe_str, timeout=1
+                proc, app = _launch_hidden(
+                    exe_str, backend="win32", max_wait=float(timeout)
                 )
-                hwnd = _existing.top_window().handle
-                if hwnd:
-                    app = _existing
-                    logger.info(
-                        "Attached to running instance of %s", exe_path.name
-                    )
-            except Exception:
-                pass  # not running with this path — try MSIX title match below
+                _we_launched = True
+                hwnd = app.top_window().handle
+            except Exception as exc:
+                logger.debug(
+                    "win32 hidden launch failed for %s: %s",
+                    exe_path.name, exc,
+                )
+                # MSIX stubs (e.g. calc.exe → CalculatorApp.exe) exit almost
+                # instantly but have already triggered package activation.
+                # Poll up to 2 s for that orphan window — if found we attach
+                # directly and never need to call _launch_via_start at all.
+                if WIN32GUI_AVAILABLE:
+                    _stem_l = exe_path.stem.lower()
+                    _found: list = [None]
 
-            # MSIX fallback: the real process name differs from the stub
-            # (e.g. calc.exe → CalculatorApp.exe whose title is "Calculator").
-            # Look for a visible window whose title contains the exe stem.
-            if app is None and WIN32GUI_AVAILABLE:
-                _exe_stem_l = exe_path.stem.lower()
-                _msix_hwnd: Optional[int] = None
+                    def _cb_orphan(h: int, _: None) -> None:
+                        if _found[0]:
+                            return
+                        try:
+                            if win32gui.IsWindowVisible(h) and _stem_l in win32gui.GetWindowText(h).lower():
+                                _found[0] = h
+                        except Exception:
+                            pass
 
-                def _title_cb(h: int, _param: None) -> None:
-                    nonlocal _msix_hwnd
-                    if _msix_hwnd:
-                        return
-                    try:
-                        if win32gui.IsWindowVisible(h):
-                            title = win32gui.GetWindowText(h).lower()
-                            if _exe_stem_l in title:
-                                _msix_hwnd = h
-                    except Exception:
-                        pass
+                    for _ in range(4):  # 4 × 0.5 s = up to 2 s
+                        time.sleep(0.5)
+                        try:
+                            win32gui.EnumWindows(_cb_orphan, None)
+                        except Exception:
+                            pass
+                        if _found[0]:
+                            break
+                    _orphan_hwnd = _found[0]
 
-                try:
-                    win32gui.EnumWindows(_title_cb, None)
-                except Exception:
-                    pass
-
-                if _msix_hwnd:
+                if _orphan_hwnd:
                     try:
                         app = Application(backend="uia").connect(
-                            handle=_msix_hwnd, timeout=2
+                            handle=_orphan_hwnd, timeout=3
                         )
-                        hwnd = _msix_hwnd
-                        _we_launched = False
+                        _we_launched = True
+                        hwnd = _orphan_hwnd
                         logger.info(
-                            "Attached to running MSIX instance of %s "
-                            "via title match (hwnd=%d)",
-                            exe_path.name, _msix_hwnd,
+                            "Attached to MSIX orphan window of %s (hwnd=%d) "
+                            "— no second spawn needed",
+                            exe_path.name, _orphan_hwnd,
                         )
                     except Exception:
-                        pass
+                        _orphan_hwnd = None
 
-            if app is None:
-                logger.info(
-                    "Launching %s hidden for menu discovery…", exe_path.name
-                )
-                try:
-                    proc, app = _launch_hidden(
-                        exe_str, backend="win32", max_wait=float(timeout)
-                    )
-                    _we_launched = True
-                    hwnd = app.top_window().handle
-                except Exception as exc:
-                    logger.debug(
-                        "win32 hidden launch failed for %s: %s",
-                        exe_path.name, exc,
-                    )
+                if not _orphan_hwnd:
                     try:
                         proc, app = _launch_via_start(exe_str, backend="uia")
                         _we_launched = True
@@ -608,10 +611,30 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
             logger.warning("GUI analysis failed for %s: %s", exe_path.name, exc)
 
         finally:
-            # Only kill the process if WE launched it — never touch a
-            # pre-existing instance that was already running before analysis.
             if _we_launched:
                 _kill_app(proc, app)
+                # For MSIX apps the real process name differs from the stub
+                # (e.g. CalculatorApp.exe, Notepad.exe) so _kill_app's proc
+                # handle targets a dead stub and does nothing.  Kill all
+                # processes whose name starts with or contains the exe stem.
+                _stem_kill = exe_path.stem.lower()
+                try:
+                    import psutil  # type: ignore
+                    for _kp in psutil.process_iter(["name", "pid"]):
+                        try:
+                            _pname = (_kp.info["name"] or "").lower()
+                            if _stem_kill in _pname:
+                                _kp.kill()
+                                logger.debug(
+                                    "Killed MSIX residual %s (pid=%d)",
+                                    _kp.info["name"], _kp.info["pid"],
+                                )
+                        except Exception:
+                            pass
+                except ImportError:
+                    logger.debug(
+                        "psutil not available — MSIX residual windows may persist"
+                    )
 
     # ── Step 5: convert paths → Invocables ────────────────────────────────
     # Detected backend: win32 = classic Win32 app (menu_select works),
