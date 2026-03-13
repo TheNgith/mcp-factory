@@ -235,6 +235,24 @@ def embed_and_index(
             "invocables": invocables,
         }
 
+    # ── Persist embeddings to blob so other ACA replicas can warm up ──────
+    # Written to {job_id}/embeddings_cache.json; loaded by retrieve_tools
+    # when the in-memory cache is cold (different replica handled generate).
+    try:
+        from api.storage import _upload_to_blob  # type: ignore
+        from api.config import ARTIFACT_CONTAINER  # type: ignore
+        _cache_blob = json.dumps({"functions": functions, "embeddings": embeddings})
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/embeddings_cache.json",
+            _cache_blob.encode(),
+        )
+        logger.info("[search] Embeddings persisted to blob for job %s", job_id)
+    except Exception as _blob_exc:
+        logger.warning(
+            "[search] Embedding blob persist failed (non-fatal): %s", _blob_exc
+        )
+
 
 def retrieve_tools(
     job_id: str,
@@ -302,7 +320,28 @@ def retrieve_tools(
                     return matched
         except Exception as exc:
             logger.warning("[search] AI Search query failed, using memory: %s", exc)
-
+    # ── Blob cache warm-up (cross-replica cache miss recovery) ────────────
+    # If generate ran on a different ACA replica the in-memory cache here is
+    # cold.  Load the persisted embeddings from blob and warm this replica
+    # so the cosine search below works, and the next call is instant.
+    if not cached:
+        try:
+            from api.storage import _download_blob  # type: ignore
+            from api.config import ARTIFACT_CONTAINER  # type: ignore
+            _raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/embeddings_cache.json")
+            _data = json.loads(_raw)
+            with _EMBED_LOCK:
+                _EMBED_CACHE[job_id] = {
+                    "functions": _data["functions"],
+                    "embeddings": _data["embeddings"],
+                    "invocables": [],
+                }
+                cached = _EMBED_CACHE[job_id]
+            logger.info("[search] Warmed embedding cache from blob for job %s", job_id)
+        except Exception as _warm_exc:
+            logger.debug(
+                "[search] Blob cache warm-up failed for job %s: %s", job_id, _warm_exc
+            )
     # ── In-memory cosine fallback ──────────────────────────────────────────
     if cached:
         embs = cached["embeddings"]

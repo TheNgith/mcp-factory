@@ -23,6 +23,7 @@ _execute_gui() in the generated server (section4_generate_server.py).
 import logging
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -54,18 +55,32 @@ except ImportError:
 _STARTF_USESHOWWINDOW = 0x00000001
 _SW_SHOWMINNOACTIVE   = 7  # minimised in taskbar, no focus, no desktop pop-up
 
+# Per-binary concurrency gate: prevents two concurrent analysis tasks for the
+# same EXE from each spawning their own process and interfering with each other.
+_BINARY_LOCKS: dict[str, threading.Lock] = {}
+_BINARY_LOCKS_LOCK = threading.Lock()
+
+
+def _get_binary_lock(exe_name: str) -> threading.Lock:
+    """Return (creating if necessary) the per-binary Lock for *exe_name*."""
+    with _BINARY_LOCKS_LOCK:
+        if exe_name not in _BINARY_LOCKS:
+            _BINARY_LOCKS[exe_name] = threading.Lock()
+        return _BINARY_LOCKS[exe_name]
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Hidden launch helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-def _launch_hidden(exe_str: str, backend: str = "win32"):
+def _launch_hidden(exe_str: str, backend: str = "win32", max_wait: float = 10.0):
     """Launch *exe_str* minimised and return (proc, app).
 
     Uses STARTUPINFO SW_SHOWMINNOACTIVE so the window starts as an inactive
     taskbar button rather than popping up on the desktop, then attaches
-    pywinauto by process PID.
+    pywinauto by process PID.  Polls for the top-level window up to *max_wait*
+    seconds instead of sleeping a fixed interval, eliminating the race between
+    process launch and window creation.
 
     Raises on failure — callers should fall back to ``_launch_via_start()``
     for MSIX / WinUI3 apps where the stub exits immediately.
@@ -78,11 +93,24 @@ def _launch_hidden(exe_str: str, backend: str = "win32"):
     si.wShowWindow = _SW_SHOWMINNOACTIVE
 
     proc = subprocess.Popen([exe_str], startupinfo=si)
-    time.sleep(0.5)  # reduced: launcher stubs (UWP/MSIX) exit immediately anyway
+    app = Application(backend=backend).connect(process=proc.pid, timeout=max_wait)
 
-    app = Application(backend=backend).connect(process=proc.pid, timeout=3)  # reduced: 8→3
-    app.top_window().handle  # raises immediately if no window found under PID
-    return proc, app
+    # Poll for the first top-level window instead of a fixed sleep.
+    # Resolves the launch→scan race: we don't proceed until the window exists.
+    deadline = time.monotonic() + max_wait
+    while True:
+        try:
+            hwnd = app.top_window().handle
+            if hwnd:
+                return proc, app
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            proc.terminate()
+            raise RuntimeError(
+                f"No window appeared for {exe_str!r} within {max_wait:.0f}s"
+            )
+        time.sleep(0.5)
 
 
 def _launch_via_start(exe_str: str, backend: str = "uia"):
@@ -413,91 +441,118 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
     app = None
     win32_ok = False
     menu_paths: List[List[str]] = []
+    _we_launched: bool = False
+    hwnd: Optional[int] = None
 
-    try:
-        # ── Attempt A: Win32 hidden (subprocess + PID connect) ────────────
-        # No visual pop-up at all. Works for all classic Win32 apps.
-        logger.info("Launching %s hidden for menu discovery…", exe_path.name)
-        proc = None
-        app = None
-        win32_ok = False
-
+    # Single-instance gate: serialise concurrent analysis of the same binary
+    # so two tasks never race to spawn duplicate processes.
+    with _get_binary_lock(exe_path.name.lower()):
         try:
-            proc, app = _launch_hidden(exe_str, backend="win32")
-            win = app.top_window()
-            hwnd = win.handle
-            menu_paths = _walk_menu_silent(hwnd)
-            if menu_paths:
-                logger.info(
-                    "Silent HMENU: %d menu paths in %s",
-                    len(menu_paths), exe_path.name,
-                )
-                win32_ok = True
-        except Exception as exc:
-            logger.debug("win32 hidden launch failed for %s: %s",
-                         exe_path.name, exc)
-
-        # Kill win32 app before trying UIA (prevents duplicate windows)
-        if not win32_ok:
-            _kill_app(proc, app)
-            proc, app = None, None
-
-        if not win32_ok:
-            # ── Attempt B: UIA via Application.start() + immediate minimise ─
-            # Works for WinUI3 / Win11 apps.  Window appears for ~1 frame.
-            logger.info(
-                "win32 backend yielded nothing for %s — trying UIA (Win11/WinUI3)…",
-                exe_path.name,
-            )
+            # ── Step 1: Attach to existing instance or launch fresh ───────────
+            # Check for a running instance first so we never spawn duplicates.
             try:
-                proc, app = _launch_via_start(exe_str, backend="uia")
-                win_uia = app.top_window()
-                win_uia.wait("exists", timeout=timeout)
-                menu_paths = _walk_uia_tree(win_uia)
+                _existing = Application(backend="win32").connect(
+                    path=exe_str, timeout=1
+                )
+                hwnd = _existing.top_window().handle
+                if hwnd:
+                    app = _existing
+                    logger.info(
+                        "Attached to running instance of %s", exe_path.name
+                    )
+            except Exception:
+                pass  # not running — launch fresh below
+
+            if app is None:
+                logger.info(
+                    "Launching %s hidden for menu discovery…", exe_path.name
+                )
+                try:
+                    proc, app = _launch_hidden(
+                        exe_str, backend="win32", max_wait=float(timeout)
+                    )
+                    _we_launched = True
+                    hwnd = app.top_window().handle
+                except Exception as exc:
+                    logger.debug(
+                        "win32 hidden launch failed for %s: %s",
+                        exe_path.name, exc,
+                    )
+                    try:
+                        proc, app = _launch_via_start(exe_str, backend="uia")
+                        _we_launched = True
+                        app.top_window().wait("exists", timeout=timeout)
+                        hwnd = app.top_window().handle
+                    except Exception as exc2:
+                        logger.warning(
+                            "All launch attempts failed for %s: %s / %s",
+                            exe_path.name, exc, exc2,
+                        )
+
+            if hwnd:
+                # ── Step 2: Win32 HMENU scan on the already-open window ──────
+                menu_paths = _walk_menu_silent(hwnd)
                 if menu_paths:
                     logger.info(
-                        "UIA tree: %d menu paths in %s",
+                        "Silent HMENU: %d menu paths in %s",
                         len(menu_paths), exe_path.name,
                     )
-                else:
-                    logger.info(
-                        "No menu items found via UIA for %s", exe_path.name
-                    )
-            except Exception as uia_exc:
-                logger.warning(
-                    "UIA fallback failed for %s: %s", exe_path.name, uia_exc
-                )
+                    win32_ok = True
 
-        # ── Attempt C: UIA button enumeration (apps with no menu bar) ─────
-        # Catches Calculator, Media Player, etc. that expose buttons but no
-        # real MenuItem controls.  Runs when both menu walks found nothing
-        # meaningful (a lone "System" entry does not count as a real menu).
-        _real_menus = [p for p in menu_paths if p[0:1] != ["__button__"]]
-        if not _real_menus and not win32_ok:
-            try:
-                if app is None:
-                    proc, app = _launch_via_start(exe_str, backend="uia")
-                    app.top_window().wait("exists", timeout=timeout)
-                button_labels = _walk_uia_buttons(app.top_window())
-                if button_labels:
-                    logger.info(
-                        "UIA buttons: %d buttons in %s",
-                        len(button_labels), exe_path.name,
-                    )
-                    # Store button labels alongside menu_paths using a sentinel
-                    # list so the converter below can distinguish them.
-                    # We tag each as ["__button__", label] for routing.
-                    menu_paths = [["__button__", lbl] for lbl in button_labels]
-            except Exception as btn_exc:
-                logger.warning(
-                    "UIA button walk failed for %s: %s", exe_path.name, btn_exc
-                )
+                # ── Step 3: UIA scan on the same HWND (no second launch) ─────
+                if not menu_paths:
+                    try:
+                        _uia_app = Application(backend="uia").connect(
+                            handle=hwnd, timeout=5
+                        )
+                        _win_uia = _uia_app.top_window()
+                        menu_paths = _walk_uia_tree(_win_uia)
+                        if menu_paths:
+                            logger.info(
+                                "UIA tree: %d menu paths in %s",
+                                len(menu_paths), exe_path.name,
+                            )
+                        else:
+                            logger.info(
+                                "No menu items found via UIA for %s",
+                                exe_path.name,
+                            )
+                    except Exception as uia_exc:
+                        logger.warning(
+                            "UIA tree walk failed for %s: %s",
+                            exe_path.name, uia_exc,
+                        )
 
-    except Exception as exc:
-        logger.warning("GUI analysis failed for %s: %s", exe_path.name, exc)
+                # ── Step 4: UIA button scan on same HWND (no third launch) ───
+                _real_menus = [p for p in menu_paths if p[0:1] != ["__button__"]]
+                if not _real_menus:
+                    try:
+                        _uia_app2 = Application(backend="uia").connect(
+                            handle=hwnd, timeout=5
+                        )
+                        button_labels = _walk_uia_buttons(_uia_app2.top_window())
+                        if button_labels:
+                            logger.info(
+                                "UIA buttons: %d buttons in %s",
+                                len(button_labels), exe_path.name,
+                            )
+                            menu_paths = [
+                                ["__button__", lbl] for lbl in button_labels
+                            ]
+                    except Exception as btn_exc:
+                        logger.warning(
+                            "UIA button walk failed for %s: %s",
+                            exe_path.name, btn_exc,
+                        )
 
-    finally:
-        _kill_app(proc, app)
+        except Exception as exc:
+            logger.warning("GUI analysis failed for %s: %s", exe_path.name, exc)
+
+        finally:
+            # Only kill the process if WE launched it — never touch a
+            # pre-existing instance that was already running before analysis.
+            if _we_launched:
+                _kill_app(proc, app)
 
     # ── Step 5: convert paths → Invocables ────────────────────────────────
     # Detected backend: win32 = classic Win32 app (menu_select works),
