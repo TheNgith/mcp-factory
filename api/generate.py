@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -64,10 +65,14 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             or inv["name"]
         )
 
+        # OpenAI requires function names matching ^[a-zA-Z0-9_\.-]+$
+        # Replace any disallowed character (e.g. '/' in JNDI EJB names) with '_'
+        safe_name = re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])
+
         tools.append({
             "type": "function",
             "function": {
-                "name": inv["name"],
+                "name": safe_name,
                 "description": desc,
                 "parameters": {
                     "type": "object",

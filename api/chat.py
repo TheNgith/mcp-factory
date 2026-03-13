@@ -128,8 +128,17 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
                         "[%s] Semantic retrieval: %d/%d tools selected",
                         job_id, len(_active_tools), len(tools),
                     )
+                else:
+                    # Semantic cache miss (e.g. different ACA replica) — hard-truncate
+                    # to stay within the OpenAI 128-tool limit rather than error out.
+                    _active_tools = tools[:_AI_SEARCH_TOP_K]
+                    logger.warning(
+                        "[%s] Semantic retrieval returned nothing; truncating %d→%d tools",
+                        job_id, len(tools), _AI_SEARCH_TOP_K,
+                    )
             except Exception as _se:
                 logger.warning("[%s] Semantic tool retrieval failed: %s", job_id, _se)
+                _active_tools = tools[:_AI_SEARCH_TOP_K]
 
         # Track which launcher tools have already been called this session
         # so semantic retrieval can exclude them from subsequent rounds.
@@ -153,6 +162,9 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
                     _semantic_tools = _retrieve_tools(job_id, _rolling_query, client, top_k=_AI_SEARCH_TOP_K)
                     if _semantic_tools:
                         _active_tools = [t for t in _semantic_tools
+                                         if t.get("function", {}).get("name") not in _called_launchers]
+                    else:
+                        _active_tools = [t for t in tools[:_AI_SEARCH_TOP_K]
                                          if t.get("function", {}).get("name") not in _called_launchers]
                 except Exception as exc:
                     logger.warning("[%s] Semantic tool retrieval refresh failed: %s", job_id, exc)
