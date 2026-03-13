@@ -93,6 +93,20 @@ def _launch_hidden(exe_str: str, backend: str = "win32", max_wait: float = 10.0)
     si.wShowWindow = _SW_SHOWMINNOACTIVE
 
     proc = subprocess.Popen([exe_str], startupinfo=si)
+
+    # Fast MSIX stub detection: if the process exits within ~2 s it is a
+    # launcher stub (e.g. System32\calc.exe → CalculatorApp.exe).  Raise
+    # immediately so the caller falls through to _launch_via_start() without
+    # burning max_wait seconds waiting for a window that will never appear.
+    _stub_deadline = time.monotonic() + 2.0
+    while time.monotonic() < _stub_deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"{Path(exe_str).name!r} exited immediately "
+                f"(MSIX stub, returncode={proc.returncode})"
+            )
+        time.sleep(0.2)
+
     app = Application(backend=backend).connect(process=proc.pid, timeout=max_wait)
 
     # Poll for the first top-level window instead of a fixed sleep.
@@ -449,7 +463,7 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
     with _get_binary_lock(exe_path.name.lower()):
         try:
             # ── Step 1: Attach to existing instance or launch fresh ───────────
-            # Check for a running instance first so we never spawn duplicates.
+            # Primary: connect by process path (classic Win32 apps).
             try:
                 _existing = Application(backend="win32").connect(
                     path=exe_str, timeout=1
@@ -461,7 +475,46 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
                         "Attached to running instance of %s", exe_path.name
                     )
             except Exception:
-                pass  # not running — launch fresh below
+                pass  # not running with this path — try MSIX title match below
+
+            # MSIX fallback: the real process name differs from the stub
+            # (e.g. calc.exe → CalculatorApp.exe whose title is "Calculator").
+            # Look for a visible window whose title contains the exe stem.
+            if app is None and WIN32GUI_AVAILABLE:
+                _exe_stem_l = exe_path.stem.lower()
+                _msix_hwnd: Optional[int] = None
+
+                def _title_cb(h: int, _param: None) -> None:
+                    nonlocal _msix_hwnd
+                    if _msix_hwnd:
+                        return
+                    try:
+                        if win32gui.IsWindowVisible(h):
+                            title = win32gui.GetWindowText(h).lower()
+                            if _exe_stem_l in title:
+                                _msix_hwnd = h
+                    except Exception:
+                        pass
+
+                try:
+                    win32gui.EnumWindows(_title_cb, None)
+                except Exception:
+                    pass
+
+                if _msix_hwnd:
+                    try:
+                        app = Application(backend="uia").connect(
+                            handle=_msix_hwnd, timeout=2
+                        )
+                        hwnd = _msix_hwnd
+                        _we_launched = False
+                        logger.info(
+                            "Attached to running MSIX instance of %s "
+                            "via title match (hwnd=%d)",
+                            exe_path.name, _msix_hwnd,
+                        )
+                    except Exception:
+                        pass
 
             if app is None:
                 logger.info(
@@ -500,13 +553,15 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
                     win32_ok = True
 
                 # ── Step 3: UIA scan on the same HWND (no second launch) ─────
+                # _uia_win is reused in step 4 to avoid a redundant connect().
+                _uia_win = None
                 if not menu_paths:
                     try:
                         _uia_app = Application(backend="uia").connect(
                             handle=hwnd, timeout=5
                         )
-                        _win_uia = _uia_app.top_window()
-                        menu_paths = _walk_uia_tree(_win_uia)
+                        _uia_win = _uia_app.top_window()
+                        menu_paths = _walk_uia_tree(_uia_win)
                         if menu_paths:
                             logger.info(
                                 "UIA tree: %d menu paths in %s",
@@ -527,10 +582,14 @@ def analyze_gui(exe_path: Path, timeout: int = 10) -> List[Invocable]:
                 _real_menus = [p for p in menu_paths if p[0:1] != ["__button__"]]
                 if not _real_menus:
                     try:
-                        _uia_app2 = Application(backend="uia").connect(
-                            handle=hwnd, timeout=5
-                        )
-                        button_labels = _walk_uia_buttons(_uia_app2.top_window())
+                        if _uia_win is None:
+                            # Step 3 wasn't reached (menu walk succeeded) or
+                            # UIA connect failed there — try fresh connect.
+                            _uia_app3 = Application(backend="uia").connect(
+                                handle=hwnd, timeout=5
+                            )
+                            _uia_win = _uia_app3.top_window()
+                        button_labels = _walk_uia_buttons(_uia_win)
                         if button_labels:
                             logger.info(
                                 "UIA buttons: %d buttons in %s",
