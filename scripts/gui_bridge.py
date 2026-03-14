@@ -953,16 +953,52 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
             f"and no CLSID/TLB data in execution config. Cannot dispatch '{member}'."
         )
 
+    method_found_on: str | None = None  # tracks first CLSID where member exists
+    call_errors: list[str] = []
+
     for clsid in ordered_candidates:
         try:
             obj = win32com.client.Dispatch(clsid)
-            fn  = getattr(obj, member, None)
-            if fn is None:
-                continue
+        except Exception as ex:
+            errors_seen.append(f"{clsid}: Dispatch failed: {ex}")
+            continue
+
+        fn = getattr(obj, member, None)
+        if fn is None:
+            continue
+
+        # Member exists on this object — record it even if the call fails
+        if method_found_on is None:
+            method_found_on = clsid
+
+        try:
             result = fn(*arg_values) if arg_values else fn()
             return f"Returned: {result}"
-        except Exception as ex:
-            errors_seen.append(f"{clsid}: {ex}")
+        except Exception as call_ex:
+            call_str = str(call_ex)
+            call_errors.append(f"{clsid}: {call_str}")
+            # "Invalid number of parameters" — try as a property (no-call)
+            if "parameter" in call_str.lower() or "argument" in call_str.lower():
+                try:
+                    prop = getattr(obj, member)
+                    if not callable(prop):
+                        return f"Returned: {prop}"
+                except Exception:
+                    pass
+
+    if method_found_on:
+        # Method WAS found but every call attempt failed — likely missing required args
+        param_hint = (
+            execution.get("parameters")
+            or inv.get("parameters")
+            or []
+        )
+        hint = f" Expected parameters: {param_hint}" if param_hint else \
+               " Provide required arguments (e.g. a folder path for Open)."
+        return (
+            f"COM method '{member}' found on {method_found_on} but call failed. "
+            f"Errors: {'; '.join(call_errors[:3])}.{hint}"
+        )
 
     return (
         f"COM invoke error: none of {len(ordered_candidates)} CoClass candidate(s) "
