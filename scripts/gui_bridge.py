@@ -900,26 +900,52 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     arg_values  = list(args.values())
     errors_seen: list[str] = []
 
-    # Build candidate list: TLB CoClasses first (targeted), then registry scan (fallback).
-    # TLB candidates come from coclass_candidates stored at analysis time — these are
-    # the CoClasses declared in the same type library as the interface, so at least one
-    # of them will expose the method via IDispatch even for TKIND_DISPATCH interfaces
-    # that don't encode their inheritance chain in cImplTypes (e.g. IShellDispatch*).
+    # Build candidate list in priority order:
+    #   1. direct clsid (explicitly stored, most precise)
+    #   2. coclass_candidates from TLB analysis (stored at analyze time)
+    #   3. lazy TLB scan from the DLL right now (catches stale invocables that
+    #      pre-date the coclass_candidates fix — no re-upload required)
+    #   4. registry scan by DLL name (last resort)
     direct_clsid   = execution.get("clsid") or inv.get("clsid")
     tlb_candidates = execution.get("coclass_candidates") or []
     dll_path = _resolve_exe_path(execution.get("dll_path", ""))
     dll_lc   = Path(dll_path).name.lower() if dll_path else ""
 
-    # Deduplicated ordered candidate list: direct > TLB > registry
+    # Lazy TLB scan: if no stored candidates, load the DLL's type library now
+    lazy_tlb_candidates: list = []
+    if not tlb_candidates and dll_path and Path(dll_path).exists():
+        try:
+            import pythoncom as _pc
+            _tlb = _pc.LoadTypeLib(dll_path)
+            for _i in range(_tlb.GetTypeInfoCount()):
+                try:
+                    _ti   = _tlb.GetTypeInfo(_i)
+                    _attr = _ti.GetTypeAttr()
+                    if _attr.typekind == 5:  # TKIND_COCLASS
+                        lazy_tlb_candidates.append(str(_attr.iid))
+                except Exception:
+                    pass
+            logger.info("COM lazy TLB scan of '%s': %d CoClass candidates",
+                        dll_lc, len(lazy_tlb_candidates))
+        except Exception as _e:
+            logger.debug("COM lazy TLB scan failed for '%s': %s", dll_lc, _e)
+
+    # Deduplicated ordered candidate list
     seen: set = set()
     ordered_candidates: list = []
-    for c in ([direct_clsid] if direct_clsid else []) + tlb_candidates:
+    for c in ([direct_clsid] if direct_clsid else []) + tlb_candidates + lazy_tlb_candidates:
         if c and c not in seen:
             seen.add(c)
             ordered_candidates.append(c)
-    # Only fall back to registry scan if TLB gave us nothing
+
+    source = "stored TLB" if tlb_candidates else ("lazy TLB" if lazy_tlb_candidates else "registry")
+    # Only fall back to registry scan if TLB (stored or lazy) gave us nothing
     if not ordered_candidates and dll_lc:
         ordered_candidates = _get_com_candidates(dll_lc)
+        source = "registry"
+
+    logger.info("COM dispatch '%s' on '%s': %d candidates from %s",
+                member, dll_lc, len(ordered_candidates), source)
 
     if not ordered_candidates:
         return (
