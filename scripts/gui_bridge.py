@@ -876,6 +876,94 @@ def _get_com_candidates(dll_lc: str) -> list[str]:
     return found
 
 
+def _com_call_with_auto_dismiss(fn, arg_values: list, dialog_timeout: float = 20.0):
+    """Call a COM method in a daemon thread.
+
+    If the call doesn't return within 2 s (i.e. it opened a blocking modal
+    dialog), use pywinauto to find the dialog window and click its primary
+    accept button (OK / Select Folder / Open / Yes).  This lets the bridge
+    serve users who have no direct access to the VM desktop.
+
+    Returns the COM call's return value, or raises the exception it raised.
+    """
+    import threading
+
+    result_box: list = [None]
+    error_box:  list = [None]
+    done_event = threading.Event()
+
+    def _run():
+        try:
+            result_box[0] = fn(*arg_values) if arg_values else fn()
+        except Exception as exc:
+            error_box[0] = exc
+        finally:
+            done_event.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Fast path: method returned before a dialog could open
+    if done_event.wait(timeout=2.0):
+        if error_box[0] is not None:
+            raise error_box[0]
+        return result_box[0]
+
+    # Slow path: assume a modal dialog is open — try to dismiss it
+    logger.info("COM call is blocking — attempting auto-dismiss of modal dialog")
+    _auto_dismiss_com_dialog(timeout=dialog_timeout)
+
+    # Wait for the COM thread to finish after the dialog is gone
+    done_event.wait(timeout=5.0)
+    if error_box[0] is not None:
+        raise error_box[0]
+    return result_box[0]
+
+
+def _auto_dismiss_com_dialog(timeout: float = 20.0) -> str | None:
+    """Poll the desktop for a modal dialog and click its primary accept button.
+
+    Tries both win32 and uia backends.  Recognises common accept-button labels
+    so it works for BrowseForFolder, file-open pickers, message boxes, etc.
+    Returns a description of what was clicked, or None if nothing was found.
+    """
+    import time as _time
+
+    _OK_LABELS = ["OK", "Select Folder", "Open", "Accept", "Yes", "Select", "Choose"]
+    deadline = _time.monotonic() + timeout
+
+    while _time.monotonic() < deadline:
+        _time.sleep(0.4)
+        for backend in ("win32", "uia"):
+            try:
+                from pywinauto import Desktop as _Desktop
+                desktop = _Desktop(backend=backend)
+                for win in desktop.windows():
+                    try:
+                        if not win.is_visible():
+                            continue
+                        title = win.window_text()
+                        for label in _OK_LABELS:
+                            try:
+                                btn = win.child_window(title=label, control_type="Button")
+                                if btn.exists(timeout=0) and btn.is_visible():
+                                    btn.click_input()
+                                    logger.info(
+                                        "Auto-dismissed dialog '%s' via button '%s'",
+                                        title, label,
+                                    )
+                                    return f"dialog '{title}' dismissed via '{label}'"
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    logger.warning("Auto-dismiss: no clickable dialog found within %.0f s", timeout)
+    return None
+
+
 def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     """Invoke a COM method on an object hosted in the target DLL.
 
@@ -1009,7 +1097,7 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
             method_found_on = clsid
 
         try:
-            result = fn(*arg_values) if arg_values else fn()
+            result = _com_call_with_auto_dismiss(fn, arg_values)
             return f"Returned: {result}"
         except Exception as call_ex:
             call_str = str(call_ex)
