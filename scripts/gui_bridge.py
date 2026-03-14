@@ -120,6 +120,7 @@ class AnalyzeRequest(BaseModel):
         "gui", "com", "cli", "registry",
         "dotnet", "rpc",
         "sql", "wsdl", "idl", "js", "script", "openapi", "jndi",
+        "ghidra",
     ]  # base64-encoded binary content (optional): lets the bridge analyze an
     # uploaded file whose Linux temp path doesn't exist on the Windows VM.
     content: str | None = None
@@ -186,6 +187,10 @@ def _import_openapi():
 def _import_jndi():
     from jndi_analyzer import analyze_jndi  # type: ignore
     return analyze_jndi
+
+def _import_ghidra():
+    from ghidra_analyzer import analyze_with_ghidra  # type: ignore
+    return analyze_with_ghidra
 
 
 def _inv_to_dict(inv: Any) -> dict:
@@ -433,6 +438,25 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
         except Exception as exc:
             logger.warning("JNDI analysis failed: %s", exc)
             errors["jndi"] = str(exc)
+
+    # ── Ghidra fallback — stripped / undocumented binaries ─────────────────
+    # Fires when a .dll or .exe yielded zero invocables from every other
+    # analyzer (no TLB, no .NET, no RPC, no CLI help).  Ghidra disassembles
+    # the binary and reconstructs function signatures from raw machine code.
+    _PE_EXTS = (".dll", ".exe")
+    if (not _aborted()
+            and "ghidra" in requested
+            and target.suffix.lower() in _PE_EXTS
+            and len(invocables) == 0):
+        try:
+            analyze_with_ghidra = _import_ghidra()
+            ghidra_results = analyze_with_ghidra(target, timeout_s=180)
+            invocables.extend(ghidra_results)
+            logger.info("Ghidra: %d functions recovered from %s",
+                        len(ghidra_results), target.name)
+        except Exception as exc:
+            logger.warning("Ghidra analysis failed: %s", exc)
+            errors["ghidra"] = str(exc)
 
     # De-duplicate by name
     seen: set[str] = set()
