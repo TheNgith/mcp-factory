@@ -1321,7 +1321,7 @@ async def execute(
     name      = inv.get("name", "")
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method    = execution.get("method", "")
-    logger.info("Execute: tool=%s method=%s args=%s", name, method, list(args.keys()))
+    logger.info("Execute: tool=%s method=%s args=%s execution=%s", name, method, list(args.keys()), execution)
     loop = asyncio.get_running_loop()
     if method == "gui_action":
         result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)
