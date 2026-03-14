@@ -284,6 +284,18 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
             tlb_results = scan_type_library(target)
             for entry in tlb_results:
                 for method in entry.get("methods", []):
+                    execution: dict = {
+                        "method":          "com_invoke",
+                        "dll_path":        str(target),
+                        "interface":       entry.get("name", ""),
+                        "interface_guid":  entry.get("guid", ""),
+                        "member":          method.get("name", ""),
+                    }
+                    # Attach the CoClass CLSID when the TLB resolved it — this
+                    # allows _execute_com_bridge to Dispatch(clsid) directly
+                    # instead of doing a blind registry scan.
+                    if entry.get("coclass_clsid"):
+                        execution["clsid"] = entry["coclass_clsid"]
                     invocables.append({
                         "name":        method.get("name", "unknown"),
                         "source_type": "com",
@@ -293,13 +305,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
                         "doc_comment": method.get("doc", ""),
                         "parameters":  method.get("parameters", []),
                         "return_type": method.get("return_type", ""),
-                        "execution": {
-                            "method":          "com_invoke",
-                            "dll_path":        str(target),
-                            "interface":       entry.get("name", ""),
-                            "interface_guid":  entry.get("guid", ""),
-                            "member":          method.get("name", ""),
-                        },
+                        "execution":   execution,
                     })
             logger.info("COM/TLB: %d methods from %s", len(tlb_results), target.name)
         except Exception as exc:

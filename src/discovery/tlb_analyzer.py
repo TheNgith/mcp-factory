@@ -34,6 +34,34 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
         
         logger.info(f"Common Type Library found: {count} type infos")
         
+        # First pass: collect all CoClasses and build interface_guid → coclass_clsid map.
+        # A CoClass lists the interfaces it implements via GetImplTypeFlags/GetRefTypeInfo.
+        # This lets us resolve an interface IID to the CLSID you pass to Dispatch().
+        iid_to_clsid: Dict[str, str] = {}
+        coclass_info: Dict[str, Dict] = {}  # clsid → {name, guid}
+        for i in range(count):
+            try:
+                ti   = tlb.GetTypeInfo(i)
+                attr = ti.GetTypeAttr()
+                if attr.typekind != 5:  # only CoClass
+                    continue
+                clsid = str(attr.iid)
+                doc   = tlb.GetDocumentation(i)
+                coclass_info[clsid] = {'name': doc[0], 'guid': clsid}
+                for j in range(attr.cImplTypes):
+                    try:
+                        flags  = ti.GetImplTypeFlags(j)
+                        ref_ti = ti.GetRefTypeInfo(ti.GetRefTypeOfImplType(j))
+                        iid    = str(ref_ti.GetTypeAttr().iid)
+                        # Prefer the default interface (flags & 1) but accept any
+                        if iid not in iid_to_clsid or (flags & 1):
+                            iid_to_clsid[iid] = clsid
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # Second pass: extract interface/dispatch methods and attach the CoClass CLSID.
         for i in range(count):
             try:
                 # Get basic info
@@ -65,9 +93,6 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
                             func_name = names[0]
                             params = names[1:]
                             
-                            # Determine return type (heuristic, analyzing ELEMDESC would be better but complex)
-                            # For now, we capture the shape
-                            
                             methods.append({
                                 'name': func_name,
                                 'parameters': params,
@@ -79,14 +104,19 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
                             pass
                     
                     if methods:
-                        results.append({
+                        entry: Dict[str, Any] = {
                             'name': type_name,
                             'guid': guid,
                             'kind': 'interface' if kind == 3 else 'dispatch',
                             'description': type_doc,
                             'methods': methods,
-                            'confidence': 'guaranteed' # TLB info is authoritative
-                        })
+                            'confidence': 'guaranteed',  # TLB info is authoritative
+                        }
+                        # Attach the CoClass CLSID so callers can do Dispatch(clsid)
+                        coclass_clsid = iid_to_clsid.get(guid)
+                        if coclass_clsid:
+                            entry['coclass_clsid'] = coclass_clsid
+                        results.append(entry)
                         
                 elif kind == 5: # CoClass (The actual object class)
                     # CoClasses don't usually have methods directly, they implement interfaces
