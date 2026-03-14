@@ -692,6 +692,117 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     return f"GUI action '{action_type}' dispatched for '{Path(exe_path).name}'."
 
 
+def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
+    """Call a native DLL function via ctypes on this Windows VM."""
+    import ctypes
+
+    _RESTYPE = {
+        "void": None,
+        "bool": ctypes.c_bool,
+        "int": ctypes.c_int,
+        "unsigned": ctypes.c_uint,
+        "unsigned int": ctypes.c_uint,
+        "long": ctypes.c_long,
+        "unsigned long": ctypes.c_ulong,
+        "size_t": ctypes.c_size_t,
+        "float": ctypes.c_float,
+        "double": ctypes.c_double,
+        "char*": ctypes.c_char_p,
+        "const char*": ctypes.c_char_p,
+        "wchar_t*": ctypes.c_wchar_p,
+        "const wchar_t*": ctypes.c_wchar_p,
+    }
+    _ARGTYPE = {
+        "int": ctypes.c_int,
+        "unsigned": ctypes.c_uint,
+        "unsigned int": ctypes.c_uint,
+        "long": ctypes.c_long,
+        "unsigned long": ctypes.c_ulong,
+        "size_t": ctypes.c_size_t,
+        "float": ctypes.c_float,
+        "double": ctypes.c_double,
+        "bool": ctypes.c_bool,
+        "string": ctypes.c_char_p,
+        "str": ctypes.c_char_p,
+        "char*": ctypes.c_char_p,
+        "const char*": ctypes.c_char_p,
+        "wchar_t*": ctypes.c_wchar_p,
+        "const wchar_t*": ctypes.c_wchar_p,
+    }
+
+    dll_path  = _resolve_exe_path(execution.get("dll_path", ""))
+    func_name = execution.get("function_name", "")
+    if not dll_path or not func_name:
+        return "DLL call error: missing dll_path or function_name in execution config"
+
+    ret_str = (
+        inv.get("return_type")
+        or (inv.get("signature") or {}).get("return_type", "unknown")
+        or "unknown"
+    ).strip().lower()
+    restype = _RESTYPE.get(ret_str, ctypes.c_size_t)
+
+    params = list(inv.get("parameters") or [])
+    if not params:
+        sig_str = (inv.get("signature") or {}).get("parameters", "")
+        if sig_str:
+            for chunk in sig_str.split(","):
+                tokens = chunk.strip().split()
+                if len(tokens) >= 2:
+                    raw_type = " ".join(tokens[:-1]).lower().strip("*").rstrip()
+                    pname    = tokens[-1].lstrip("*")
+                    params.append({"name": pname, "type": raw_type})
+
+    # Special handling for functions that write into a buffer (e.g. GetWindowsDirectoryW)
+    buffer_params = {"lpBuffer", "lpszLongPath", "lpPathName", "lpszShortPath",
+                     "lpFilename", "lpszFileName", "lpText", "lpString"}
+
+    try:
+        lib = ctypes.WinDLL(dll_path)
+        fn  = getattr(lib, func_name)
+        fn.restype = restype
+
+        c_args = []
+        buf    = None  # track a wchar buffer if we allocate one
+
+        if params and args:
+            for p in params:
+                pname = p.get("name", "")
+                ptype = p.get("type", "string").lower().strip("*").rstrip()
+                val   = args.get(pname)
+                if val is None:
+                    continue
+                atype = _ARGTYPE.get(ptype, ctypes.c_char_p)
+                if atype in (ctypes.c_char_p,):
+                    c_args.append(ctypes.c_char_p(str(val).encode()))
+                elif atype == ctypes.c_wchar_p:
+                    c_args.append(ctypes.c_wchar_p(str(val)))
+                else:
+                    c_args.append(atype(int(val)))
+        elif not params:
+            # No declared params — but some functions need an output buffer.
+            # Detect by checking if the function name implies string output.
+            fn_lower = func_name.lower()
+            if any(kw in fn_lower for kw in ("getwindows", "getsystem", "gettemp",
+                                              "getcurrent", "getmodule", "getcomputer",
+                                              "getuser")):
+                buf = ctypes.create_unicode_buffer(32767)
+                c_args = [buf, ctypes.c_uint(32767)]
+                fn.restype = ctypes.c_uint
+
+        result = fn(*c_args)
+
+        if buf is not None:
+            return f"Returned: {buf.value}"
+        if restype == ctypes.c_char_p and isinstance(result, bytes):
+            return f"Returned: {result.decode(errors='replace')}"
+        if restype == ctypes.c_wchar_p and isinstance(result, str):
+            return f"Returned: {result}"
+        return f"Returned: {result}"
+    except Exception as exc:
+        return f"DLL call error: {exc}"
+
+
 @app.post("/execute")
 async def execute(
     body: ExecuteRequest,
@@ -708,6 +819,8 @@ async def execute(
     loop = asyncio.get_running_loop()
     if method == "gui_action":
         result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)
+    elif method == "dll_import":
+        result = await loop.run_in_executor(None, _execute_dll_bridge, inv, execution, args)
     else:
         result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
     return JSONResponse({"result": result})

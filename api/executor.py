@@ -298,13 +298,13 @@ def _execute_tool(inv: dict, args: dict) -> str:
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method    = execution.get("method", "")
 
-    if method == "dll_import":
-        return _execute_dll(inv, execution, args)
-    # GUI and CLI both need Windows — forward to the bridge when configured.
-    # When the bridge IS configured, never fall through to Linux: Windows paths
-    # don't exist in the Linux container and produce misleading [Errno 2] errors.
+    # All Windows-native methods (dll_import, gui_action, cli) must run on the
+    # Windows VM.  Forward to the bridge whenever it is configured; only fall
+    # back to local execution when the bridge is absent (e.g., dev on Windows).
     if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
         return _call_execute_bridge(inv, args) or "Bridge returned an empty result."
+    if method == "dll_import":
+        return _execute_dll(inv, execution, args)
     if method == "gui_action":
         return _execute_gui(execution, name, args)
     return _execute_cli(execution, name, args)
