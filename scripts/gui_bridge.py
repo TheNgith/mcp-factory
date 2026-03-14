@@ -285,17 +285,15 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
             for entry in tlb_results:
                 for method in entry.get("methods", []):
                     execution: dict = {
-                        "method":          "com_invoke",
-                        "dll_path":        str(target),
-                        "interface":       entry.get("name", ""),
-                        "interface_guid":  entry.get("guid", ""),
-                        "member":          method.get("name", ""),
+                        "method":           "com_invoke",
+                        "dll_path":         str(target),
+                        "interface":        entry.get("name", ""),
+                        "interface_guid":   entry.get("guid", ""),
+                        "member":           method.get("name", ""),
+                        # All CoClass CLSIDs in this TLB — tried in order at
+                        # execute time until one exposes the method.
+                        "coclass_candidates": entry.get("coclass_candidates", []),
                     }
-                    # Attach the CoClass CLSID when the TLB resolved it — this
-                    # allows _execute_com_bridge to Dispatch(clsid) directly
-                    # instead of doing a blind registry scan.
-                    if entry.get("coclass_clsid"):
-                        execution["clsid"] = entry["coclass_clsid"]
                     invocables.append({
                         "name":        method.get("name", "unknown"),
                         "source_type": "com",
@@ -902,34 +900,34 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     arg_values  = list(args.values())
     errors_seen: list[str] = []
 
-    # Path 1: direct CLSID dispatch (com_dispatch invocables from schema)
-    direct_clsid = execution.get("clsid") or inv.get("clsid")
-    if direct_clsid:
-        try:
-            obj = win32com.client.Dispatch(direct_clsid)
-            fn  = getattr(obj, member, None)
-            if fn is not None:
-                result = fn(*arg_values) if arg_values else fn()
-                return f"Returned: {result}"
-            # Property access (no-call)
-            prop = getattr(obj, member, None)
-            if prop is not None:
-                return f"Returned: {prop}"
-        except Exception as ex:
-            errors_seen.append(f"{direct_clsid}: {ex}")
-
-    # Path 2: scan registry by DLL name
+    # Build candidate list: TLB CoClasses first (targeted), then registry scan (fallback).
+    # TLB candidates come from coclass_candidates stored at analysis time — these are
+    # the CoClasses declared in the same type library as the interface, so at least one
+    # of them will expose the method via IDispatch even for TKIND_DISPATCH interfaces
+    # that don't encode their inheritance chain in cImplTypes (e.g. IShellDispatch*).
+    direct_clsid   = execution.get("clsid") or inv.get("clsid")
+    tlb_candidates = execution.get("coclass_candidates") or []
     dll_path = _resolve_exe_path(execution.get("dll_path", ""))
     dll_lc   = Path(dll_path).name.lower() if dll_path else ""
-    candidates = _get_com_candidates(dll_lc) if dll_lc else []
 
-    if not candidates and not direct_clsid:
+    # Deduplicated ordered candidate list: direct > TLB > registry
+    seen: set = set()
+    ordered_candidates: list = []
+    for c in ([direct_clsid] if direct_clsid else []) + tlb_candidates:
+        if c and c not in seen:
+            seen.add(c)
+            ordered_candidates.append(c)
+    # Only fall back to registry scan if TLB gave us nothing
+    if not ordered_candidates and dll_lc:
+        ordered_candidates = _get_com_candidates(dll_lc)
+
+    if not ordered_candidates:
         return (
-            f"COM invoke error: no CoClass registered for '{dll_lc}' "
-            f"and no CLSID in execution config. Cannot dispatch '{member}'."
+            f"COM invoke error: no CoClass candidates for '{dll_lc}' "
+            f"and no CLSID/TLB data in execution config. Cannot dispatch '{member}'."
         )
 
-    for clsid in candidates:
+    for clsid in ordered_candidates:
         try:
             obj = win32com.client.Dispatch(clsid)
             fn  = getattr(obj, member, None)
@@ -941,7 +939,7 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
             errors_seen.append(f"{clsid}: {ex}")
 
     return (
-        f"COM invoke error: none of {len(candidates)} CoClass candidate(s) "
+        f"COM invoke error: none of {len(ordered_candidates)} CoClass candidate(s) "
         f"for '{dll_lc}' expose '{member}'. "
         f"Errors: {'; '.join(errors_seen[:3])}"
     )

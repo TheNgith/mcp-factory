@@ -34,30 +34,20 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
         
         logger.info(f"Common Type Library found: {count} type infos")
         
-        # First pass: collect all CoClasses and build interface_guid → coclass_clsid map.
-        # A CoClass lists the interfaces it implements via GetImplTypeFlags/GetRefTypeInfo.
-        # This lets us resolve an interface IID to the CLSID you pass to Dispatch().
-        iid_to_clsid: Dict[str, str] = {}
-        coclass_info: Dict[str, Dict] = {}  # clsid → {name, guid}
+        # First pass: collect all CoClass CLSIDs from this TLB.
+        # TKIND_DISPATCH interfaces (kind=4) do not express inheritance via
+        # cImplTypes in the type library — e.g. IShellDispatch6 does NOT
+        # declare IShellDispatch as a base in the TLB, even though the live
+        # COM object exposes all accumulated methods via IDispatch.
+        # Strategy: attach every TLB CoClass CLSID to every interface entry
+        # so _execute_com_bridge can try each one with win32com.client.Dispatch.
+        all_coclass_clsids: List[str] = []
         for i in range(count):
             try:
                 ti   = tlb.GetTypeInfo(i)
                 attr = ti.GetTypeAttr()
-                if attr.typekind != 5:  # only CoClass
-                    continue
-                clsid = str(attr.iid)
-                doc   = tlb.GetDocumentation(i)
-                coclass_info[clsid] = {'name': doc[0], 'guid': clsid}
-                for j in range(attr.cImplTypes):
-                    try:
-                        flags  = ti.GetImplTypeFlags(j)
-                        ref_ti = ti.GetRefTypeInfo(ti.GetRefTypeOfImplType(j))
-                        iid    = str(ref_ti.GetTypeAttr().iid)
-                        # Prefer the default interface (flags & 1) but accept any
-                        if iid not in iid_to_clsid or (flags & 1):
-                            iid_to_clsid[iid] = clsid
-                    except Exception:
-                        pass
+                if attr.typekind == 5:  # TKIND_COCLASS
+                    all_coclass_clsids.append(str(attr.iid))
             except Exception:
                 pass
 
@@ -111,11 +101,10 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
                             'description': type_doc,
                             'methods': methods,
                             'confidence': 'guaranteed',  # TLB info is authoritative
+                            # All CoClass CLSIDs in this TLB — executor tries each
+                            # one until it finds the method via IDispatch.
+                            'coclass_candidates': list(all_coclass_clsids),
                         }
-                        # Attach the CoClass CLSID so callers can do Dispatch(clsid)
-                        coclass_clsid = iid_to_clsid.get(guid)
-                        if coclass_clsid:
-                            entry['coclass_clsid'] = coclass_clsid
                         results.append(entry)
                         
                 elif kind == 5: # CoClass (The actual object class)
