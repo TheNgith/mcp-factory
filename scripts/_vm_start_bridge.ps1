@@ -18,7 +18,7 @@ $BridgeUser = "azureuser"
 # never a port collision on restart or reboot.
 # It also runs `git pull` first so the bridge always runs the latest code
 # without any manual update step.
-$batContent = "@echo off`r`nset BRIDGE_SECRET=$Secret`r`nset BRIDGE_PORT=$Port`r`necho [bridge] Pulling latest code from GitHub...`r`ngit -C C:\mcp-factory pull origin main`r`nfor /f `"tokens=5`" %%a in ('netstat -ano ^| findstr :$Port ^| findstr LISTENING') do taskkill /PID %%a /F >nul 2>&1`r`ntimeout /t 2 /nobreak >nul`r`n`"$PythonExe`" `"$BridgePy`"`r`n"
+$batContent = "@echo off`r`nset BRIDGE_SECRET=$Secret`r`nset BRIDGE_PORT=$Port`r`necho [bridge] Syncing latest code from GitHub...`r`ngit -C C:\mcp-factory fetch origin`r`ngit -C C:\mcp-factory reset --hard origin/main`r`nfor /f `"tokens=5`" %%a in ('netstat -ano ^| findstr :$Port ^| findstr LISTENING') do taskkill /PID %%a /F >nul 2>&1`r`ntimeout /t 2 /nobreak >nul`r`n`"$PythonExe`" `"$BridgePy`"`r`n"
 [System.IO.File]::WriteAllText($WrapperBat, $batContent, [System.Text.Encoding]::ASCII)
 Write-Host "[OK] Launcher bat written: $WrapperBat"
 
