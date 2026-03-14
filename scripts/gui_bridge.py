@@ -875,30 +875,53 @@ def _get_com_candidates(dll_lc: str) -> list[str]:
 def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     """Invoke a COM method on an object hosted in the target DLL.
 
-    Finds every CoClass whose InprocServer32 matches the DLL (cached after
-    the first call per DLL), then tries win32com.client.Dispatch on each
-    until one exposes the requested method.  Returns the first successful
-    result, or an aggregated error message if none work.
+    Accepts both method="com_invoke" (legacy) and method="com_dispatch" (schema).
+    Resolution priority:
+      1. If execution has a 'clsid', dispatch it directly.
+      2. Otherwise scan the registry for CoClasses whose InprocServer32 matches
+         the dll_path, then try each one.
     """
     import win32com.client  # pywin32 – installed alongside pythoncom
 
-    dll_path = _resolve_exe_path(execution.get("dll_path", ""))
-    member   = execution.get("member", "")
+    # Schema uses 'function_name'; legacy invocables use 'member'.
+    member = (
+        execution.get("member")
+        or execution.get("function_name")
+        or inv.get("name", "")
+    )
 
     if not member:
         return "COM invoke error: no member/method specified in execution config"
 
-    dll_lc     = Path(dll_path).name.lower() if dll_path else ""
-    candidates = _get_com_candidates(dll_lc)
-
-    if not candidates:
-        return (
-            f"COM invoke error: no CoClass registered for '{dll_lc}'. "
-            f"Cannot dispatch '{member}'."
-        )
-
     arg_values  = list(args.values())
     errors_seen: list[str] = []
+
+    # Path 1: direct CLSID dispatch (com_dispatch invocables from schema)
+    direct_clsid = execution.get("clsid") or inv.get("clsid")
+    if direct_clsid:
+        try:
+            obj = win32com.client.Dispatch(direct_clsid)
+            fn  = getattr(obj, member, None)
+            if fn is not None:
+                result = fn(*arg_values) if arg_values else fn()
+                return f"Returned: {result}"
+            # Property access (no-call)
+            prop = getattr(obj, member, None)
+            if prop is not None:
+                return f"Returned: {prop}"
+        except Exception as ex:
+            errors_seen.append(f"{direct_clsid}: {ex}")
+
+    # Path 2: scan registry by DLL name
+    dll_path = _resolve_exe_path(execution.get("dll_path", ""))
+    dll_lc   = Path(dll_path).name.lower() if dll_path else ""
+    candidates = _get_com_candidates(dll_lc) if dll_lc else []
+
+    if not candidates and not direct_clsid:
+        return (
+            f"COM invoke error: no CoClass registered for '{dll_lc}' "
+            f"and no CLSID in execution config. Cannot dispatch '{member}'."
+        )
 
     for clsid in candidates:
         try:
@@ -1298,7 +1321,7 @@ async def execute(
         result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)
     elif method == "dll_import":
         result = await loop.run_in_executor(None, _execute_dll_bridge, inv, execution, args)
-    elif method == "com_invoke":
+    elif method in ("com_invoke", "com_dispatch"):
         result = await loop.run_in_executor(None, _execute_com_bridge, inv, execution, args)
     elif method == "dotnet_reflection":
         result = await loop.run_in_executor(None, _execute_dotnet_bridge, execution, name, args)
@@ -1309,6 +1332,19 @@ async def execute(
         result = await loop.run_in_executor(None, _execute_http_bridge, execution, name, args)
     elif method == "sql_exec":
         result = await loop.run_in_executor(None, _execute_sql_bridge, execution, name, args)
+    elif method == "rpc_call":
+        # RPC invocables require a running RPC server — execution not supported on bridge.
+        # Discovery-only: the model can describe the interface but cannot invoke remotely.
+        iface = execution.get("interface_uuid") or execution.get("endpoint") or name
+        result = f"RPC interface '{iface}' discovered. Remote invocation requires a live RPC endpoint; describe the interface parameters instead."
+    elif method in ("corba_iiop",):
+        # CORBA requires an ORB (omniORB, JacORB) — not available on this Windows bridge.
+        iface = execution.get("interface") or name
+        result = f"CORBA interface '{iface}' discovered. Invocation requires a CORBA ORB over IIOP; describe the interface operations instead."
+    elif method in ("jndi_lookup",):
+        # JNDI requires a running Java naming provider — not available on this Windows bridge.
+        lookup = execution.get("lookup_name") or name
+        result = f"JNDI binding '{lookup}' discovered. Invocation requires a running JNDI provider (LDAP/RMI/IIOP); describe the binding instead."
     else:  # cli / subprocess / anything else
         result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
     return JSONResponse({"result": result})
