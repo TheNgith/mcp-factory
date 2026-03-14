@@ -170,11 +170,17 @@ jobs:
       (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') &&
       (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     outputs:
       image-tag: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Upgrade Azure CLI
+        run: az upgrade --yes --all 2>/dev/null || pip install --upgrade azure-cli
 
       - name: Azure login (OIDC — no stored secrets)
         uses: azure/login@v2
@@ -210,9 +216,15 @@ jobs:
     name: Deploy to ACA
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     if: github.ref == 'refs/heads/main'
 
     steps:
+      - name: Upgrade Azure CLI
+        run: az upgrade --yes --all 2>/dev/null || pip install --upgrade azure-cli
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:

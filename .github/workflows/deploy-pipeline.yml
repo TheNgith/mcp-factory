@@ -47,10 +47,16 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Upgrade Azure CLI
+        run: az upgrade --yes --all 2>/dev/null || pip install --upgrade azure-cli
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
