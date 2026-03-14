@@ -230,7 +230,9 @@ def _get_bridge_client():
         _bridge_client = httpx.Client(
             base_url=GUI_BRIDGE_URL,
             headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            # read=90s: blocking COM dialogs (BrowseForFolder etc.) need user
+            # interaction before the method returns — 30s was too short.
+            timeout=httpx.Timeout(connect=5.0, read=90.0, write=10.0, pool=5.0),
             limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=120),
         )
     return _bridge_client

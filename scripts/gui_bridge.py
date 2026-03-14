@@ -897,7 +897,44 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     if not member:
         return "COM invoke error: no member/method specified in execution config"
 
-    arg_values  = list(args.values())
+    # Shell special-folder name → SHSpecialFolderID constant.
+    # IShellDispatch.NameSpace (and similar) accept an integer VARIANT for
+    # well-known folders; the model often supplies a friendly name instead.
+    _SHELL_FOLDER_CONSTANTS: dict[str, int] = {
+        "desktop": 0, "internet": 1, "programs": 2, "controls": 3,
+        "printers": 4, "personal": 5, "my documents": 5, "favorites": 6,
+        "startup": 7, "recent": 8, "sendto": 9, "bitbucket": 10,
+        "recycle bin": 10, "startmenu": 11, "start menu": 11,
+        "mydocuments": 5, "mymusic": 13, "my music": 13,
+        "myvideo": 14, "my video": 14, "desktopdirectory": 16,
+        "drives": 17, "my computer": 17, "mycomputer": 17, "network": 18,
+        "nethood": 19, "fonts": 20, "templates": 21, "appdata": 26,
+        "printhood": 27, "localappdata": 28, "windows": 36, "system": 37,
+        "programfiles": 38, "program files": 38, "mypictures": 39,
+        "my pictures": 39, "profile": 40, "systemx86": 41,
+        "programfilesx86": 42, "commonfiles": 43, "commonprograms": 46,
+        "commonstartmenu": 47, "commondesktop": 48, "commonappdata": 35,
+        "commontemplates": 45, "commondocuments": 46, "downloads": 374,
+    }
+
+    def _coerce_com_arg(v: object) -> object:
+        """Coerce a model-supplied string to int/float for COM VARIANT args."""
+        if not isinstance(v, str):
+            return v
+        lv = v.strip().lower()
+        if lv in _SHELL_FOLDER_CONSTANTS:
+            return _SHELL_FOLDER_CONSTANTS[lv]
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            pass
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            pass
+        return v
+
+    arg_values  = [_coerce_com_arg(v) for v in args.values()]
     errors_seen: list[str] = []
 
     # Build candidate list in priority order:
