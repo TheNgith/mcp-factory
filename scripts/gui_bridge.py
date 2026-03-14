@@ -116,7 +116,11 @@ def _check_auth(x_bridge_key: str) -> None:
 class AnalyzeRequest(BaseModel):
     path: str
     hints: str = ""
-    types: list[str] = ["gui", "com", "cli", "registry"]    # base64-encoded binary content (optional): lets the bridge analyze an
+    types: list[str] = [
+        "gui", "com", "cli", "registry",
+        "dotnet", "rpc",
+        "sql", "wsdl", "idl", "js", "script", "openapi", "jndi",
+    ]  # base64-encoded binary content (optional): lets the bridge analyze an
     # uploaded file whose Linux temp path doesn't exist on the Windows VM.
     content: str | None = None
 
@@ -146,6 +150,42 @@ def _import_cli():
 def _import_registry():
     from registry_analyzer import analyze_registry  # type: ignore
     return analyze_registry
+
+def _import_dotnet():
+    from dotnet_analyzer import get_dotnet_methods  # type: ignore
+    return get_dotnet_methods
+
+def _import_rpc():
+    from rpc_analyzer import analyze_rpc, rpc_to_invocables  # type: ignore
+    return analyze_rpc, rpc_to_invocables
+
+def _import_sql():
+    from sql_analyzer import analyze_sql  # type: ignore
+    return analyze_sql
+
+def _import_wsdl():
+    from wsdl_analyzer import analyze_wsdl  # type: ignore
+    return analyze_wsdl
+
+def _import_idl():
+    from idl_analyzer import analyze_idl  # type: ignore
+    return analyze_idl
+
+def _import_js():
+    from js_analyzer import analyze_js  # type: ignore
+    return analyze_js
+
+def _import_script():
+    from script_analyzer import analyze_script  # type: ignore
+    return analyze_script
+
+def _import_openapi():
+    from openapi_analyzer import analyze_openapi  # type: ignore
+    return analyze_openapi
+
+def _import_jndi():
+    from jndi_analyzer import analyze_jndi  # type: ignore
+    return analyze_jndi
 
 
 def _inv_to_dict(inv: Any) -> dict:
@@ -287,6 +327,108 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
         except Exception as exc:
             logger.warning("Registry analysis failed: %s", exc)
             errors["registry"] = str(exc)
+
+    # ── .NET reflection ──────────────────────────────────────────────────────
+    if not _aborted() and "dotnet" in requested and target.suffix.lower() in (".dll", ".exe"):
+        try:
+            get_dotnet_methods = _import_dotnet()
+            results = get_dotnet_methods(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info(".NET: %d methods from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning(".NET analysis failed: %s", exc)
+            errors["dotnet"] = str(exc)
+
+    # ── RPC interface detection ───────────────────────────────────────────────
+    if not _aborted() and "rpc" in requested and target.suffix.lower() in (".dll", ".exe"):
+        try:
+            analyze_rpc, rpc_to_invocables = _import_rpc()
+            rpc_result = analyze_rpc(target)
+            results = rpc_to_invocables(rpc_result, target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("RPC: %d interfaces from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("RPC analysis failed: %s", exc)
+            errors["rpc"] = str(exc)
+
+    # ── SQL source files ──────────────────────────────────────────────────────
+    if not _aborted() and "sql" in requested and target.suffix.lower() == ".sql":
+        try:
+            analyze_sql = _import_sql()
+            results = analyze_sql(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("SQL: %d objects from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("SQL analysis failed: %s", exc)
+            errors["sql"] = str(exc)
+
+    # ── WSDL / SOAP ───────────────────────────────────────────────────────────
+    if not _aborted() and "wsdl" in requested and target.suffix.lower() in (".wsdl", ".xml"):
+        try:
+            analyze_wsdl = _import_wsdl()
+            results = analyze_wsdl(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("WSDL: %d operations from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("WSDL analysis failed: %s", exc)
+            errors["wsdl"] = str(exc)
+
+    # ── CORBA IDL ─────────────────────────────────────────────────────────────
+    if not _aborted() and "idl" in requested and target.suffix.lower() == ".idl":
+        try:
+            analyze_idl = _import_idl()
+            results = analyze_idl(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("IDL: %d methods from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("IDL analysis failed: %s", exc)
+            errors["idl"] = str(exc)
+
+    # ── JavaScript / TypeScript ───────────────────────────────────────────────
+    if not _aborted() and "js" in requested and target.suffix.lower() in (".js", ".ts", ".mjs", ".cjs"):
+        try:
+            analyze_js = _import_js()
+            results = analyze_js(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("JS/TS: %d functions from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("JS/TS analysis failed: %s", exc)
+            errors["js"] = str(exc)
+
+    # ── Scripts (Python, PowerShell, Batch, VBS, Shell, Ruby, PHP) ───────────
+    _SCRIPT_EXTS = (".py", ".ps1", ".bat", ".cmd", ".vbs", ".sh", ".bash", ".rb", ".php")
+    if not _aborted() and "script" in requested and target.suffix.lower() in _SCRIPT_EXTS:
+        try:
+            analyze_script = _import_script()
+            results = analyze_script(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("Script: %d invocables from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("Script analysis failed: %s", exc)
+            errors["script"] = str(exc)
+
+    # ── OpenAPI / Swagger / JSON-RPC descriptors ──────────────────────────────
+    if not _aborted() and "openapi" in requested and target.suffix.lower() in (".yaml", ".yml", ".json"):
+        try:
+            analyze_openapi = _import_openapi()
+            results = analyze_openapi(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("OpenAPI: %d operations from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("OpenAPI analysis failed: %s", exc)
+            errors["openapi"] = str(exc)
+
+    # ── JNDI bindings ─────────────────────────────────────────────────────────
+    _JNDI_EXTS = (".properties", ".jndi", ".xml")
+    if not _aborted() and "jndi" in requested and target.suffix.lower() in _JNDI_EXTS:
+        try:
+            analyze_jndi = _import_jndi()
+            results = analyze_jndi(target)
+            invocables.extend(_inv_to_dict(i) for i in results)
+            logger.info("JNDI: %d bindings from %s", len(results), target.name)
+        except Exception as exc:
+            logger.warning("JNDI analysis failed: %s", exc)
+            errors["jndi"] = str(exc)
 
     # De-duplicate by name
     seen: set[str] = set()
@@ -776,6 +918,255 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
     )
 
 
+def _execute_script_bridge(execution: dict, name: str, args: dict) -> str:
+    """Execute a script-based invocable (Python, PowerShell, Node, Ruby, PHP, etc.).
+
+    Builds the appropriate interpreter command from the execution metadata
+    produced by schema.Invocable._get_execution_metadata() and runs it as a
+    subprocess.  Supports every method the schema defines for JIT languages.
+    """
+    method      = execution.get("method", "")
+    script_path = (
+        execution.get("script_path")
+        or execution.get("module_path")
+        or execution.get("example", "")  # fallback: parse from example
+    )
+    func_name   = execution.get("function_name", "") or execution.get("method_name", "")
+    arg_values  = list(args.values())
+
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    try:
+        if method == "python_subprocess":
+            # python -c "import importlib.util; spec=...; m.func(args)"
+            arg_repr = ", ".join(repr(v) for v in arg_values)
+            code = (
+                f"import importlib.util, sys; "
+                f"spec=importlib.util.spec_from_file_location('m', r'{script_path}'); "
+                f"m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+                f"print(m.{func_name}({arg_repr}))"
+            ) if func_name else (
+                f"exec(open(r'{script_path}').read())"
+            )
+            cmd = ["python", "-c", code]
+
+        elif method in ("node", "ts-node"):
+            interp = "ts-node" if method == "ts-node" else "node"
+            if func_name:
+                arg_repr = ", ".join(repr(v) for v in arg_values)
+                code = f"const m=require('{script_path}'); console.log(m.{func_name}({arg_repr}))"
+                cmd = [interp, "-e", code]
+            else:
+                cmd = [interp, script_path]
+
+        elif method == "powershell":
+            if func_name:
+                arg_str = " ".join(f'"{v}"' for v in arg_values)
+                cmd = [
+                    "powershell", "-NoProfile", "-NonInteractive",
+                    "-Command",
+                    f". '{script_path}'; {func_name} {arg_str}",
+                ]
+            else:
+                cmd = ["powershell", "-NoProfile", "-NonInteractive", "-File", script_path]
+
+        elif method == "cmd_call":
+            label = execution.get("label", func_name)
+            arg_str = " ".join(str(v) for v in arg_values)
+            cmd = ["cmd", "/c", f'call "{script_path}" :{label} {arg_str}'.strip()]
+
+        elif method in ("bash",):
+            if func_name:
+                arg_str = " ".join(f'"{v}"' for v in arg_values)
+                cmd = ["bash", "-c", f'source "{script_path}"; {func_name} {arg_str}']
+            else:
+                cmd = ["bash", script_path] + [str(v) for v in arg_values]
+
+        elif method == "ruby":
+            if func_name:
+                arg_repr = ", ".join(repr(v) for v in arg_values)
+                cmd = ["ruby", "-r", script_path, "-e", f"puts {func_name}({arg_repr})"]
+            else:
+                cmd = ["ruby", script_path] + [str(v) for v in arg_values]
+
+        elif method == "php":
+            if func_name:
+                arg_repr = ", ".join(f'"{v}"' for v in arg_values)
+                cmd = ["php", "-r", f"require '{script_path}'; echo {func_name}({arg_repr});"]
+            else:
+                cmd = ["php", script_path] + [str(v) for v in arg_values]
+
+        elif method == "cscript":
+            cmd = ["cscript", "//nologo", script_path] + [str(v) for v in arg_values]
+
+        elif method == "cmd":
+            cmd = ["cmd", "/c", script_path] + [str(v) for v in arg_values]
+
+        else:
+            return f"Script error: unsupported method '{method}'"
+
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=no_window,
+        )
+        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+
+    except FileNotFoundError as exc:
+        return f"Script error: interpreter not found — {exc}"
+    except subprocess.TimeoutExpired:
+        return "Script error: timed out after 30 s"
+    except Exception as exc:
+        return f"Script error: {exc}"
+
+
+def _execute_dotnet_bridge(execution: dict, name: str, args: dict) -> str:
+    """Invoke a .NET method on this Windows VM via PowerShell reflection."""
+    assembly  = execution.get("assembly_path", "")
+    type_name = execution.get("type_name", "")
+    func      = execution.get("function_name", name)
+    is_static = execution.get("is_static", False)
+
+    if not assembly:
+        return ".NET error: no assembly_path in execution config"
+
+    # Build argument list for PowerShell
+    ps_args = ", ".join(f'"{v}"' for v in args.values()) if args else ""
+
+    if is_static:
+        invoke_expr = f'[{type_name}]::{func}({ps_args})'
+        ps_script   = (
+            f"$asm = [System.Reflection.Assembly]::LoadFile('{assembly}'); "
+            f"$result = {invoke_expr}; "
+            f"Write-Output $result"
+        )
+    else:
+        ps_script = (
+            f"$asm = [System.Reflection.Assembly]::LoadFile('{assembly}'); "
+            f"$obj = [Activator]::CreateInstance($asm.GetType('{type_name}')); "
+            f"$result = $obj.{func}({ps_args}); "
+            f"Write-Output $result"
+        )
+
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return r.stdout.strip() or r.stderr.strip() or f"exit_code={r.returncode}"
+    except subprocess.TimeoutExpired:
+        return ".NET error: timed out after 30 s"
+    except Exception as exc:
+        return f".NET error: {exc}"
+
+
+def _execute_http_bridge(execution: dict, name: str, args: dict) -> str:
+    """Dispatch HTTP-based invocables: OpenAPI, JSON-RPC, SOAP.
+
+    Requires a 'base_url' key in the execution dict (populated at chat time
+    from the user-provided server URL), or falls back to a localhost default.
+    """
+    import json as _json
+    method = execution.get("method", "")
+
+    try:
+        import httpx as _httpx
+    except ImportError:
+        return "HTTP error: httpx not installed on the bridge VM"
+
+    base_url = execution.get("base_url", "http://localhost")
+
+    try:
+        if method == "http_request":
+            http_method = execution.get("http_method", "get").upper()
+            path        = execution.get("path", "/")
+            url         = base_url.rstrip("/") + "/" + path.lstrip("/")
+            resp = _httpx.request(http_method, url, json=args or None, timeout=15)
+            return resp.text or f"HTTP {resp.status_code}"
+
+        elif method == "jsonrpc":
+            url     = base_url.rstrip("/")
+            payload = {"jsonrpc": "2.0", "method": name, "params": list(args.values()), "id": 1}
+            resp    = _httpx.post(url, json=payload, timeout=15)
+            data    = resp.json()
+            if "error" in data:
+                return f"JSON-RPC error: {data['error']}"
+            return _json.dumps(data.get("result"), indent=2)
+
+        elif method == "soap":
+            url    = base_url.rstrip("/")
+            action = execution.get("action", name)
+            params_xml = "".join(
+                f"<{k}>{v}</{k}>" for k, v in args.items()
+            )
+            body = (
+                '<?xml version="1.0"?>'
+                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"'
+                ' xmlns:tns="urn:service">'
+                f'<soapenv:Body><tns:{action}>{params_xml}</tns:{action}></soapenv:Body>'
+                '</soapenv:Envelope>'
+            )
+            resp = _httpx.post(
+                url,
+                content=body.encode(),
+                headers={
+                    "Content-Type": "text/xml; charset=utf-8",
+                    "SOAPAction": f'"{action}"',
+                },
+                timeout=15,
+            )
+            return resp.text
+
+        else:
+            return f"HTTP error: unsupported method '{method}'"
+
+    except Exception as exc:
+        return f"HTTP error: {exc}"
+
+
+def _execute_sql_bridge(execution: dict, name: str, args: dict) -> str:
+    """Execute a SQL object (procedure, function, view, table) via sqlite3 subprocess.
+
+    For source .sql files the connection_required flag is always True, but
+    MCP Factory does not currently manage a live DB connection string.
+    This dispatcher handles SQLite (.db / .sqlite) targets directly; for
+    SQL Server / PostgreSQL it returns the parameterized statement so the
+    user can run it manually.
+    """
+    source_file = execution.get("source_file", "")
+    statement   = execution.get("statement", "")
+    obj_type    = execution.get("object_type", "")
+
+    # If source file is a SQLite DB, run directly
+    db_exts = {".db", ".sqlite", ".sqlite3"}
+    if source_file and Path(source_file).suffix.lower() in db_exts:
+        try:
+            r = subprocess.run(
+                ["sqlite3", source_file, statement],
+                capture_output=True, text=True, timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return r.stdout or r.stderr or f"exit_code={r.returncode}"
+        except FileNotFoundError:
+            pass  # sqlite3 CLI not in PATH, fall through to informational
+        except Exception as exc:
+            return f"SQL error: {exc}"
+
+    # Non-SQLite: return the parameterized statement for the user to execute
+    param_hints = "; ".join(f"{k}={v}" for k, v in args.items())
+    note = f"  -- params: {param_hints}" if param_hints else ""
+    return (
+        f"-- {obj_type.upper()} '{name}' discovered in {Path(source_file).name if source_file else 'unknown'}\n"
+        f"-- Execute against your target database:\n"
+        f"{statement}{note}"
+    )
+
+
 def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
     """Call a native DLL function via ctypes on this Windows VM."""
     import ctypes
@@ -909,7 +1300,16 @@ async def execute(
         result = await loop.run_in_executor(None, _execute_dll_bridge, inv, execution, args)
     elif method == "com_invoke":
         result = await loop.run_in_executor(None, _execute_com_bridge, inv, execution, args)
-    else:  # cli / anything else
+    elif method == "dotnet_reflection":
+        result = await loop.run_in_executor(None, _execute_dotnet_bridge, execution, name, args)
+    elif method in ("python_subprocess", "node", "ts-node", "powershell",
+                    "cmd_call", "bash", "ruby", "php", "cscript", "cmd"):
+        result = await loop.run_in_executor(None, _execute_script_bridge, execution, name, args)
+    elif method in ("http_request", "jsonrpc", "soap"):
+        result = await loop.run_in_executor(None, _execute_http_bridge, execution, name, args)
+    elif method == "sql_exec":
+        result = await loop.run_in_executor(None, _execute_sql_bridge, execution, name, args)
+    else:  # cli / subprocess / anything else
         result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
     return JSONResponse({"result": result})
 
