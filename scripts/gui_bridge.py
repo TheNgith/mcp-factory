@@ -485,23 +485,30 @@ async def analyze(
 
     tmp_dir: Path | None = None
 
+    # Persistent upload directory — binaries written here survive after analysis
+    # so that /execute calls can still load them via ctypes/subprocess.
+    # Using a fixed path (not tempfile) means the dll_path stored in invocables
+    # remains valid across the full analyze → chat → execute lifecycle.
+    _UPLOAD_DIR = Path(r"C:\mcp-factory\uploads")
+    _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
     if body.content:
-        # The pipeline sent base64-encoded file bytes — decode to a temp file.
+        # The pipeline sent base64-encoded file bytes — decode to a persistent file.
         # This handles uploaded binaries whose Linux temp path doesn't exist on Windows.
         try:
             import shutil
-            tmp_dir = Path(tempfile.mkdtemp(prefix="bridge_"))
-            target  = tmp_dir / Path(body.path).name
+            filename = Path(body.path).name
+            target   = _UPLOAD_DIR / filename
             target.write_bytes(base64.b64decode(body.content))
             logger.info(
                 "Decoded uploaded binary to %s (%d bytes)",
                 target, target.stat().st_size,
             )
-            # Prefer the real system-path binary for GUI analysis — temp copies
+            # Prefer the real system-path binary for GUI analysis — persistent copies
             # of UWP/MSIX stubs (e.g. calc.exe) can't trigger package activation
-            # from arbitrary temp directories.  Search system paths directly by
+            # from arbitrary directories.  Search system paths directly by
             # filename instead of using _resolve_exe_path(), which short-circuits
-            # when the temp file itself already exists on disk.
+            # when the persistent file itself already exists on disk.
             _sys_paths = [
                 Path(r"C:\Windows\System32") / target.name,
                 Path(r"C:\Windows") / target.name,
@@ -511,13 +518,8 @@ async def analyze(
             ]
             for _sys_candidate in _sys_paths:
                 if _sys_candidate.exists() and _sys_candidate.resolve() != target.resolve():
-                    logger.info("Using system path %s for analysis instead of temp copy", _sys_candidate)
+                    logger.info("Using system path %s for analysis instead of upload copy", _sys_candidate)
                     target = _sys_candidate
-                    try:
-                        shutil.rmtree(tmp_dir, ignore_errors=True)
-                    except Exception:
-                        pass
-                    tmp_dir = None
                     break
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Could not decode content: {exc}")
@@ -607,6 +609,9 @@ async def analyze(
                 if _active_kill_event is kill_event:
                     _active_kill_event = None
                     _active_target_stem = None
+            # NOTE: uploaded binaries are now kept in C:\mcp-factory\uploads\
+            # (not a temp dir) so they remain accessible for /execute calls.
+            # tmp_dir is always None post-refactor; this guard is kept for safety.
             if tmp_dir is not None:
                 try:
                     import shutil
@@ -638,6 +643,7 @@ def _resolve_exe_path(path: str) -> str:
         return str(p)
     filename = p.name
     for candidate in [
+        Path(r"C:\mcp-factory\uploads") / filename,
         Path(r"C:\Windows\System32") / filename,
         Path(r"C:\Windows") / filename,
         Path(r"C:\Windows\SysWOW64") / filename,
