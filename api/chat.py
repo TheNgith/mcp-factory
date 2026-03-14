@@ -40,6 +40,47 @@ logger = logging.getLogger("mcp_factory.api")
 _CONTEXT_WINDOW_TURNS = 20
 
 
+def _keyword_filter_tools(query: str, tools: list, top_k: int) -> list:
+    """Score tools by keyword overlap with query; return up to top_k.
+
+    Used as a zero-cost fallback when the semantic embedding cache is cold
+    (container restart, no Azure AI Search, embed_and_index failure).
+    Exact tool-name matches score highest so that direct requests like
+    'Use IsBrowsable' always surface the right tool.
+    """
+    q_lower = query.lower()
+    words = [w.strip("\"'().,;:!?") for w in q_lower.split() if len(w) > 2]
+
+    scored: list[tuple[float, dict]] = []
+    for t in tools:
+        fn   = t.get("function", {})
+        name = fn.get("name", "").lower()
+        desc = (fn.get("description", "") or "").lower()
+        score = 0.0
+        for w in words:
+            if w == name:
+                score += 10.0       # exact name match — highest weight
+            elif w in name:
+                score += 4.0        # partial name match
+            elif w in desc:
+                score += 1.0        # description mention
+        if score > 0:
+            scored.append((score, t))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    result = [t for _, t in scored[:top_k]]
+
+    # Pad with first tools if we don't have enough keyword matches
+    if len(result) < top_k:
+        seen = {t.get("function", {}).get("name") for t in result}
+        for t in tools:
+            if len(result) >= top_k:
+                break
+            if t.get("function", {}).get("name") not in seen:
+                result.append(t)
+    return result
+
+
 def _sse(event: dict) -> str:
     """Format a dict as a single SSE data line."""
     return f"data: {json.dumps(event)}\n\n"
@@ -141,14 +182,14 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         job_id, len(_active_tools), len(tools),
                     )
                 else:
-                    _active_tools = tools[:_AI_SEARCH_TOP_K]
+                    _active_tools = _keyword_filter_tools(_last_user_message, tools, _AI_SEARCH_TOP_K)
                     logger.warning(
-                        "[%s] stream_chat: semantic retrieval empty; truncating %d→%d",
+                        "[%s] stream_chat: semantic empty; keyword fallback %d→%d",
                         job_id, len(tools), _AI_SEARCH_TOP_K,
                     )
             except Exception as _se:
                 logger.warning("[%s] stream_chat: semantic retrieval failed: %s", job_id, _se)
-                _active_tools = tools[:_AI_SEARCH_TOP_K]
+                _active_tools = _keyword_filter_tools(_last_user_message, tools, _AI_SEARCH_TOP_K)
 
         for _round in range(MAX_TOOL_ROUNDS):
             # ── Per-round semantic re-selection ────────────────────────────
@@ -171,13 +212,15 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         _active_tools = [t for t in _semantic_tools
                                          if t.get("function", {}).get("name") not in _called_launchers]
                     else:
-                        _active_tools = [t for t in tools[:_AI_SEARCH_TOP_K]
+                        _kw = _keyword_filter_tools(_rolling_query, tools, _AI_SEARCH_TOP_K)
+                        _active_tools = [t for t in _kw
                                          if t.get("function", {}).get("name") not in _called_launchers]
                 except Exception as _re:
                     logger.warning(
                         "[%s] stream_chat: semantic refresh failed round %d: %s", job_id, _round, _re
                     )
-                    _active_tools = [t for t in _active_tools
+                    _kw = _keyword_filter_tools(_rolling_query, tools, _AI_SEARCH_TOP_K)
+                    _active_tools = [t for t in _kw
                                      if t.get("function", {}).get("name") not in _called_launchers]
             elif _called_launchers:
                 # Exclude already-fired launcher tools so the model can't re-launch.
