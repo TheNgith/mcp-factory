@@ -46,7 +46,6 @@ def _sse(event: dict) -> str:
 
 
 def _build_system_message(invocables: list) -> dict:
-    tool_names = ", ".join(inv["name"] for inv in invocables) if invocables else "the available tools"
     return {
         "role": "system",
         "content": (
@@ -62,7 +61,7 @@ def _build_system_message(invocables: list) -> dict:
             "3. Never launch an application that is already open — call the launch tool only once per session.\n"
             "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
-            "You have access to these tools: " + tool_names + "."
+            "Use only the tools provided in this session."
         ),
     }
 
@@ -89,8 +88,6 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         return
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
-    if job_id and invocables:
-        _register_invocables(job_id, invocables)
 
     MAX_TOOL_ROUNDS = 10
     _last_call_signature = ""
@@ -113,6 +110,16 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
     loop = asyncio.get_event_loop()
 
+    # Only re-register (and re-upload to blob) when the server doesn't already
+    # have this job's invocables in memory.  The UI re-sends the full list on
+    # every message (~2 MB for 1000 tools), so skipping this on subsequent
+    # turns avoids a redundant 2 MB blob upload that would block the async
+    # generator before the first SSE event is yielded.
+    if job_id and invocables:
+        from api.storage import _JOB_INVOCABLE_MAPS as _jimap  # type: ignore
+        if job_id not in _jimap:
+            loop.run_in_executor(None, _register_invocables, job_id, invocables)
+
     try:
         client = _openai_client()
 
@@ -123,7 +130,10 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         if len(tools) > _AI_SEARCH_TOP_K and job_id and _last_user_message:
             try:
                 from search import retrieve_tools as _retrieve_tools  # type: ignore
-                _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
+                _semantic_tools = await loop.run_in_executor(
+                    None,
+                    lambda: _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K),
+                )
                 if _semantic_tools:
                     _active_tools = _semantic_tools
                     logger.info(
@@ -153,7 +163,10 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         break
                 try:
                     from search import retrieve_tools as _retrieve_tools  # type: ignore
-                    _semantic_tools = _retrieve_tools(job_id, _rolling_query, client, top_k=_AI_SEARCH_TOP_K)
+                    _semantic_tools = await loop.run_in_executor(
+                        None,
+                        lambda q=_rolling_query: _retrieve_tools(job_id, q, client, top_k=_AI_SEARCH_TOP_K),
+                    )
                     if _semantic_tools:
                         _active_tools = [t for t in _semantic_tools
                                          if t.get("function", {}).get("name") not in _called_launchers]
@@ -182,6 +195,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
             # Run the blocking OpenAI call in a thread so the event loop stays
             # free to flush already-yielded SSE events to the client.
+            _OPENAI_HARD_TIMEOUT = 120  # seconds before we give up and surface an error
             _openai_t0 = time.perf_counter()
             _openai_future = loop.run_in_executor(
                 None,
@@ -192,6 +206,9 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     response = await asyncio.wait_for(asyncio.shield(_openai_future), timeout=5.0)
                     break
                 except asyncio.TimeoutError:
+                    if time.perf_counter() - _openai_t0 > _OPENAI_HARD_TIMEOUT:
+                        yield _sse({"type": "error", "message": "Model took too long to respond — try again."})
+                        return
                     yield _sse({
                         "type": "status",
                         "stage": "openai",
@@ -295,6 +312,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 if inv is not None:
                     # Tool execution can be slow (pywinauto, GUI interaction) —
                     # run in executor so the SSE response stays live.
+                    _TOOL_HARD_TIMEOUT = 30  # seconds; DLL/COM/GUI calls can hang
                     _tool_t0 = time.perf_counter()
                     _tool_future = loop.run_in_executor(
                         None, lambda i=inv, a=fn_args: _execute_tool(i, a)
@@ -306,6 +324,9 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                             )
                             break
                         except asyncio.TimeoutError:
+                            if time.perf_counter() - _tool_t0 > _TOOL_HARD_TIMEOUT:
+                                tool_result = f"Tool '{fn_name}' timed out after {_TOOL_HARD_TIMEOUT}s — the call may have hung (COM/DLL deadlock or blocking dialog)."
+                                break
                             yield _sse({
                                 "type": "status",
                                 "stage": "tool",
