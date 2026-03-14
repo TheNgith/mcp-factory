@@ -753,9 +753,13 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                     pname    = tokens[-1].lstrip("*")
                     params.append({"name": pname, "type": raw_type})
 
-    # Special handling for functions that write into a buffer (e.g. GetWindowsDirectoryW)
-    buffer_params = {"lpBuffer", "lpszLongPath", "lpPathName", "lpszShortPath",
-                     "lpFilename", "lpszFileName", "lpText", "lpString"}
+    # Wide-string output buffer functions: only allocate a buffer when the
+    # function name ends with W AND a path/dir/name suffix.  Avoids wrongly
+    # passing buffer args to zero-arg functions like GetCurrentProcessId.
+    _BUFFER_SUFFIXES = (
+        "directoryw", "pathw", "filenamew", "namew", "pathnamew",
+        "longpathw", "shortpathw", "folderw", "volumew",
+    )
 
     try:
         lib = ctypes.WinDLL(dll_path)
@@ -780,12 +784,10 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                 else:
                     c_args.append(atype(int(val)))
         elif not params:
-            # No declared params — but some functions need an output buffer.
-            # Detect by checking if the function name implies string output.
+            # No declared params — allocate a wchar output buffer only for
+            # well-known wide-string output functions (name ends with W + keyword).
             fn_lower = func_name.lower()
-            if any(kw in fn_lower for kw in ("getwindows", "getsystem", "gettemp",
-                                              "getcurrent", "getmodule", "getcomputer",
-                                              "getuser")):
+            if any(fn_lower.endswith(sfx) for sfx in _BUFFER_SUFFIXES):
                 buf = ctypes.create_unicode_buffer(32767)
                 c_args = [buf, ctypes.c_uint(32767)]
                 fn.restype = ctypes.c_uint
