@@ -425,6 +425,8 @@ _RB_METHOD_RE = re.compile(
     re.MULTILINE,
 )
 _RB_COMMENT_RE = re.compile(r'^#\s*(.+)', re.MULTILINE)
+# YARD-style: "@param name [Type] description"
+_RB_YARD_PARAM_RE = re.compile(r'@param\s+(\w+)\s*(?:\[([^\]]+)\])?')
 
 
 def _analyze_ruby(path: Path) -> List[Invocable]:
@@ -443,13 +445,31 @@ def _analyze_ruby(path: Path) -> List[Invocable]:
         seen.add(name)
 
         raw_params = (m.group('params') or '').strip()
-        params = ', '.join(p.strip() for p in raw_params.split(',') if p.strip())
+        sig_params = [p.strip() for p in raw_params.split(',') if p.strip()]
 
         preamble = source[max(0, m.start() - 300):m.start()]
         comment_lines = re.findall(r'^#\s*(.+)', preamble, re.MULTILINE)
         doc = ' '.join(comment_lines[-2:]).strip() if comment_lines else ''
 
-        sig = f"{name}({params})"
+        # Parse YARD @param tags to get named+typed params
+        yard_types: dict = {}
+        for cl in comment_lines:
+            ym = _RB_YARD_PARAM_RE.search(cl)
+            if ym:
+                yard_types[ym.group(1)] = (ym.group(2) or 'object').strip()
+
+        if yard_types:
+            # Annotate each signature param with its YARD type
+            params = ', '.join(
+                f"{p}: {yard_types.get(p, 'object')}"
+                for p in sig_params
+            )
+        else:
+            # No YARD docs — prefix with "object" so _parse_single_parameter's
+            # C-style rule (last token = name) extracts the correct param name
+            params = ', '.join(f"object {p}" for p in sig_params)
+
+        sig = f"{name}({', '.join(sig_params)})"
         confidence = 'high' if doc and params else ('medium' if doc or params else 'low')
 
         invocables.append(Invocable(
@@ -496,9 +516,9 @@ def _analyze_php(path: Path) -> List[Invocable]:
         seen.add(name)
 
         raw_params = (m.group('params') or '').strip()
-        # Clean PHP $var notation
+        # Clean PHP $var notation: strip default values then remove $ sigils
         params = ', '.join(
-            re.sub(r'\s*=\s*\S+', '', p).strip()
+            re.sub(r'\$', '', re.sub(r'\s*=\s*\S+', '', p)).strip()
             for p in raw_params.split(',') if p.strip()
         )
         rettype = (m.group('rettype') or '').strip()

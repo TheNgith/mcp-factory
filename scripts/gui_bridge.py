@@ -1183,6 +1183,24 @@ def _execute_script_bridge(execution: dict, name: str, args: dict) -> str:
 
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+    # If the stored path is a Linux /tmp path that doesn't exist on this Windows
+    # host, materialise the embedded script_content into a local temp file.
+    _tmp_path: "str | None" = None
+    script_content = execution.get("script_content")
+    if script_path and not Path(script_path).exists() and script_content:
+        suffix = Path(script_path).suffix or ".tmp"
+        fd, _tmp_path = tempfile.mkstemp(suffix=suffix)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as _f:
+                _f.write(script_content)
+            script_path = _tmp_path
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            _tmp_path = None
+
     try:
         if method == "python_subprocess":
             # python -c "import importlib.util; spec=...; m.func(args)"
@@ -1267,6 +1285,12 @@ def _execute_script_bridge(execution: dict, name: str, args: dict) -> str:
         return "Script error: timed out after 30 s"
     except Exception as exc:
         return f"Script error: {exc}"
+    finally:
+        if _tmp_path:
+            try:
+                os.unlink(_tmp_path)
+            except OSError:
+                pass
 
 
 def _execute_dotnet_bridge(execution: dict, name: str, args: dict) -> str:

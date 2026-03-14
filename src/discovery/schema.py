@@ -337,10 +337,17 @@ class Invocable:
             }
 
         elif self.source_type == "powershell_function":
+            _script_content: Optional[str] = None
+            if self.dll_path:
+                try:
+                    _script_content = Path(self.dll_path).read_text(encoding='utf-8', errors='replace')
+                except OSError:
+                    pass
             return {
                 "method": "powershell",
                 "script_path": self.dll_path,
                 "function_name": self.name,
+                "script_content": _script_content,
                 "example": f"powershell -NoProfile -File \"{self.dll_path}\" # then call {self.name}",
             }
 
