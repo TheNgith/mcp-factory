@@ -184,7 +184,26 @@ def run_chat(body: dict[str, Any]) -> dict[str, Any]:
                 kwargs["tools"] = _active_tools
                 kwargs["tool_choice"] = "auto"
 
-            response = client.chat.completions.create(**kwargs)
+            # Retry on 429 rate-limit with exponential backoff (S0 tier TPM cap)
+            _max_retries = 4
+            _backoff = 10  # seconds
+            for _attempt in range(_max_retries):
+                try:
+                    response = client.chat.completions.create(**kwargs)
+                    break
+                except Exception as _exc:
+                    _is_429 = ("429" in str(_exc) or "RateLimitReached" in str(_exc)
+                               or "rate limit" in str(_exc).lower())
+                    if _is_429 and _attempt < _max_retries - 1:
+                        _wait = _backoff * (2 ** _attempt)
+                        logger.warning(
+                            "[chat] 429 rate limit on attempt %d/%d — waiting %ds",
+                            _attempt + 1, _max_retries, _wait,
+                        )
+                        import time as _time
+                        _time.sleep(_wait)
+                    else:
+                        raise
             msg = response.choices[0].message
 
             # No tool calls → final answer

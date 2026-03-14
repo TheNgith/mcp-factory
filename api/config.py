@@ -25,7 +25,7 @@ MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity client
 # Semantic selection already picks the top-k most relevant tools, so 20 is
 # plenty for any single question while being ~6× cheaper than the old 128
 # ceiling.  Raise via env var if you need more for a specific deployment.
-OPENAI_MAX_TOOLS  = int(os.getenv("OPENAI_MAX_TOOLS", "20"))
+OPENAI_MAX_TOOLS  = int(os.getenv("OPENAI_MAX_TOOLS", "8"))
 
 # ── Windows GUI bridge (optional) ─────────────────────────────────────────
 # Set GUI_BRIDGE_URL to the Windows runner VM's bridge address, e.g.:
