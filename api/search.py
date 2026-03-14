@@ -391,10 +391,12 @@ def _build_functions(invocables: list[dict]) -> list[dict]:
             or inv.get("signature")
             or inv["name"]
         )
+        import re as _re
+        safe_name = _re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
         fns.append({
             "type": "function",
             "function": {
-                "name": inv["name"],
+                "name": safe_name,
                 "description": desc,
                 "parameters": {
                     "type": "object",

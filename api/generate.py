@@ -65,9 +65,9 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             or inv["name"]
         )
 
-        # OpenAI requires function names matching ^[a-zA-Z0-9_\.-]+$
-        # Replace any disallowed character (e.g. '/' in JNDI EJB names) with '_'
-        safe_name = re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])
+        # OpenAI requires function names matching ^[a-zA-Z0-9_\.-]+$ and ≤ 64 chars.
+        # Replace any disallowed character then truncate.
+        safe_name = re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
 
         tools.append({
             "type": "function",
