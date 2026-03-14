@@ -22,11 +22,11 @@ OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
 # Maximum number of tool definitions sent in a single OpenAI API call.
-# Semantic selection picks the top-k most relevant tools, so 20 is plenty
-# for any single question while keeping tool-schema tokens well under 5 % of
-# GPT-4o's 128 k context (≈ 100 tokens/schema × 20 = 2 k tokens).
-# Raise via env var if a deployment needs broader tool coverage.
-OPENAI_MAX_TOOLS  = int(os.getenv("OPENAI_MAX_TOOLS", "20"))
+# When total tools <= OPENAI_MAX_TOOLS the full set is sent with no filtering.
+# Default is 60: enough to cover calc (38), notepad (~20), and most DLLs
+# without hitting OpenAI's 128-tool hard cap or blowing the context budget.
+# Raise via env var for large DLLs (shell32 has 35 TLB methods + registry).
+OPENAI_MAX_TOOLS  = int(os.getenv("OPENAI_MAX_TOOLS", "60"))
 
 # ── Windows GUI bridge (optional) ─────────────────────────────────────────
 # Set GUI_BRIDGE_URL to the Windows runner VM's bridge address, e.g.:
