@@ -81,7 +81,19 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
                             # This is the most reliable way to get readable signatures
                             names = type_info.GetNames(func_desc.memid)
                             func_name = names[0]
-                            params = names[1:]
+                            param_names = names[1:]
+
+                            # Emit params as dicts so downstream consumers
+                            # (generate.py, gui_bridge.py) get name/type/description
+                            # without needing a re-parse step.
+                            params = [
+                                {
+                                    "name": n,
+                                    "type": "variant",
+                                    "description": f"COM VARIANT parameter {n}",
+                                }
+                                for n in param_names
+                            ]
                             
                             methods.append({
                                 'name': func_name,
@@ -130,7 +142,12 @@ def scan_type_library(dll_path: Path) -> List[Dict[str, Any]]:
          
     return results
 
-def format_tlb_signature(method_name: str, params: List[str]) -> str:
-    """Format a display string for a TLB method."""
-    param_str = ", ".join(params)
+def format_tlb_signature(method_name: str, params: List) -> str:
+    """Format a display string for a TLB method.
+
+    params may be a list of strings (legacy) or a list of dicts with a
+    'name' key (current format from scan_type_library).
+    """
+    names = [p["name"] if isinstance(p, dict) else p for p in params]
+    param_str = ", ".join(names)
     return f"HRESULT {method_name}({param_str})"

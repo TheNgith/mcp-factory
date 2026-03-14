@@ -136,13 +136,16 @@ def com_objects_to_invocables(com_objects: List[Dict], dll_path: Optional[Path] 
             # For interfaces, create invocables for each method
             if item['kind'] in ('interface', 'dispatch'):
                 for method in item.get('methods', []):
-                    # Signature formatting
-                    sig_str = format_tlb_signature(method['name'], method['parameters'])
-                    
-                    # Create param string for schema
-                    # TLB params match [name, name, ...] but we lack types in this basic extractor
-                    # We can assume variants or pointers.
-                    param_str = ", ".join([f"VARIANT {p}" for p in method['parameters']])
+                    # Signature formatting — params may be dicts or plain strings
+                    _param_names = [
+                        p["name"] if isinstance(p, dict) else p
+                        for p in method["parameters"]
+                    ]
+                    sig_str = format_tlb_signature(method['name'], _param_names)
+
+                    # Build a C-style parameter string for Invocable (which parses
+                    # it back into name+type dicts via _parse_parameters_to_list).
+                    param_str = ", ".join([f"VARIANT {n}" for n in _param_names])
                     
                     inv = Invocable(
                         name=f"{item_name}::{method['name']}", # Namespaced name

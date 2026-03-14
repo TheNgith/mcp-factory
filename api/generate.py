@@ -47,6 +47,9 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_params, str):
             raw_params = []
         for p in raw_params:
+            # Normalize: plain strings (legacy TLB output) become minimal dicts.
+            if isinstance(p, str):
+                p = {"name": p, "type": "string", "description": f"Parameter {p}"}
             if not isinstance(p, dict):
                 continue
             pname = p.get("name", "arg")
