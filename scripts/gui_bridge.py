@@ -923,42 +923,70 @@ def _com_call_with_auto_dismiss(fn, arg_values: list, dialog_timeout: float = 20
 def _auto_dismiss_com_dialog(timeout: float = 20.0) -> str | None:
     """Poll the desktop for a modal dialog and click its primary accept button.
 
-    Tries both win32 and uia backends.  Recognises common accept-button labels
-    so it works for BrowseForFolder, file-open pickers, message boxes, etc.
+    Uses win32gui directly (EnumWindows + EnumChildWindows) so it works
+    regardless of pywinauto backend quirks.  Recognises common accept-button
+    labels for BrowseForFolder, file-open pickers, message boxes, etc.
     Returns a description of what was clicked, or None if nothing was found.
     """
     import time as _time
+    import win32gui
+    import win32con
 
-    _OK_LABELS = ["OK", "Select Folder", "Open", "Accept", "Yes", "Select", "Choose"]
+    _OK_LABELS = {"OK", "Select Folder", "Open", "Accept", "Yes", "Select", "Choose"}
+    _clicked: list = []
+
+    def _try_click_ok(dialog_hwnd: int, dialog_title: str) -> bool:
+        """Return True if an accept button was found and clicked."""
+        result: list = [False]
+
+        def _enum_children(child_hwnd, _param):
+            if result[0]:
+                return  # already clicked
+            try:
+                cls  = win32gui.GetClassName(child_hwnd)
+                text = win32gui.GetWindowText(child_hwnd)
+                if cls == "Button" and text in _OK_LABELS:
+                    if win32gui.IsWindowVisible(child_hwnd) and win32gui.IsWindowEnabled(child_hwnd):
+                        # BM_CLICK is the most reliable way to press a button
+                        # without needing to move the mouse cursor.
+                        win32gui.SendMessage(child_hwnd, win32con.BM_CLICK, 0, 0)
+                        logger.info(
+                            "Auto-dismissed dialog '%s' via button '%s'",
+                            dialog_title, text,
+                        )
+                        _clicked.append(f"dialog '{dialog_title}' dismissed via '{text}'")
+                        result[0] = True
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumChildWindows(dialog_hwnd, _enum_children, None)
+        except Exception:
+            pass
+        return result[0]
+
     deadline = _time.monotonic() + timeout
 
     while _time.monotonic() < deadline:
-        _time.sleep(0.4)
-        for backend in ("win32", "uia"):
+        _time.sleep(0.3)
+
+        top_windows: list[tuple[int, str]] = []
+
+        def _enum_top(hwnd, _param):
             try:
-                from pywinauto import Desktop as _Desktop
-                desktop = _Desktop(backend=backend)
-                for win in desktop.windows():
-                    try:
-                        if not win.is_visible():
-                            continue
-                        title = win.window_text()
-                        for label in _OK_LABELS:
-                            try:
-                                btn = win.child_window(title=label, control_type="Button")
-                                if btn.exists(timeout=0) and btn.is_visible():
-                                    btn.click_input()
-                                    logger.info(
-                                        "Auto-dismissed dialog '%s' via button '%s'",
-                                        title, label,
-                                    )
-                                    return f"dialog '{title}' dismissed via '{label}'"
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                if win32gui.IsWindowVisible(hwnd):
+                    top_windows.append((hwnd, win32gui.GetWindowText(hwnd)))
             except Exception:
                 pass
+
+        try:
+            win32gui.EnumWindows(_enum_top, None)
+        except Exception:
+            continue
+
+        for hwnd, title in top_windows:
+            if _try_click_ok(hwnd, title):
+                return _clicked[-1]
 
     logger.warning("Auto-dismiss: no clickable dialog found within %.0f s", timeout)
     return None
