@@ -254,10 +254,11 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
                         "parameters":  method.get("parameters", []),
                         "return_type": method.get("return_type", ""),
                         "execution": {
-                            "method":   "com_invoke",
-                            "dll_path": str(target),
-                            "interface": entry.get("name", ""),
-                            "member":   method.get("name", ""),
+                            "method":          "com_invoke",
+                            "dll_path":        str(target),
+                            "interface":       entry.get("name", ""),
+                            "interface_guid":  entry.get("guid", ""),
+                            "member":          method.get("name", ""),
                         },
                     })
             logger.info("COM/TLB: %d methods from %s", len(tlb_results), target.name)
@@ -692,6 +693,89 @@ def _execute_gui_bridge(execution: dict, name: str, args: dict) -> str:
     return f"GUI action '{action_type}' dispatched for '{Path(exe_path).name}'."
 
 
+# ── COM CLSID candidate cache ──────────────────────────────────────────────
+_COM_CLSID_CACHE: dict[str, list[str]] = {}  # dll_name_lower → [clsid, ...]
+_MAX_COM_CANDIDATES = 25  # cap per-DLL to avoid iterating all 10 k+ CLSIDs
+
+
+def _get_com_candidates(dll_lc: str) -> list[str]:
+    """Return CLSIDs (strings) whose InprocServer32 DLL name matches dll_lc.
+
+    Results are cached after the first call so subsequent tool invocations
+    on the same DLL are instant.
+    """
+    if dll_lc in _COM_CLSID_CACHE:
+        return _COM_CLSID_CACHE[dll_lc]
+    import winreg
+    found: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "CLSID") as root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                if len(found) >= _MAX_COM_CANDIDATES:
+                    break
+                try:
+                    clsid = winreg.EnumKey(root, i)
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(root, f"{clsid}\\InprocServer32") as sk:
+                        srv, _ = winreg.QueryValueEx(sk, "")
+                    if dll_lc in srv.lower():
+                        found.append(clsid)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    _COM_CLSID_CACHE[dll_lc] = found
+    return found
+
+
+def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
+    """Invoke a COM method on an object hosted in the target DLL.
+
+    Finds every CoClass whose InprocServer32 matches the DLL (cached after
+    the first call per DLL), then tries win32com.client.Dispatch on each
+    until one exposes the requested method.  Returns the first successful
+    result, or an aggregated error message if none work.
+    """
+    import win32com.client  # pywin32 – installed alongside pythoncom
+
+    dll_path = _resolve_exe_path(execution.get("dll_path", ""))
+    member   = execution.get("member", "")
+
+    if not member:
+        return "COM invoke error: no member/method specified in execution config"
+
+    dll_lc     = Path(dll_path).name.lower() if dll_path else ""
+    candidates = _get_com_candidates(dll_lc)
+
+    if not candidates:
+        return (
+            f"COM invoke error: no CoClass registered for '{dll_lc}'. "
+            f"Cannot dispatch '{member}'."
+        )
+
+    arg_values  = list(args.values())
+    errors_seen: list[str] = []
+
+    for clsid in candidates:
+        try:
+            obj = win32com.client.Dispatch(clsid)
+            fn  = getattr(obj, member, None)
+            if fn is None:
+                continue
+            result = fn(*arg_values) if arg_values else fn()
+            return f"Returned: {result}"
+        except Exception as ex:
+            errors_seen.append(f"{clsid}: {ex}")
+
+    return (
+        f"COM invoke error: none of {len(candidates)} CoClass candidate(s) "
+        f"for '{dll_lc}' expose '{member}'. "
+        f"Errors: {'; '.join(errors_seen[:3])}"
+    )
+
+
 def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
     """Call a native DLL function via ctypes on this Windows VM."""
     import ctypes
@@ -823,7 +907,9 @@ async def execute(
         result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)
     elif method == "dll_import":
         result = await loop.run_in_executor(None, _execute_dll_bridge, inv, execution, args)
-    else:
+    elif method == "com_invoke":
+        result = await loop.run_in_executor(None, _execute_com_bridge, inv, execution, args)
+    else:  # cli / anything else
         result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
     return JSONResponse({"result": result})
 

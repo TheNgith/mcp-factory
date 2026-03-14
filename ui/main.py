@@ -425,7 +425,8 @@ _HTML = r"""<!DOCTYPE html>
       <div class="form-row">
         <label>Binary file (EXE, DLL, SO, PY, …)</label>
         <div class="file-drop" id="file-drop">
-          <input type="file" id="file-input" />
+          <input type="file" id="file-input"
+            accept=".dll,.exe,.py,.js,.rb,.php,.so,.jar,.sql,.ps1,.cmd,.bat,.bin" />
           <div class="drop-icon">📦</div>
           <div class="drop-text">Drag & drop a file here, or click to browse</div>
           <div class="file-name" id="file-name"></div>
