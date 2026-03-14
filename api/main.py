@@ -41,7 +41,7 @@ from api.storage import (
 )
 from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
-from api.chat import run_chat, stream_chat
+from api.chat import stream_chat
 from api.generate import run_generate
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
@@ -334,9 +334,7 @@ def execute_tool(body: dict[str, Any]):
 
 @app.post("/api/chat")
 async def chat(body: dict[str, Any]):
-    """Streaming agentic chat — yields SSE events as tool calls execute.
-    Clients that want a blocking JSON response should call run_chat() directly.
-    """
+    """Streaming agentic chat — yields SSE events as tool calls execute."""
     return StreamingResponse(
         stream_chat(body),
         media_type="text/event-stream",

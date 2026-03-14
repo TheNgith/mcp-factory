@@ -1,6 +1,5 @@
 """api/chat.py – Agentic chat completions with tool-call execution loop.
 
-run_chat(body)    – blocking JSON response (kept for backward compat).
 stream_chat(body) – async generator yielding SSE events in real time so the
                     UI can render tool calls and results as they happen instead
                     of waiting for all rounds to complete.
@@ -68,255 +67,6 @@ def _build_system_message(invocables: list) -> dict:
     }
 
 
-def run_chat(body: dict[str, Any]) -> dict[str, Any]:
-    """Agentic chat: send messages to Azure OpenAI with MCP tool definitions,
-    execute tool_calls returned by the model, feed results back, repeat.
-
-    Body: {messages, tools, invocables?, job_id?}
-      invocables: full invocable dicts (with execution metadata) needed to
-                  dispatch tool calls. If omitted, execution falls back to
-                  job_id lookup.
-
-    Returns the final response dict (caller wraps in JSONResponse).
-    """
-    messages: list   = body.get("messages", [])
-    tools: list      = body.get("tools", [])
-    invocables: list = body.get("invocables", [])
-    job_id: str      = body.get("job_id", "")
-
-    if not messages:
-        raise HTTPException(400, "No messages provided")
-    if not OPENAI_ENDPOINT:
-        raise HTTPException(503, "Azure OpenAI endpoint not configured")
-
-    # Build a local invocable registry for this request
-    inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
-    if job_id and invocables:
-        _register_invocables(job_id, invocables)
-
-    MAX_TOOL_ROUNDS = 50  # hard safety cap only — loop detection stops earlier
-    conversation = list(messages)  # working copy
-    _all_tool_results: list[dict] = []  # accumulated across all rounds for response
-    _last_call_signature: str = ""    # for loop detection
-    # actually call tools instead of narrating what the user should do.
-    if not any(m.get("role") == "system" for m in conversation):
-        conversation.insert(0, _build_system_message(invocables))
-
-    try:
-        client = _openai_client()
-        msg = None
-        _tool_calls_total = 0
-        _chat_t0 = time.perf_counter()
-
-        # ── P5: Semantic tool selection ─────────────────────────────────────
-        # Only filter when the tool list exceeds the model's hard API limit.
-        # Below that ceiling every tool is passed directly so the model always
-        # has the full set available.
-        _AI_SEARCH_TOP_K = OPENAI_MAX_TOOLS
-        _active_tools = list(tools)  # per-turn tool subset
-        _last_user_message = next(
-            (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
-            "",
-        )
-        if len(tools) > _AI_SEARCH_TOP_K and job_id and _last_user_message:
-            try:
-                from search import retrieve_tools as _retrieve_tools  # type: ignore
-                _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
-                if _semantic_tools:
-                    _active_tools = _semantic_tools
-                    logger.info(
-                        "[%s] Semantic retrieval: %d/%d tools selected",
-                        job_id, len(_active_tools), len(tools),
-                    )
-                else:
-                    # Semantic cache miss (e.g. different ACA replica) — hard-truncate
-                    # to stay within the OpenAI 128-tool limit rather than error out.
-                    _active_tools = tools[:_AI_SEARCH_TOP_K]
-                    logger.warning(
-                        "[%s] Semantic retrieval returned nothing; truncating %d→%d tools",
-                        job_id, len(tools), _AI_SEARCH_TOP_K,
-                    )
-            except Exception as _se:
-                logger.warning("[%s] Semantic tool retrieval failed: %s", job_id, _se)
-                _active_tools = tools[:_AI_SEARCH_TOP_K]
-
-        # Track which launcher tools have already been called this session
-        # so semantic retrieval can exclude them from subsequent rounds.
-        _called_launchers: set[str] = set()
-
-        for _round in range(MAX_TOOL_ROUNDS):
-            # After round 0, if the tool list is large enough to need filtering,
-            # re-run semantic retrieval using the model's last assistant message
-            # as the query — this keeps the retrieved set aligned with whatever
-            # step the model is currently working on rather than the original
-            # user prompt (critical for long multi-step tasks over large tool sets).
-            if _round > 0 and len(tools) > _AI_SEARCH_TOP_K and job_id:
-                _rolling_query = _last_user_message
-                # Use the last assistant content as a better query if available
-                for m in reversed(conversation):
-                    if m.get("role") == "assistant" and m.get("content"):
-                        _rolling_query = m["content"]
-                        break
-                try:
-                    from search import retrieve_tools as _retrieve_tools  # type: ignore
-                    _semantic_tools = _retrieve_tools(job_id, _rolling_query, client, top_k=_AI_SEARCH_TOP_K)
-                    if _semantic_tools:
-                        _active_tools = [t for t in _semantic_tools
-                                         if t.get("function", {}).get("name") not in _called_launchers]
-                    else:
-                        _active_tools = [t for t in tools[:_AI_SEARCH_TOP_K]
-                                         if t.get("function", {}).get("name") not in _called_launchers]
-                except Exception as exc:
-                    logger.warning("[%s] Semantic tool retrieval refresh failed: %s", job_id, exc)
-                    # Fall back to filtering in-memory without a new retrieval
-                    _active_tools = [t for t in _active_tools
-                                     if t.get("function", {}).get("name") not in _called_launchers]
-            elif _round > 0 and _called_launchers:
-                _active_tools = [t for t in _active_tools
-                                 if t.get("function", {}).get("name") not in _called_launchers]
-
-            kwargs: dict = {
-                "model": OPENAI_DEPLOYMENT,
-                "messages": conversation,
-                "temperature": 0.2,
-            }
-            if _active_tools:
-                kwargs["tools"] = _active_tools
-                kwargs["tool_choice"] = "auto"
-
-            # Retry on 429 rate-limit with exponential backoff (S0 tier TPM cap)
-            _max_retries = 4
-            _backoff = 10  # seconds
-            for _attempt in range(_max_retries):
-                try:
-                    response = client.chat.completions.create(**kwargs)
-                    break
-                except Exception as _exc:
-                    _is_429 = ("429" in str(_exc) or "RateLimitReached" in str(_exc)
-                               or "rate limit" in str(_exc).lower())
-                    if _is_429 and _attempt < _max_retries - 1:
-                        _wait = _backoff * (2 ** _attempt)
-                        logger.warning(
-                            "[chat] 429 rate limit on attempt %d/%d — waiting %ds",
-                            _attempt + 1, _max_retries, _wait,
-                        )
-                        import time as _time
-                        _time.sleep(_wait)
-                    else:
-                        raise
-            msg = response.choices[0].message
-
-            # No tool calls → final answer
-            if not msg.tool_calls:
-                logger.info(
-                    "[chat] completed in %d round(s), %d tool call(s)",
-                    _round + 1, _tool_calls_total,
-                    extra={"custom_dimensions": {
-                        "event": "chat_complete",
-                        "job_id": job_id,
-                        "rounds": _round + 1,
-                        "tool_calls_total": _tool_calls_total,
-                        "duration_ms": int((time.perf_counter() - _chat_t0) * 1000),
-                    }},
-                )
-                return {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "tool_calls": [],
-                    "tool_results": _all_tool_results,
-                    "rounds": _round + 1,
-                }
-
-            # Append assistant turn with tool_calls to conversation
-            assistant_turn: dict[str, Any] = {
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
-            }
-            conversation.append(assistant_turn)
-
-            _tool_calls_total += len(msg.tool_calls)
-
-            # Loop detection: if every tool call this round is identical to last round, stop.
-            _this_sig = "|".join(f"{tc.function.name}:{tc.function.arguments}" for tc in msg.tool_calls)
-            if _this_sig == _last_call_signature:
-                logger.warning("[chat] Loop detected (same calls twice) — forcing summary")
-                break
-            _last_call_signature = _this_sig
-
-            # Execute each tool call and append tool result messages
-            for tc in msg.tool_calls:
-                fn_name = tc.function.name
-                try:
-                    fn_args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                inv = inv_map.get(fn_name)
-                if inv is None and job_id:
-                    inv = _get_invocable(job_id, fn_name)
-
-                if inv is not None:
-                    tool_result = _execute_tool(inv, fn_args)
-                    # Track launcher invocables (CLI tools whose name == exe stem)
-                    # so they are excluded from semantic retrieval in subsequent rounds.
-                    if inv.get("source_type") == "cli" and Path(inv.get("dll_path", "")).stem.lower() == fn_name.lower():
-                        _called_launchers.add(fn_name)
-                    logger.info(f"[chat/{_round}] Executed {fn_name}: {tool_result[:120]}")
-                else:
-                    tool_result = (
-                        f"Tool '{fn_name}' executed (no invocable metadata "
-                        f"available — pass 'invocables' in the request body "
-                        f"or call /api/generate first). "
-                        f"Raw arguments: {json.dumps(fn_args)}"
-                    )
-                    logger.warning(f"[chat/{_round}] No invocable for {fn_name}")
-
-                _all_tool_results.append({"name": fn_name, "arguments": fn_args, "result": tool_result})
-                conversation.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": tool_result,
-                })
-
-        # Exceeded MAX_TOOL_ROUNDS — force one final text-only summary from the model
-        if msg is None:
-            return {"role": "assistant", "content": "", "tool_calls": [], "tool_results": [], "rounds": 0}
-        summary_content = "All steps completed."
-        try:
-            _summary_resp = client.chat.completions.create(
-                model=OPENAI_DEPLOYMENT,
-                messages=conversation,
-                temperature=0.2,
-                tools=_active_tools,
-                tool_choice="none",
-            )
-            summary_content = _summary_resp.choices[0].message.content or summary_content
-        except Exception as _se:
-            logger.warning("[chat] Final summary call failed: %s", _se)
-        return {
-            "role": "assistant",
-            "content": summary_content,
-            "tool_calls": [],
-            "tool_results": _all_tool_results,
-            "rounds": MAX_TOOL_ROUNDS,
-        }
-
-    except Exception as e:
-        logger.error(f"Chat error: {e}")
-        raise HTTPException(500, f"Chat failed: {e}")
-
-
 async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     """Async generator: runs the agentic tool-call loop yielding SSE events
     between rounds so the browser sees progress in real time.
@@ -352,18 +102,72 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         sys_msgs = [_build_system_message(invocables)]
     conversation = sys_msgs + user_msgs[-_CONTEXT_WINDOW_TURNS:]
 
+    _AI_SEARCH_TOP_K = OPENAI_MAX_TOOLS
     _active_tools = list(tools)
     _called_launchers: set[str] = set()
     _tools_executed: list[str] = []  # names of tool calls that actually ran
+    _last_user_message = next(
+        (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
+        "",
+    )
 
     loop = asyncio.get_event_loop()
 
     try:
         client = _openai_client()
 
+        # ── P5: Initial semantic tool selection (mirrors run_chat) ─────────
+        # stream_chat had no filtering at all — every tool was sent on every
+        # round, which blows the token budget for large schemas like shell32
+        # and causes the model to hang on round 2+ (after tool execution).
+        if len(tools) > _AI_SEARCH_TOP_K and job_id and _last_user_message:
+            try:
+                from search import retrieve_tools as _retrieve_tools  # type: ignore
+                _semantic_tools = _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K)
+                if _semantic_tools:
+                    _active_tools = _semantic_tools
+                    logger.info(
+                        "[%s] stream_chat: semantic selected %d/%d tools",
+                        job_id, len(_active_tools), len(tools),
+                    )
+                else:
+                    _active_tools = tools[:_AI_SEARCH_TOP_K]
+                    logger.warning(
+                        "[%s] stream_chat: semantic retrieval empty; truncating %d→%d",
+                        job_id, len(tools), _AI_SEARCH_TOP_K,
+                    )
+            except Exception as _se:
+                logger.warning("[%s] stream_chat: semantic retrieval failed: %s", job_id, _se)
+                _active_tools = tools[:_AI_SEARCH_TOP_K]
+
         for _round in range(MAX_TOOL_ROUNDS):
-            # Exclude already-fired launcher tools so the model can't re-launch.
-            if _called_launchers:
+            # ── Per-round semantic re-selection ────────────────────────────
+            # After round 0, re-query using the model's last assistant content
+            # as the search string so the retrieved set tracks what the model
+            # is currently working on rather than the original user prompt.
+            if _round > 0 and len(tools) > _AI_SEARCH_TOP_K and job_id:
+                _rolling_query = _last_user_message
+                for m in reversed(conversation):
+                    if m.get("role") == "assistant" and m.get("content"):
+                        _rolling_query = m["content"]
+                        break
+                try:
+                    from search import retrieve_tools as _retrieve_tools  # type: ignore
+                    _semantic_tools = _retrieve_tools(job_id, _rolling_query, client, top_k=_AI_SEARCH_TOP_K)
+                    if _semantic_tools:
+                        _active_tools = [t for t in _semantic_tools
+                                         if t.get("function", {}).get("name") not in _called_launchers]
+                    else:
+                        _active_tools = [t for t in tools[:_AI_SEARCH_TOP_K]
+                                         if t.get("function", {}).get("name") not in _called_launchers]
+                except Exception as _re:
+                    logger.warning(
+                        "[%s] stream_chat: semantic refresh failed round %d: %s", job_id, _round, _re
+                    )
+                    _active_tools = [t for t in _active_tools
+                                     if t.get("function", {}).get("name") not in _called_launchers]
+            elif _called_launchers:
+                # Exclude already-fired launcher tools so the model can't re-launch.
                 _active_tools = [t for t in _active_tools
                                  if t.get("function", {}).get("name") not in _called_launchers]
 
@@ -412,14 +216,13 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     # tool calls).  Force one final text-only completion so the user
                     # gets a real conversational response instead of a terse fallback.
                     try:
+                        # Don't include tools here — tool_choice=none means they
+                        # can never fire; they only waste context tokens on round 2+.
                         _summary_kw = {
                             "model":       OPENAI_DEPLOYMENT,
                             "messages":    conversation,
                             "temperature": 0.3,
-                            "tool_choice": "none",
                         }
-                        if _active_tools:
-                            _summary_kw["tools"] = _active_tools
                         _summary_future = loop.run_in_executor(
                             None,
                             lambda kw=_summary_kw: client.chat.completions.create(**kw),
