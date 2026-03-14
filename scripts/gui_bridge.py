@@ -988,11 +988,16 @@ def _execute_com_bridge(inv: dict, execution: dict, args: dict) -> str:
 
     if method_found_on:
         # Method WAS found but every call attempt failed — likely missing required args
-        param_hint = (
+        _raw_hint = (
             execution.get("parameters")
             or inv.get("parameters")
             or []
         )
+        # Normalise: list of dicts → list of names; list of strings → keep as-is
+        if _raw_hint and isinstance(_raw_hint[0], dict):
+            param_hint = [p.get("name", str(p)) for p in _raw_hint]
+        else:
+            param_hint = list(_raw_hint)
         hint = f" Expected parameters: {param_hint}" if param_hint else \
                " Provide required arguments (e.g. a folder path for Open)."
         return (
@@ -1388,7 +1393,20 @@ async def execute(
     elif method == "dll_import":
         result = await loop.run_in_executor(None, _execute_dll_bridge, inv, execution, args)
     elif method in ("com_invoke", "com_dispatch"):
-        result = await loop.run_in_executor(None, _execute_com_bridge, inv, execution, args)
+        # COM calls may block indefinitely when they open a modal dialog
+        # (e.g. BrowseForFolder).  Wrap in a Future with a 60 s timeout so
+        # the HTTP handler always returns rather than hanging the event loop.
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, _execute_com_bridge, inv, execution, args),
+                timeout=60,
+            )
+        except asyncio.TimeoutError:
+            result = (
+                f"COM call '{name}' timed out after 60 s — the method likely opened "
+                "a blocking modal dialog (e.g. a folder/file picker). "
+                "The dialog may still be visible on the desktop."
+            )
     elif method == "dotnet_reflection":
         result = await loop.run_in_executor(None, _execute_dotnet_bridge, execution, name, args)
     elif method in ("python_subprocess", "node", "ts-node", "powershell",
