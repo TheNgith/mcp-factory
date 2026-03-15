@@ -174,21 +174,22 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "3. Never launch an application that is already open — call the launch tool only once per session.\n"
             "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
-            "5. If a tool call returns an error or unexpected result (e.g. -1, 4294967295, access violation):\n"
-            "   - 'access violation': a required pointer argument was missing — infer a value from "
-            "the user's request (customer ID, amount, buffer) and retry.\n"
-            "   - Return value 4294967295 or -1 with a uint/scalar parameter: probe that parameter "
-            "through the sequence 0 → 1 → 64 → 256 → 512 → 1024 across retries; stop when it succeeds.\n"
-            "   - Return value 4294967295 with a pointer-typed parameter (byte*, undefined*, BYTE*, char*): "
-            "first retry passed the value as a quoted string (e.g. \"1042\"); "
-            "if that fails, retry passing the SAME value as a plain JSON integer with no quotes (e.g. 1042). "
-            "The bridge encodes strings as memory pointers and integers as raw register values — "
-            "trying both covers the two most common binary calling patterns.\n"
-            "   - After exhausting both pointer encodings, try the next uint scalar probe value.\n"
-            "   - If a prerequisite function exists (Initialize, Open, Login), call it first, then retry.\n"
-            "   - When a parameter value or encoding succeeds, record it explicitly in your next message "
-            "and reuse it in all subsequent calls that session.\n"
-            "   - Only report failure to the user after at least three retry attempts with different arguments.\n"
+            "5. If a tool call returns 4294967295 or -1 (error sentinel), follow this EXACT probing protocol:\n"
+            "   STEP A — pointer encoding (execute in ONE round before anything else):\n"
+            "     For every pointer-typed param (byte*, undefined*, BYTE*, char*) with a user-supplied value, "
+            "call the function TWICE in the SAME round: once with the value as a JSON string (e.g. \"1042\") "
+            "AND once with the value as a plain JSON integer (e.g. 1042). "
+            "Strings become heap pointers; integers land directly in the register. Stop when one succeeds.\n"
+            "   STEP B — scalar size probe (only after STEP A still fails, batch ALL in ONE round):\n"
+            "     For uint/scalar parameters that may be buffer sizes, issue these as SEPARATE tool calls "
+            "in the SAME response: param_3=64, param_3=256, param_3=512, param_3=1024. Stop when one succeeds.\n"
+            "   STEP C — cross-product (only if both above fail):\n"
+            "     Combine integer encoding for pointer params WITH each scalar probe value. Batch them.\n"
+            "   NEVER probe one value per round when you can batch multiple calls in a single response.\n"
+            "   When any call succeeds, immediately call record_finding with the exact working args.\n"
+            "   - 'access violation': a pointer argument was missing — infer from user context and retry.\n"
+            "   - If a prerequisite function (Initialize, Open, Login) exists, call it first.\n"
+            "   - Only report failure to the user after exhausting all steps above.\n"
             "7. Whenever you discover something conclusive about a function — a working call, a confirmed "
             "failure mode, a required encoding — call record_finding immediately to persist it. "
             "Do NOT call record_finding speculatively or as commentary; only call it for definitive results."
@@ -221,7 +222,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
 
-    MAX_TOOL_ROUNDS = 10
+    MAX_TOOL_ROUNDS = 14
     _last_call_signature = ""
 
     # ── Dynamic model selection ────────────────────────────────────────────
