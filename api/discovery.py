@@ -368,11 +368,22 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
     else:
         logger.error("[%s] STEP 9 \u2717  Bridge returned 0 invocables (check NSG outbound rules for port 8090 / errno 110)", job_id)
     if bridge_invocables:
-        for inv in bridge_invocables:
-            name = inv.get("name", "")
-            if name and name not in seen_names:
-                seen_names.add(name)
-                merged_invocables.append(inv)
+        # Bridge invocables (Ghidra / COM / GUI) are richer than the plain
+        # pefile export stubs from the discovery subprocess — they carry
+        # recovered parameter types from the decompiler.
+        # Strategy: bridge wins.  If a name already exists in merged_invocables
+        # (added by the subprocess with parameters:[]), REPLACE it.  New names
+        # are appended as usual.
+        bridge_by_name = {inv.get("name", ""): inv for inv in bridge_invocables if inv.get("name")}
+        # Replace any existing invocable whose name matches a bridge result
+        for i, existing in enumerate(merged_invocables):
+            ename = existing.get("name", "")
+            if ename in bridge_by_name:
+                merged_invocables[i] = bridge_by_name.pop(ename)
+        # Append any bridge invocables with names not seen before
+        for name, inv in bridge_by_name.items():
+            merged_invocables.append(inv)
+            seen_names.add(name)
 
     return {
         "job_id": job_id,
