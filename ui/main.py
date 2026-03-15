@@ -379,6 +379,27 @@ _HTML = r"""<!DOCTYPE html>
       flex: 1; min-height: 52px; max-height: 140px;
     }
 
+    /* ── Discover / explore badge ───────────────────────── */
+    .amber-badge {
+      background: rgba(240,180,60,.18);
+      border: 1px solid rgba(240,180,60,.5);
+      color: #f0b43c;
+      font-size: 0.75rem; font-weight: 600;
+      padding: 3px 10px; border-radius: 20px;
+      display: inline-block;
+    }
+    .explore-bar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px;
+      background: rgba(240,180,60,.07);
+      border: 1px solid rgba(240,180,60,.3);
+      border-radius: 8px;
+      margin-top: 14px;
+    }
+    .explore-progress {
+      font-size: 0.82rem; color: #f0b43c; flex: 1;
+    }
+
     section.hidden { display: none; }
   </style>
 </head>
@@ -503,6 +524,22 @@ _HTML = r"""<!DOCTYPE html>
       <p style="font-size:.86rem;color:var(--muted);margin-bottom:12px">
         Review the OpenAI function-call tool schema derived from your selected invocables.
       </p>
+
+      <!-- Discover recommendation bar (shown when schema has only generic param names) -->
+      <div class="explore-bar" id="discover-bar" style="display:none">
+        <span class="amber-badge">⚠ Recommended</span>
+        <span class="explore-progress" id="discover-bar-msg">
+          Schema has limited information — run Discover to learn parameter semantics automatically.
+        </span>
+        <button class="btn btn-secondary" id="discover-btn"
+          style="white-space:nowrap;padding:7px 14px;font-size:.82rem">
+          🔍 Discover
+        </button>
+        <button class="btn btn-secondary" id="download-doc-btn"
+          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
+          ⬇ Download Documentation
+        </button>
+      </div>
 
       <div class="json-preview" id="schema-preview"></div>
 
@@ -843,12 +880,114 @@ $('generate-btn').addEventListener('click', async () => {
     state.schemaBlob = data.schema_blob;
     $('schema-preview').textContent = JSON.stringify(data.mcp_schema, null, 2);
     showSection(2);
+    // Show discover bar if schema has generic param names (param_1, param_2…)
+    _checkSchemaQuality(data.mcp_schema);
   } catch(e) {
     showError('inv-error', `Generation failed: ${e.message}`);
   } finally {
     btn.disabled = false;
     btn.innerHTML = 'Generate MCP Schema';
   }
+});
+
+// ── Schema quality check → show Discover bar ─────────────
+function _checkSchemaQuality(schema) {
+  if (!schema) return;
+  const tools = schema.tools ?? [];
+  const genericRe = /^param_\d+$/;
+  let allGeneric = tools.length > 0;
+  for (const t of tools) {
+    const props = Object.keys(t.function?.parameters?.properties ?? {});
+    if (props.some(p => !genericRe.test(p))) { allGeneric = false; break; }
+  }
+  const bar = $('discover-bar');
+  if (allGeneric && tools.length > 0) {
+    bar.style.display = 'flex';
+  } else {
+    bar.style.display = 'none';
+  }
+  // Always show download-doc-btn if findings already exist
+  _maybeShowDownloadDoc();
+}
+
+async function _maybeShowDownloadDoc() {
+  if (!state.jobId) return;
+  try {
+    const r = await fetch(`/api/findings/${state.jobId}`);
+    if (r.ok) {
+      const d = await r.json();
+      if (d.findings && d.findings.length > 0) {
+        $('download-doc-btn').style.display = 'inline-flex';
+      }
+    }
+  } catch(_e) { /* non-fatal */ }
+}
+
+let _explorePoller = null;
+
+$('discover-btn').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  const btn = $('discover-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Discovering…';
+  $('discover-bar-msg').textContent = 'Starting exploration…';
+
+  try {
+    const res = await fetch(`/api/jobs/${state.jobId}/explore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invocables: state.invocables }),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+
+    // Poll job status for explore_phase progress
+    _explorePoller = setInterval(async () => {
+      try {
+        const pr = await fetch(`/api/jobs/${state.jobId}`);
+        if (!pr.ok) return;
+        const s = await pr.json();
+        const phase = s.explore_phase;
+        const progress = s.explore_progress ?? '';
+        const msg = s.explore_message ?? '';
+
+        if (phase === 'exploring') {
+          $('discover-bar-msg').textContent =
+            `Exploring functions… (${progress})${msg ? ' — ' + msg : ''}`;
+        } else if (phase === 'done') {
+          clearInterval(_explorePoller);
+          $('discover-bar-msg').textContent =
+            `✓ Discovery complete (${progress} functions documented)`;
+          btn.disabled = false;
+          btn.innerHTML = '🔍 Discover';
+          $('download-doc-btn').style.display = 'inline-flex';
+          // Refresh schema preview
+          try {
+            const sr = await fetch(`/api/download/${state.jobId}/mcp_schema.json`);
+            if (sr.ok) {
+              const newSchema = await sr.json();
+              state.tools = newSchema.tools ?? state.tools;
+              $('schema-preview').textContent = JSON.stringify(newSchema, null, 2);
+            }
+          } catch(_e) { /* non-fatal */ }
+        } else if (phase === 'error') {
+          clearInterval(_explorePoller);
+          $('discover-bar-msg').textContent = `Discovery error: ${s.explore_error ?? 'unknown'}`;
+          btn.disabled = false;
+          btn.innerHTML = '🔍 Discover';
+        }
+      } catch(_e) { /* poll failures are non-fatal */ }
+    }, 3000);
+
+  } catch(e) {
+    $('discover-bar-msg').textContent = `Discovery failed: ${e.message}`;
+    btn.disabled = false;
+    btn.innerHTML = '🔍 Discover';
+  }
+});
+
+$('download-doc-btn').addEventListener('click', () => {
+  if (!state.jobId) return;
+  window.location.href = `/api/jobs/${state.jobId}/report`;
 });
 
 // ── Chat ──────────────────────────────────────────────────
@@ -1139,6 +1278,37 @@ async def proxy_download(job_id: str, filename: str) -> Response:
             status_code=r.status_code,
             media_type=r.headers.get("content-type", "application/json"),
             headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+
+
+@app.get("/api/findings/{job_id}")
+async def proxy_findings(job_id: str) -> JSONResponse:
+    """Proxy findings endpoint to the pipeline /api/findings/{job_id}."""
+    try:
+        r = await _client().get(f"/api/findings/{job_id}")
+        return JSONResponse(content=r.json(), status_code=r.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+
+
+@app.post("/api/jobs/{job_id}/explore")
+async def proxy_explore(job_id: str, body: dict[str, Any] = None) -> JSONResponse:
+    """Proxy explore request to the pipeline POST /api/jobs/{job_id}/explore."""
+    return await _proxy_json(f"/api/jobs/{job_id}/explore", body or {})
+
+
+@app.get("/api/jobs/{job_id}/report")
+async def proxy_report(job_id: str) -> Response:
+    """Stream the markdown report from the pipeline /api/jobs/{job_id}/report."""
+    try:
+        r = await _client().get(f"/api/jobs/{job_id}/report")
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type", "text/markdown"),
+            headers={"Content-Disposition": f'attachment; filename="report-{job_id}.md"'},
         )
     except Exception as e:
         return JSONResponse({"detail": str(e)}, status_code=502)

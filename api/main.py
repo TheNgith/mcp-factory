@@ -40,6 +40,7 @@ from api.storage import (
     _enqueue_analysis,
     _load_findings,
 )
+from api.storage import _JOB_INVOCABLE_MAPS as _job_inv_maps  # for explore/report
 from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
 from api.chat import stream_chat
@@ -372,4 +373,163 @@ def get_findings(job_id: str):
     """
     findings = _load_findings(job_id)
     return JSONResponse(content={"job_id": job_id, "findings": findings})
+
+
+@app.post("/api/jobs/{job_id}/explore")
+async def explore_job(job_id: str, body: dict[str, Any] = None):
+    """Spawn an autonomous exploration worker for a job.
+
+    The worker iterates over the job's invocables, calls each with probe values,
+    and calls enrich_invocable + record_finding to enrich the schema.
+    Returns immediately; poll GET /api/jobs/{job_id} for explore_phase progress.
+
+    Optional body: {"invocables": [...]}  — if omitted, uses the invocables
+    already registered for this job.
+    """
+    from api.explore import _explore_worker
+
+    body = body or {}
+    invocables: list | None = body.get("invocables") if body else None
+
+    if not invocables:
+        # Load from in-memory registry (populated by /api/generate)
+        from api.storage import _JOB_INVOCABLE_MAPS
+        inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
+        if not inv_map:
+            # Try blob
+            try:
+                raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+                inv_map = json.loads(raw)
+            except Exception:
+                inv_map = None
+
+        if not inv_map:
+            raise HTTPException(
+                404,
+                f"No invocables found for job '{job_id}'. "
+                "Call /api/generate first, or pass invocables in the request body.",
+            )
+        invocables = list(inv_map.values())
+
+    current = _get_job_status(job_id)
+    if current is None:
+        # Create a minimal status entry so the worker can update it
+        _persist_job_status(job_id, {
+            "status": "done",
+            "explore_phase": "queued",
+            "progress": 100,
+            "message": "Exploration queued",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        })
+
+    t = threading.Thread(
+        target=_explore_worker,
+        args=(job_id, invocables),
+        daemon=True,
+        name=f"explore-{job_id}",
+    )
+    t.start()
+
+    logger.info("[%s] Exploration worker spawned for %d invocables", job_id, len(invocables))
+    return JSONResponse(
+        {"job_id": job_id, "status": "exploring", "invocable_count": len(invocables)},
+        status_code=202,
+    )
+
+
+@app.get("/api/jobs/{job_id}/report")
+async def get_report(job_id: str):
+    """Generate a markdown documentation report for a job.
+
+    Combines the enriched invocables schema with LLM-recorded findings.
+    Returns a markdown document as text/markdown for direct download.
+    """
+    # Load invocables
+    from api.storage import _JOB_INVOCABLE_MAPS
+    inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
+    if not inv_map:
+        try:
+            raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+            inv_map = json.loads(raw)
+        except Exception:
+            inv_map = {}
+
+    findings = _load_findings(job_id)
+    findings_by_fn: dict[str, list] = {}
+    for f in findings:
+        fn = f.get("function", "unknown")
+        findings_by_fn.setdefault(fn, []).append(f)
+
+    lines: list[str] = [
+        "# MCP Factory — DLL Documentation Report",
+        "",
+        f"**Job ID:** `{job_id}`  ",
+        f"**Generated:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  ",
+        f"**Functions documented:** {len(inv_map)}",
+        "",
+        "---",
+        "",
+    ]
+
+    for fn_name, inv in sorted(inv_map.items()):
+        desc = inv.get("description") or inv.get("doc") or inv.get("signature") or ""
+        lines.append(f"## `{fn_name}`")
+        lines.append("")
+        if desc:
+            lines.append(desc)
+            lines.append("")
+
+        params = inv.get("parameters") or []
+        if params:
+            lines.append("**Parameters:**")
+            lines.append("")
+            lines.append("| Name | Type | Description |")
+            lines.append("|------|------|-------------|")
+            for p in params:
+                pname = p.get("name", "?")
+                ptype = p.get("type") or p.get("json_type") or "unknown"
+                pdesc = p.get("description", "")
+                lines.append(f"| `{pname}` | `{ptype}` | {pdesc} |")
+            lines.append("")
+
+        ret_type = inv.get("return_type") or (inv.get("signature", {}) or {}) .get("return_type") if isinstance(inv.get("signature"), dict) else None
+        if ret_type:
+            lines.append(f"**Returns:** `{ret_type}`")
+            lines.append("")
+
+        fn_findings = findings_by_fn.get(fn_name, [])
+        if fn_findings:
+            lines.append("**Findings from exploration:**")
+            lines.append("")
+            for f in fn_findings:
+                param_part = f" (`{f['param']}`)" if f.get("param") else ""
+                lines.append(f"- {param_part}{f.get('finding', '')}")
+                if f.get("working_call"):
+                    lines.append(f"  - Working call: `{json.dumps(f['working_call'])}`")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    markdown = "\n".join(lines)
+
+    # Also persist to blob for later download
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/report.md",
+            markdown.encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist report to blob: %s", job_id, exc)
+
+    from fastapi.responses import Response as _Response
+    return _Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="report-{job_id}.md"'},
+    )
 

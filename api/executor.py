@@ -283,7 +283,14 @@ def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
             pr = client.post("/execute", json={"invocable": inv, "args": probe_args})
             pr.raise_for_status()
             probe_result = pr.json().get("result", "")
-            if probe_result and _ERROR_SENTINEL not in str(probe_result):
+            result_str = str(probe_result).lower()
+            _is_error = (
+                _ERROR_SENTINEL in str(probe_result)
+                or "error" in result_str
+                or "exception" in result_str
+                or "violation" in result_str
+            )
+            if probe_result and not _is_error:
                 logger.info(
                     "[bridge] probe succeeded tool=%s label=%s", tool_name, label
                 )
@@ -294,8 +301,7 @@ def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
             logger.debug("[bridge] probe failed tool=%s label=%s: %s", tool_name, label, exc)
 
     total    = len(probes)
-    best_str = f"Best attempt: {best_label}." if best_label else "No probes completed."
-    summary  = f"Tried {total} encodings: all returned {_ERROR_SENTINEL}. {best_str}"
+    summary  = f"Tried {total} encodings: all returned access violation. Exhausted."
     logger.info("[bridge] probe exhausted tool=%s: %s", tool_name, summary)
     return summary
 
@@ -408,6 +414,22 @@ def _execute_tool(inv: dict, args: dict) -> str:
         fn = entry["function"] or "unknown"
         logger.info("[findings] recorded for %s: %s", fn, entry["finding"])
         return f"Finding recorded for {fn}."
+
+    # ── Synthetic enrich tool — patches the in-memory schema and re-uploads ─
+    if method == "enrich" or name == "enrich_invocable":
+        from api.storage import _patch_invocable
+        job_id        = inv.get("_job_id", "")
+        function_name = args.get("function_name", "")
+        patch: dict   = {}
+        if args.get("function_description"):
+            patch["function_description"] = args["function_description"]
+        if args.get("params") and isinstance(args["params"], dict):
+            patch.update(args["params"])
+        if not function_name:
+            return "enrich_invocable: function_name is required."
+        result = _patch_invocable(job_id, function_name, patch)
+        logger.info("[enrich] %s", result)
+        return result
 
     # All Windows-native methods (dll_import, gui_action, cli) must run on the
     # Windows VM.  Forward to the bridge whenever it is configured; only fall

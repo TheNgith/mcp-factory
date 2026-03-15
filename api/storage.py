@@ -192,6 +192,79 @@ def _load_findings(job_id: str) -> list:
         return []
 
 
+def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
+    """Apply a patch dict to an invocable and re-upload both blob artifacts.
+
+    patch keys:
+      - "function_description": str  → replaces inv["description"]
+      - "<param_name>": {"name": str, "description": str}  → renames param + sets desc
+
+    Returns a human-readable confirmation string.
+    """
+    import re as _re
+    with _JOB_MAP_LOCK:
+        inv_map = _JOB_INVOCABLE_MAPS.get(job_id, {})
+        inv = inv_map.get(function_name)
+        if inv is None:
+            return f"_patch_invocable: function '{function_name}' not found in job '{job_id}'"
+        inv = dict(inv)  # shallow copy to avoid mutating shared reference
+        inv["parameters"] = [dict(p) for p in (inv.get("parameters") or [])]
+
+    renames: list[str] = []
+
+    # Apply function description
+    if "function_description" in patch:
+        inv["description"] = patch["function_description"]
+        inv["doc"] = patch["function_description"]
+
+    # Apply parameter renames/descriptions
+    for param in inv["parameters"]:
+        old_name = param.get("name", "")
+        if old_name in patch and isinstance(patch[old_name], dict):
+            p_patch = patch[old_name]
+            new_name = p_patch.get("name") or p_patch.get("semantic_name")
+            if new_name and new_name != old_name:
+                param["name"] = new_name
+                renames.append(f"{old_name} → {new_name}")
+            if "description" in p_patch:
+                param["description"] = p_patch["description"]
+
+    # Write back to in-memory map
+    with _JOB_MAP_LOCK:
+        _JOB_INVOCABLE_MAPS.setdefault(job_id, {})[function_name] = inv
+
+    # Re-upload invocables_map.json
+    with _JOB_MAP_LOCK:
+        full_map = dict(_JOB_INVOCABLE_MAPS.get(job_id, {}))
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/invocables_map.json",
+            json.dumps(full_map).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] _patch_invocable: failed to re-upload invocables_map: %s", job_id, exc)
+
+    # Regenerate and re-upload mcp_schema.json
+    try:
+        from api.generate import run_generate  # type: ignore
+        invocables_list = list(full_map.values())
+        # Derive component name from existing schema blob if possible
+        component = "mcp-component"
+        try:
+            existing = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/mcp_schema.json"))
+            component = existing.get("component", component)
+        except Exception:
+            pass
+        run_generate({"job_id": job_id, "selected": invocables_list, "component_name": component})
+    except Exception as exc:
+        logger.warning("[%s] _patch_invocable: failed to regenerate schema: %s", job_id, exc)
+
+    rename_str = (", ".join(renames)) if renames else "no param renames"
+    logger.info("[%s] _patch_invocable: patched %s (%s)", job_id, function_name, rename_str)
+    return f"Schema updated for {function_name}: {rename_str}."
+
+
 def _get_invocable(job_id: str, name: str) -> dict | None:
     with _JOB_MAP_LOCK:
         result = _JOB_INVOCABLE_MAPS.get(job_id, {}).get(name)

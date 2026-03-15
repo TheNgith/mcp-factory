@@ -31,7 +31,7 @@ from fastapi import HTTPException
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS
 from api.executor import _execute_tool
-from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding
+from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
@@ -66,6 +66,36 @@ _RECORD_FINDING_TOOL = {
         },
     },
 }
+
+# ── Synthetic enrich_invocable tool definition (always injected) ─────────
+_ENRICH_INVOCABLE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "enrich_invocable",
+        "description": (
+            "Write discovered semantics back into the schema for a function. "
+            "Call this when you know what a parameter actually means — e.g. after a successful call "
+            "reveals that param_1 is a customer_id buffer. "
+            "Pair with record_finding so the same discovery is both documented and schema-enriched."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "The exact function name, e.g. CS_LookupCustomer"},
+                "function_description": {"type": "string", "description": "Human-readable description of what this function does"},
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "Mapping of old generic param names to semantic info. "
+                        "e.g. {\"param_1\": {\"name\": \"customer_id_buffer\", \"description\": \"Pointer to output buffer receiving the customer ID string\"}}"
+                    ),
+                },
+            },
+            "required": ["function_name"],
+        },
+    },
+}
+
 
 def _schema_quality(invocables: list) -> str:
     """Return 'basic' when every parameter across all invocables has a generic
@@ -260,6 +290,16 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     inv_map["record_finding"] = _findings_inv
     if not any(t.get("function", {}).get("name") == "record_finding" for t in _active_tools):
         _active_tools.append(_RECORD_FINDING_TOOL)
+    _enrich_inv = {
+        "name": "enrich_invocable",
+        "source_type": "enrich",
+        "_job_id": job_id,
+        "execution": {"method": "enrich"},
+        "parameters": [],
+    }
+    inv_map["enrich_invocable"] = _enrich_inv
+    if not any(t.get("function", {}).get("name") == "enrich_invocable" for t in _active_tools):
+        _active_tools.append(_ENRICH_INVOCABLE_TOOL)
     _called_launchers: set[str] = set()
     _tools_executed: list[str] = []  # names of tool calls that actually ran
     _last_user_message = next(
@@ -537,7 +577,12 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
             # Trim conversation to bound token size each round.
             _sys  = [m for m in conversation if m.get("role") == "system"]
             _rest = [m for m in conversation if m.get("role") != "system"]
-            conversation = _sys + _rest[-_CONTEXT_WINDOW_TURNS:]
+            _rest = _rest[-_CONTEXT_WINDOW_TURNS:]
+            # Drop any leading role:tool messages that have no preceding
+            # assistant message with tool_calls — OpenAI rejects these with 400.
+            while _rest and _rest[0].get("role") == "tool":
+                _rest.pop(0)
+            conversation = _sys + _rest
 
         yield _sse({"type": "done", "rounds": MAX_TOOL_ROUNDS})
 
