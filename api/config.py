@@ -19,6 +19,9 @@ IS_WINDOWS = platform.system() == "Windows"
 STORAGE_ACCOUNT   = os.getenv("AZURE_STORAGE_ACCOUNT", "mcpfactorystore")
 OPENAI_ENDPOINT   = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+# High-reasoning model used when schema quality is low (generic param names) or after 3+ failures.
+# Falls back to OPENAI_DEPLOYMENT when unset so existing deployments are unaffected.
+OPENAI_REASONING_DEPLOYMENT = os.getenv("AZURE_OPENAI_REASONING_DEPLOYMENT", OPENAI_DEPLOYMENT)
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
 # Maximum number of tool definitions sent in a single OpenAI API call.

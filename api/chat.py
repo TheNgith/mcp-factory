@@ -22,13 +22,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from fastapi import HTTPException
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_MAX_TOOLS
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS
 from api.executor import _execute_tool
 from api.storage import _register_invocables, _get_invocable
 from api.telemetry import _openai_client
@@ -38,6 +39,19 @@ logger = logging.getLogger("mcp_factory.api")
 # Keep only the last N non-system conversation turns sent to the model each
 # round to bound token growth on long sessions.
 _CONTEXT_WINDOW_TURNS = 20
+
+_GENERIC_PARAM = re.compile(r'^param_\d+$')
+
+
+def _schema_quality(invocables: list) -> str:
+    """Return 'basic' when every parameter across all invocables has a generic
+    name (param_1, param_2…), 'rich' otherwise.  'basic' signals a black-box
+    binary where the reasoning model should be preferred."""
+    for inv in invocables:
+        for param in inv.get("parameters", []):
+            if not _GENERIC_PARAM.match(param.get("name", "param_0")):
+                return "rich"
+    return "basic"
 
 
 def _keyword_filter_tools(query: str, tools: list, top_k: int) -> list:
@@ -87,6 +101,22 @@ def _sse(event: dict) -> str:
 
 
 def _build_system_message(invocables: list) -> dict:
+    # Detect prerequisite/initialisation functions by common naming conventions.
+    _INIT_SUFFIXES = ("initialize", "init", "startup", "start", "setup", "open", "login", "logon", "connect")
+    init_fns = [
+        inv["name"] for inv in invocables
+        if any(inv["name"].lower() == s or inv["name"].lower().endswith(s) or f"_{s}" in inv["name"].lower()
+               for s in _INIT_SUFFIXES)
+    ]
+    init_rule = ""
+    if init_fns:
+        names = ", ".join(init_fns)
+        init_rule = (
+            f"\n6. This session includes setup/initialisation functions: {names}. "
+            "Call ALL of them silently before any other function from the same library. "
+            "Never mention this to the user unless initialisation itself fails."
+        )
+
     return {
         "role": "system",
         "content": (
@@ -102,17 +132,19 @@ def _build_system_message(invocables: list) -> dict:
             "3. Never launch an application that is already open — call the launch tool only once per session.\n"
             "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
-            "5. If a tool call returns an error or an unexpected result (e.g. -1, access violation, "
-            "or an error code), do NOT give up immediately. Reason about what the error means:\n"
-            "   - 'access violation' usually means a required pointer argument was missing — "
-            "infer a plausible value from the user's request (e.g. a customer ID, amount, or buffer) "
-            "and retry with that argument.\n"
-            "   - A return value of -1 typically means the function received invalid or missing input — "
-            "try calling it again with arguments inferred from context.\n"
-            "   - If a prerequisite function exists (e.g. Initialize, Open, Login), call it first "
-            "then retry the original call.\n"
+            "5. If a tool call returns an error or unexpected result (e.g. -1, 4294967295, access violation):\n"
+            "   - 'access violation': a required pointer argument was missing — infer a value from "
+            "the user's request (customer ID, amount, buffer) and retry.\n"
+            "   - Return value 4294967295 or -1 with a uint/scalar parameter: probe that parameter "
+            "through the sequence 0 → 1 → 64 → 256 → 1024 across retries; stop when the call succeeds.\n"
+            "   - Return value 4294967295 with a pointer-typed parameter (byte*, undefined*, BYTE*): "
+            "retry passing the value as a plain integer (without quotes) instead of a string.\n"
+            "   - If a prerequisite function exists (Initialize, Open, Login), call it first, then retry.\n"
+            "   - When a parameter value or encoding succeeds, record it explicitly in your next message "
+            "and reuse it in all subsequent calls that session.\n"
             "   - Only report failure to the user after at least two retry attempts with different arguments.\n"
             "Use only the tools provided in this session."
+            + init_rule
         ),
     }
 
@@ -142,6 +174,19 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
     MAX_TOOL_ROUNDS = 10
     _last_call_signature = ""
+
+    # ── Dynamic model selection ────────────────────────────────────────────
+    # Use the reasoning model when schema quality is low (all generic param
+    # names like param_1, param_2) — this signals a black-box binary where
+    # the model needs more reasoning capacity to probe parameter semantics.
+    _schema_q = _schema_quality(invocables) if invocables else "rich"
+    _active_model = OPENAI_REASONING_DEPLOYMENT if _schema_q == "basic" else OPENAI_DEPLOYMENT
+    _failure_count = 0  # consecutive 0xFFFFFFFF / -1 returns; triggers mid-session escalation
+    if _schema_q == "basic" and invocables:
+        logger.info(
+            "[%s] stream_chat: generic schema (black-box binary) — using reasoning model %s",
+            job_id, _active_model,
+        )
 
     # Build conversation: system prompt first, then last N user/assistant turns.
     sys_msgs  = [m for m in messages if m.get("role") == "system"]
@@ -238,7 +283,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                                  if t.get("function", {}).get("name") not in _called_launchers]
 
             kwargs: dict = {
-                "model":       OPENAI_DEPLOYMENT,
+                "model":       _active_model,
                 "messages":    conversation,
                 "temperature": 0,
             }
@@ -289,7 +334,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         # Don't include tools here — tool_choice=none means they
                         # can never fire; they only waste context tokens on round 2+.
                         _summary_kw = {
-                            "model":       OPENAI_DEPLOYMENT,
+                            "model":       _active_model,
                             "messages":    conversation,
                             "temperature": 0.3,
                         }
@@ -412,6 +457,19 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     "tool_call_id": tc.id,
                     "content": tool_result,
                 })
+
+                # Track error sentinels; escalate to reasoning model after 3 failures
+                # if a more capable model is configured.
+                if "4294967295" in tool_result or tool_result.strip() == "-1":
+                    _failure_count += 1
+                    if (_failure_count >= 3
+                            and _active_model != OPENAI_REASONING_DEPLOYMENT
+                            and OPENAI_DEPLOYMENT != OPENAI_REASONING_DEPLOYMENT):
+                        _active_model = OPENAI_REASONING_DEPLOYMENT
+                        logger.info(
+                            "[stream_chat/%d] Escalating to reasoning model %s after %d failures",
+                            _round, _active_model, _failure_count,
+                        )
 
             # Trim conversation to bound token size each round.
             _sys  = [m for m in conversation if m.get("role") == "system"]
