@@ -449,6 +449,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
             and target.suffix.lower() in _PE_EXTS
             and len(invocables) == 0):
         try:
+            logger.info("Ghidra fallback triggered for %s (all other analyzers returned 0)", target.name)
             analyze_with_ghidra = _import_ghidra()
             ghidra_results = analyze_with_ghidra(target, timeout_s=180)
             invocables.extend(ghidra_results)
@@ -1593,7 +1594,9 @@ async def execute(
     name      = inv.get("name", "")
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method    = execution.get("method", "")
-    logger.info("Execute: tool=%s method=%s args=%s execution=%s", name, method, list(args.keys()), execution)
+    logger.info("Execute: tool=%s method=%s args=%s execution=%s", name, method, args, execution)
+    params = list((inv.get("parameters") or []))
+    logger.info("Execute: declared params=%s", [p.get("name") for p in params])
     loop = asyncio.get_running_loop()
     if method == "gui_action":
         result = await loop.run_in_executor(None, _execute_gui_bridge, execution, name, args)

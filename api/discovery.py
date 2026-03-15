@@ -166,7 +166,7 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
     payload = {
         "path":    str(binary_path),
         "hints":   hints,
-        "types":   ["gui", "com", "cli", "registry"],
+        "types":   ["gui", "com", "cli", "registry", "ghidra"],
         "content": content_b64,   # None → bridge falls back to system-path lookup
     }
     # Retry up to _BRIDGE_MAX_RETRIES times.  On a cold first upload the bridge
