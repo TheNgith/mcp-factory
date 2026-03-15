@@ -179,15 +179,22 @@ def _run_headless(
             timeout=timeout_s,
             cwd=str(proj_dir),
         )
+        # Always log at least the tail of stdout — ExtractFunctions.py's
+        # print() calls land here and are the only way to see Jython errors
+        # when analyzeHeadless exits 0 but the postScript crashed silently.
+        _stdout_tail = (result.stdout or "").strip()[-3000:]
+        _stderr_tail = (result.stderr or "").strip()[-1000:]
         if result.returncode != 0:
             logger.warning(
                 "ghidra_analyzer: analyzeHeadless exited %d\nstdout: %s\nstderr: %s",
-                result.returncode,
-                result.stdout[-2000:] if result.stdout else "",
-                result.stderr[-2000:] if result.stderr else "",
+                result.returncode, _stdout_tail, _stderr_tail,
             )
         else:
             logger.info("ghidra_analyzer: analyzeHeadless completed for %s", binary.name)
+            if _stdout_tail:
+                logger.info("ghidra_analyzer: headless stdout:\n%s", _stdout_tail)
+            if _stderr_tail:
+                logger.warning("ghidra_analyzer: headless stderr:\n%s", _stderr_tail)
     except subprocess.TimeoutExpired:
         logger.error(
             "ghidra_analyzer: analyzeHeadless timed out after %ds for %s",
@@ -223,6 +230,10 @@ def _parse_output(
     except Exception as exc:
         logger.error("ghidra_analyzer: failed to parse output JSON: %s", exc)
         return []
+
+    # Surface any Jython-level error the script caught and embedded in the JSON.
+    if "error" in data:
+        logger.error("ghidra_analyzer: ExtractFunctions.py reported error: %s", data["error"])
 
     functions = data.get("functions", [])
     invocables: list[dict[str, Any]] = []
