@@ -22,6 +22,14 @@ OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 # High-reasoning model used when schema quality is low (generic param names) or after 3+ failures.
 # Falls back to OPENAI_DEPLOYMENT when unset so existing deployments are unaffected.
 OPENAI_REASONING_DEPLOYMENT = os.getenv("AZURE_OPENAI_REASONING_DEPLOYMENT", OPENAI_DEPLOYMENT)
+
+# Direct OpenAI (non-Azure) — takes priority over Azure when set.
+# Set OPENAI_API_KEY to your sk-... key.  Optionally set OPENAI_MODEL to
+# override the default (gpt-4o).  OPENAI_EXPLORE_MODEL is used by the
+# explore worker (defaults to gpt-4o-mini for cost efficiency).
+OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL        = os.getenv("OPENAI_MODEL", OPENAI_DEPLOYMENT)          # chat
+OPENAI_EXPLORE_MODEL = os.getenv("OPENAI_EXPLORE_MODEL", "gpt-4o-mini")    # explore loop
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
 # Maximum number of tool definitions sent in a single OpenAI API call.

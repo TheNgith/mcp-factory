@@ -29,7 +29,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import HTTPException
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL
 from api.executor import _execute_tool
 from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable
 from api.telemetry import _openai_client
@@ -247,8 +247,8 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     if not messages:
         yield _sse({"type": "error", "message": "No messages provided"})
         return
-    if not OPENAI_ENDPOINT:
-        yield _sse({"type": "error", "message": "Azure OpenAI endpoint not configured"})
+    if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
+        yield _sse({"type": "error", "message": "OpenAI not configured — set OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT"})
         return
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
@@ -260,8 +260,12 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     # Use the reasoning model when schema quality is low (all generic param
     # names like param_1, param_2) — this signals a black-box binary where
     # the model needs more reasoning capacity to probe parameter semantics.
+    # When using direct OpenAI (OPENAI_API_KEY set), use OPENAI_MODEL instead
+    # of the Azure deployment name.
+    _base_model = OPENAI_MODEL if OPENAI_API_KEY else OPENAI_DEPLOYMENT
+    _reasoning_model = OPENAI_MODEL if OPENAI_API_KEY else OPENAI_REASONING_DEPLOYMENT
     _schema_q = _schema_quality(invocables) if invocables else "rich"
-    _active_model = OPENAI_REASONING_DEPLOYMENT if _schema_q == "basic" else OPENAI_DEPLOYMENT
+    _active_model = _reasoning_model if _schema_q == "basic" else _base_model
     _failure_count = 0  # consecutive 0xFFFFFFFF / -1 returns; triggers mid-session escalation
     if _schema_q == "basic" and invocables:
         logger.info(
@@ -566,9 +570,9 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 if "4294967295" in tool_result or tool_result.strip() == "-1":
                     _failure_count += 1
                     if (_failure_count >= 3
-                            and _active_model != OPENAI_REASONING_DEPLOYMENT
-                            and OPENAI_DEPLOYMENT != OPENAI_REASONING_DEPLOYMENT):
-                        _active_model = OPENAI_REASONING_DEPLOYMENT
+                            and _active_model != _reasoning_model
+                            and _base_model != _reasoning_model):
+                        _active_model = _reasoning_model
                         logger.info(
                             "[stream_chat/%d] Escalating to reasoning model %s after %d failures",
                             _round, _active_model, _failure_count,

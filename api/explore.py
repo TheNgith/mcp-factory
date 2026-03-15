@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL
 from api.executor import _execute_tool
 from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding
 from api.telemetry import _openai_client
@@ -70,8 +70,8 @@ def _build_explore_system_message(invocables: list, findings: list) -> dict:
 
 def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     """Background worker: explore each invocable with the LLM and enrich the schema."""
-    if not OPENAI_ENDPOINT:
-        logger.warning("[%s] explore_worker: OPENAI_ENDPOINT not configured — aborting", job_id)
+    if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
+        logger.warning("[%s] explore_worker: neither OPENAI_API_KEY nor AZURE_OPENAI_ENDPOINT configured — aborting", job_id)
         return
 
     from api.storage import _load_findings
@@ -146,7 +146,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     tool_schemas.append(_ENRICH_INVOCABLE_TOOL)
 
     client = _openai_client()
-    model = OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT
+    # Use the dedicated explore model (gpt-4o-mini by default) for cost efficiency.
+    # When using direct OpenAI key, OPENAI_EXPLORE_MODEL controls this.
+    # When using Azure, fall back to the reasoning deployment.
+    model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
 
     explored = 0
     try:

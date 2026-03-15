@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 
-from api.config import APPINSIGHTS_CONN, OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, _get_credential
+from api.config import APPINSIGHTS_CONN, OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_API_KEY, OPENAI_MODEL, _get_credential
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -79,10 +79,26 @@ _token_expires_at: float = 0.0  # Unix timestamp
 
 
 def _openai_client():
-    """Return a cached AzureOpenAI client, refreshing the token when it is
-    within 5 minutes of expiry to avoid per-request credential round trips."""
+    """Return a cached OpenAI client.
+
+    Priority:
+      1. Direct OpenAI (OPENAI_API_KEY set) — uses openai.OpenAI, no Azure needed.
+      2. Azure OpenAI (AZURE_OPENAI_ENDPOINT set) — refreshes AD token when near expiry.
+    """
     global _cached_client, _token_expires_at
     now = time.time()
+
+    # ── Direct OpenAI path ────────────────────────────────────────────
+    if OPENAI_API_KEY:
+        if _cached_client is None:
+            with _CLIENT_LOCK:
+                if _cached_client is None:
+                    from openai import OpenAI
+                    _cached_client = OpenAI(api_key=OPENAI_API_KEY)
+                    logger.info("[telemetry] Using direct OpenAI client (model: %s)", OPENAI_MODEL)
+        return _cached_client
+
+    # ── Azure OpenAI path ─────────────────────────────────────────────
     if _cached_client is None or now >= _token_expires_at - 300:
         with _CLIENT_LOCK:
             # Re-check inside the lock to avoid double init
