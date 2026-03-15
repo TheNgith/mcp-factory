@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # ExtractFunctions.py
 # Ghidra headless post-analysis script (Jython / GhidraScript API)
 #
