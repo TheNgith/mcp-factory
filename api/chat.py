@@ -102,6 +102,16 @@ def _build_system_message(invocables: list) -> dict:
             "3. Never launch an application that is already open — call the launch tool only once per session.\n"
             "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
+            "5. If a tool call returns an error or an unexpected result (e.g. -1, access violation, "
+            "or an error code), do NOT give up immediately. Reason about what the error means:\n"
+            "   - 'access violation' usually means a required pointer argument was missing — "
+            "infer a plausible value from the user's request (e.g. a customer ID, amount, or buffer) "
+            "and retry with that argument.\n"
+            "   - A return value of -1 typically means the function received invalid or missing input — "
+            "try calling it again with arguments inferred from context.\n"
+            "   - If a prerequisite function exists (e.g. Initialize, Open, Login), call it first "
+            "then retry the original call.\n"
+            "   - Only report failure to the user after at least two retry attempts with different arguments.\n"
             "Use only the tools provided in this session."
         ),
     }
