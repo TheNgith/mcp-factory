@@ -67,6 +67,7 @@ _RECORD_FINDING_TOOL = {
     },
 }
 
+def _schema_quality(invocables: list) -> str:
     """Return 'basic' when every parameter across all invocables has a generic
     name (param_1, param_2…), 'rich' otherwise.  'basic' signals a black-box
     binary where the reasoning model should be preferred."""

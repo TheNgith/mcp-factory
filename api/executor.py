@@ -210,6 +210,96 @@ def _execute_gui(execution: dict, name: str, args: dict) -> str:
     )
 
 
+# ── Probe-matrix constants ─────────────────────────────────────────────────
+# When a DLL/bridge call returns 4294967295 (0xFFFFFFFF) we run a server-side
+# probe matrix so the LLM sees one tool result instead of N serial rounds.
+_ERROR_SENTINEL = "4294967295"
+_SCALAR_PROBE_SIZES = (64, 256, 512, 1024)
+
+
+def _is_pointer_type(type_str: str) -> bool:
+    """True for pointer-like types: anything with *, or common Windows aliases."""
+    t = (type_str or "").lower().strip()
+    if "*" in t:
+        return True
+    return t in {
+        "lpvoid", "pvoid", "handle", "lpcstr", "lpstr",
+        "lpcwstr", "lpwstr", "lpbyte", "lpctstr", "lptstr", "pointer",
+    }
+
+
+def _is_uint_type(type_str: str) -> bool:
+    """True for unsigned scalar types that often act as buffer/size parameters."""
+    t = (type_str or "").lower().strip().rstrip("*").rstrip()
+    return t in {
+        "unsigned", "unsigned int", "uint", "uint32", "uint32_t",
+        "dword", "size_t", "ulong", "unsigned long", "word", "uint16_t",
+    }
+
+
+def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
+    """Run a probe matrix after an initial call returned 4294967295.
+
+    Builds variants by:
+      - Pointer-typed params with a supplied value → try as JSON string *and*
+        as plain JSON integer (heap pointer vs register-direct).
+      - Uint-typed params → replace with each of [64, 256, 512, 1024].
+
+    Returns immediately on the first successful (non-sentinel) result, or a
+    single summary string so the LLM never needs to probe one-at-a-time.
+    """
+    params    = list(inv.get("parameters") or [])
+    execution = inv.get("execution") or {}
+    arg_types = execution.get("arg_types") or []
+
+    probes: list[tuple[dict, str]] = []
+
+    for i, p in enumerate(params):
+        pname = p.get("name", f"param_{i + 1}")
+        ptype = arg_types[i] if i < len(arg_types) else p.get("type", "")
+        val   = args.get(pname)
+
+        if _is_pointer_type(ptype) and val is not None:
+            # String encoding: pass as JSON string so ctypes allocates a heap
+            # buffer; integer encoding: pass value directly into the register.
+            try:
+                int_val = int(val)
+                probes.append(({**args, pname: str(int_val)}, f"{pname}={int_val!r} (string)"))
+                probes.append(({**args, pname: int_val},      f"{pname}={int_val} (integer)"))
+            except (ValueError, TypeError):
+                probes.append(({**args, pname: str(val)}, f"{pname}={val!r} (string)"))
+        elif _is_uint_type(ptype):
+            for sz in _SCALAR_PROBE_SIZES:
+                probes.append(({**args, pname: sz}, f"{pname}={sz}"))
+
+    if not probes:
+        return original_result
+
+    tool_name  = inv.get("name", "<unknown>")
+    best_label: str | None = None
+
+    for probe_args, label in probes:
+        try:
+            pr = client.post("/execute", json={"invocable": inv, "args": probe_args})
+            pr.raise_for_status()
+            probe_result = pr.json().get("result", "")
+            if probe_result and _ERROR_SENTINEL not in str(probe_result):
+                logger.info(
+                    "[bridge] probe succeeded tool=%s label=%s", tool_name, label
+                )
+                return f"Probe succeeded with {label}: {probe_result}"
+            if best_label is None:
+                best_label = label
+        except Exception as exc:
+            logger.debug("[bridge] probe failed tool=%s label=%s: %s", tool_name, label, exc)
+
+    total    = len(probes)
+    best_str = f"Best attempt: {best_label}." if best_label else "No probes completed."
+    summary  = f"Tried {total} encodings: all returned {_ERROR_SENTINEL}. {best_str}"
+    logger.info("[bridge] probe exhausted tool=%s: %s", tool_name, summary)
+    return summary
+
+
 # Cache bridge reachability briefly to avoid hammering /health on every call,
 # but never pin failures forever (transient network blips are common).
 _bridge_reachable: bool | None = None  # None = untested
@@ -283,7 +373,13 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
             resp.status_code,
             dt_ms,
         )
-        return resp.json().get("result", "")
+        result = resp.json().get("result", "")
+        # Server-side probe batching: when the call returns the Windows error
+        # sentinel 0xFFFFFFFF, automatically retry with alternative encodings
+        # so the LLM receives one summary instead of issuing N serial rounds.
+        if _ERROR_SENTINEL in str(result):
+            result = _probe_bridge(client, inv, args, result)
+        return result
     except Exception as exc:
         # Reset the pooled client so the next call gets a fresh connection
         # instead of retrying a dead keepalive socket.
