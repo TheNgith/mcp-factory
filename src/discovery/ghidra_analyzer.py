@@ -90,9 +90,15 @@ def analyze_with_ghidra(
     # Write output JSON to a sibling temp file OUTSIDE the Ghidra project dir.
     # This avoids any risk of -deleteProject wiping the file before we read it,
     # and eliminates path-canonicalization races on 8.3 short-name accounts.
+    # IMPORTANT: .resolve() converts 8.3 short names (e.g. AZUREU~1) to their
+    # full long-path equivalents.  Without it, Python creates the file at the
+    # short path, passes that string to Ghidra's JVM, the JVM canonicalises
+    # the path internally and writes the JSON to the long-path location, then
+    # Python reads back the original short-path file which is still empty —
+    # producing the misleading "Expecting value: line 1 column 1 (char 0)" error.
     _out_fd, _out_json_str = tempfile.mkstemp(suffix=".json", prefix="ghidra_out_")
     os.close(_out_fd)
-    out_json = Path(_out_json_str)
+    out_json = Path(_out_json_str).resolve()
 
     try:
         _run_headless(headless, binary_path, proj_dir, proj_name, out_json, timeout_s)
@@ -200,8 +206,20 @@ def _parse_output(
         return []
 
     try:
-        with open(out_json, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        content = out_json.read_text(encoding="utf-8").strip()
+        if not content:
+            # File exists but is empty — most likely the JVM resolved the temp path
+            # to a different long-path location and wrote the JSON there while Python
+            # is reading the original short-path file (still 0 bytes from mkstemp).
+            # This is caught upstream by the .resolve() fix; this guard is a safety net.
+            logger.error(
+                "ghidra_analyzer: output JSON is empty — ExtractFunctions.py postScript "
+                "may not have executed. Verify -scriptPath is correct and Java can write "
+                "to the temp directory. Path used: %s",
+                out_json,
+            )
+            return []
+        data = json.loads(content)
     except Exception as exc:
         logger.error("ghidra_analyzer: failed to parse output JSON: %s", exc)
         return []
