@@ -1547,23 +1547,26 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
     if not dll_path or not func_name:
         return "DLL call error: missing dll_path or function_name in execution config"
 
-    ret_str = (
-        inv.get("return_type")
-        or (inv.get("signature") or {}).get("return_type", "unknown")
-        or "unknown"
-    ).strip().lower()
+    ret_str = (inv.get("return_type") or "unknown").strip().lower()
     restype = _RESTYPE.get(ret_str, ctypes.c_int)
 
     params = list(inv.get("parameters") or [])
     if not params:
-        sig_str = (inv.get("signature") or {}).get("parameters", "")
-        if sig_str:
-            for chunk in sig_str.split(","):
-                tokens = chunk.strip().split()
-                if len(tokens) >= 2:
-                    raw_type = " ".join(tokens[:-1]).lower().strip("*").rstrip()
-                    pname    = tokens[-1].lstrip("*")
-                    params.append({"name": pname, "type": raw_type})
+        # signature is a plain C prototype string, e.g.:
+        # "int __stdcall CS_Foo(undefined8 param1, undefined8 param2)"
+        # Parse the parameter list from it as a last resort.
+        sig_str = inv.get("signature", "")
+        if isinstance(sig_str, str) and "(" in sig_str:
+            import re as _re
+            m = _re.search(r'\(([^)]*)\)', sig_str)
+            inner = m.group(1).strip() if m else ""
+            if inner and inner.lower() != "void":
+                for chunk in inner.split(","):
+                    tokens = chunk.strip().split()
+                    if len(tokens) >= 2:
+                        raw_type = " ".join(tokens[:-1]).lower().strip("*").rstrip()
+                        pname    = tokens[-1].lstrip("*")
+                        params.append({"name": pname, "type": raw_type})
 
     # Wide-string output buffer functions: only allocate a buffer when the
     # function name ends with W AND a path/dir/name suffix.  Avoids wrongly
