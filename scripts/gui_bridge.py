@@ -1623,7 +1623,12 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
                 is_ptr        = "*" in ptype_lc
                 is_const_ptr  = is_ptr and "const " in ptype_lc
-                is_out_ptr    = is_ptr and not is_const_ptr and (direction == "out" or val is None)
+                # Only treat a pointer as an output buffer when no value was
+                # supplied.  If the LLM passed a value (e.g. customer_id="1042"),
+                # honour it as an input regardless of the direction heuristic —
+                # Ghidra often marks non-const pointers as "out" even when they
+                # are actually input strings (e.g. byte * for a customer-ID arg).
+                is_out_ptr    = is_ptr and not is_const_ptr and val is None
                 is_char_out   = is_out_ptr and "char" in ptype_base and "wchar" not in ptype_base
                 is_wchar_out  = is_out_ptr and "wchar" in ptype_base
                 is_scalar_out = is_out_ptr and not is_char_out and not is_wchar_out
