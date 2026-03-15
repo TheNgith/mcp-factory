@@ -1684,17 +1684,26 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                     out_scalars.append((pname, scalar))
 
                 elif val is not None:
-                    # Normal input parameter
-                    atype = _ARGTYPE.get(ptype_base, ctypes.c_char_p)
-                    if atype == ctypes.c_char_p:
+                    # Normal input parameter.
+                    # IMPORTANT: if the Ghidra type is a pointer (byte*, undefined*,
+                    # BYTE*, etc.) and the caller supplied a value, always encode as
+                    # c_char_p.  Stripping the '*' and using the base type (e.g.
+                    # c_ubyte for "byte") would pass an integer that the function
+                    # then tries to dereference — e.g. c_ubyte(1042) truncates to
+                    # 18, the function reads address 0x12, instant access violation.
+                    if is_ptr:
                         c_args.append(ctypes.c_char_p(str(val).encode()))
-                    elif atype == ctypes.c_wchar_p:
-                        c_args.append(ctypes.c_wchar_p(str(val)))
                     else:
-                        try:
-                            c_args.append(atype(int(val)))
-                        except (ValueError, TypeError):
-                            c_args.append(atype(0))
+                        atype = _ARGTYPE.get(ptype_base, ctypes.c_char_p)
+                        if atype == ctypes.c_char_p:
+                            c_args.append(ctypes.c_char_p(str(val).encode()))
+                        elif atype == ctypes.c_wchar_p:
+                            c_args.append(ctypes.c_wchar_p(str(val)))
+                        else:
+                            try:
+                                c_args.append(atype(int(val)))
+                            except (ValueError, TypeError):
+                                c_args.append(atype(0))
                 # else: no value, not an output pointer — optional / unknown param, skip
 
         elif not params:
