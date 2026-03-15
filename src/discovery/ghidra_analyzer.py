@@ -80,10 +80,19 @@ def analyze_with_ghidra(
         logger.error("ghidra_analyzer: binary not found: %s", binary_path)
         return []
 
-    # Temp dirs: Ghidra project dir + JSON output
-    proj_dir  = Path(tempfile.mkdtemp(prefix="ghidra_proj_"))
-    out_json  = proj_dir / "functions.json"
+    # Resolve proj_dir to its canonical long-path form.  On some Windows builds
+    # tempfile.mkdtemp() returns an 8.3 short path (e.g. C:\Users\AZUREU~1\...) while
+    # Ghidra's JVM expands it to the full long path before writing files — so the
+    # output JSON lands at a path that Python's os.path.exists() never finds.
+    proj_dir  = Path(tempfile.mkdtemp(prefix="ghidra_proj_")).resolve()
     proj_name = "analysis"
+
+    # Write output JSON to a sibling temp file OUTSIDE the Ghidra project dir.
+    # This avoids any risk of -deleteProject wiping the file before we read it,
+    # and eliminates path-canonicalization races on 8.3 short-name accounts.
+    _out_fd, _out_json_str = tempfile.mkstemp(suffix=".json", prefix="ghidra_out_")
+    os.close(_out_fd)
+    out_json = Path(_out_json_str)
 
     try:
         _run_headless(headless, binary_path, proj_dir, proj_name, out_json, timeout_s)
@@ -91,6 +100,10 @@ def analyze_with_ghidra(
     finally:
         try:
             shutil.rmtree(proj_dir, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            out_json.unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -213,10 +226,20 @@ def _parse_output(
         # Build parameter list in standard schema format
         parameters: list[dict] = []
         for p in fn.get("parameters", []):
+            ptype    = p.get("type", "int")
+            ptype_lc = ptype.lower()
+            # Non-const pointer parameters are output buffers / out-params in Win32 C APIs.
+            # Tagging them lets the executor allocate the correct ctypes object automatically.
+            is_out = (
+                "*" in ptype_lc
+                and "const " not in ptype_lc
+                and not ptype_lc.strip().startswith("const")
+            )
             parameters.append({
                 "name":        p.get("name", f"param_{p.get('ordinal', 0)}"),
-                "type":        p.get("type", "int"),
-                "description": f"Parameter recovered by Ghidra decompiler (type: {p.get('type', 'unknown')})",
+                "type":        ptype,
+                "description": f"Parameter recovered by Ghidra decompiler (type: {ptype})",
+                "direction":   "out" if is_out else "in",
             })
 
         ret_type = fn.get("return_type", "int")

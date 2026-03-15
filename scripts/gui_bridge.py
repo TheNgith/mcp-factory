@@ -1488,6 +1488,18 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         "const char*": ctypes.c_char_p,
         "wchar_t*": ctypes.c_wchar_p,
         "const wchar_t*": ctypes.c_wchar_p,
+        # Win32 / Ghidra-decompiler type names
+        "dword": ctypes.c_ulong,
+        "word": ctypes.c_ushort,
+        "byte": ctypes.c_ubyte,
+        "uint32_t": ctypes.c_uint,
+        "int32_t": ctypes.c_int,
+        "undefined4": ctypes.c_int,
+        "undefined": ctypes.c_int,
+        "undefined8": ctypes.c_longlong,
+        "hresult": ctypes.c_long,
+        "handle": ctypes.c_void_p,
+        "lpvoid": ctypes.c_void_p,
     }
     _ARGTYPE = {
         "int": ctypes.c_int,
@@ -1505,6 +1517,13 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         "const char*": ctypes.c_char_p,
         "wchar_t*": ctypes.c_wchar_p,
         "const wchar_t*": ctypes.c_wchar_p,
+        # Win32 / Ghidra-decompiler type names
+        "dword": ctypes.c_ulong,
+        "word": ctypes.c_ushort,
+        "byte": ctypes.c_ubyte,
+        "uint32_t": ctypes.c_uint,
+        "int32_t": ctypes.c_int,
+        "undefined4": ctypes.c_int,
     }
 
     dll_path  = _resolve_exe_path(execution.get("dll_path", ""))
@@ -1517,7 +1536,7 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         or (inv.get("signature") or {}).get("return_type", "unknown")
         or "unknown"
     ).strip().lower()
-    restype = _RESTYPE.get(ret_str, ctypes.c_size_t)
+    restype = _RESTYPE.get(ret_str, ctypes.c_int)
 
     params = list(inv.get("parameters") or [])
     if not params:
@@ -1539,27 +1558,120 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
     )
 
     try:
-        lib = ctypes.WinDLL(dll_path)
+        # Choose calling convention: cdecl functions must use CDLL; stdcall uses WinDLL.
+        # Using the wrong convention on x86 32-bit corrupts the stack and returns garbage.
+        _cc = execution.get("calling_convention", "").lower()
+        if _cc in ("cdecl", "__cdecl", "c"):
+            lib = ctypes.CDLL(dll_path)
+        else:
+            lib = ctypes.WinDLL(dll_path)
         fn  = getattr(lib, func_name)
         fn.restype = restype
 
         c_args = []
-        buf    = None  # track a wchar buffer if we allocate one
+        buf    = None  # legacy: wchar buffer for W-suffix no-param functions
+        out_str_bufs:   list[tuple[str, object]] = []  # (name, create_string_buffer)
+        out_wchar_bufs: list[tuple[str, object]] = []  # (name, create_unicode_buffer)
+        out_scalars:    list[tuple[str, object]] = []  # (name, ctypes scalar)
 
-        if params and args:
-            for p in params:
-                pname = p.get("name", "")
-                ptype = p.get("type", "string").lower().strip("*").rstrip()
-                val   = args.get(pname)
-                if val is None:
+        # Scalar ctypes used to allocate DWORD* / int* output parameters
+        _SCALAR_PTR_MAP = {
+            "dword": ctypes.c_ulong,   "unsigned long": ctypes.c_ulong,
+            "uint":  ctypes.c_uint,    "uint32_t":      ctypes.c_uint,
+            "int":   ctypes.c_int,     "int32_t":       ctypes.c_int,
+            "long":  ctypes.c_long,    "ulong":         ctypes.c_ulong,
+            "word":  ctypes.c_ushort,  "byte":          ctypes.c_ubyte,
+            "bool":  ctypes.c_bool,
+        }
+        # Type names that represent a buffer-length argument following a char* out-buf
+        _SIZE_TYPES = {
+            "dword", "int", "uint", "unsigned int", "size_t",
+            "long", "unsigned long", "uint32_t",
+        }
+
+        if params:
+            skip_indices: set[int] = set()
+            for idx, p in enumerate(params):
+                if idx in skip_indices:
                     continue
-                atype = _ARGTYPE.get(ptype, ctypes.c_char_p)
-                if atype in (ctypes.c_char_p,):
-                    c_args.append(ctypes.c_char_p(str(val).encode()))
-                elif atype == ctypes.c_wchar_p:
-                    c_args.append(ctypes.c_wchar_p(str(val)))
-                else:
-                    c_args.append(atype(int(val)))
+                pname     = p.get("name", f"param_{idx}")
+                ptype_raw = p.get("type", "string")
+                ptype_lc  = ptype_raw.lower()
+                ptype_base = ptype_lc.replace("const ", "").strip().rstrip(" *")
+                val       = args.get(pname)
+                direction = p.get("direction", "")
+
+                is_ptr        = "*" in ptype_lc
+                is_const_ptr  = is_ptr and "const " in ptype_lc
+                is_out_ptr    = is_ptr and not is_const_ptr and (direction == "out" or val is None)
+                is_char_out   = is_out_ptr and "char" in ptype_base and "wchar" not in ptype_base
+                is_wchar_out  = is_out_ptr and "wchar" in ptype_base
+                is_scalar_out = is_out_ptr and not is_char_out and not is_wchar_out
+
+                if is_char_out:
+                    # ANSI char* output buffer — auto-detect the following size param
+                    buf_size = 4096
+                    if idx + 1 < len(params):
+                        np      = params[idx + 1]
+                        np_name = np.get("name", "")
+                        np_type = np.get("type", "").lower().replace("const ", "").strip(" *")
+                        np_val  = args.get(np_name)
+                        if np_val is not None:
+                            try:
+                                buf_size = max(64, int(np_val))
+                            except (ValueError, TypeError):
+                                pass
+                        elif np_type in _SIZE_TYPES:
+                            # Auto-supply the buffer length; skip that param in the loop
+                            skip_indices.add(idx + 1)
+                    sbuf = ctypes.create_string_buffer(buf_size)
+                    c_args.append(sbuf)
+                    if (idx + 1) in skip_indices:
+                        c_args.append(ctypes.c_uint(buf_size))
+                    out_str_bufs.append((pname, sbuf))
+
+                elif is_wchar_out:
+                    # Wide wchar_t* output buffer
+                    buf_size = 4096
+                    if idx + 1 < len(params):
+                        np      = params[idx + 1]
+                        np_name = np.get("name", "")
+                        np_type = np.get("type", "").lower().replace("const ", "").strip(" *")
+                        np_val  = args.get(np_name)
+                        if np_val is not None:
+                            try:
+                                buf_size = max(64, int(np_val))
+                            except (ValueError, TypeError):
+                                pass
+                        elif np_type in _SIZE_TYPES:
+                            skip_indices.add(idx + 1)
+                    wbuf = ctypes.create_unicode_buffer(buf_size)
+                    c_args.append(wbuf)
+                    if (idx + 1) in skip_indices:
+                        c_args.append(ctypes.c_uint(buf_size))
+                    out_wchar_bufs.append((pname, wbuf))
+
+                elif is_scalar_out:
+                    # DWORD*, int*, LONG* etc. — allocate a typed scalar and pass byref
+                    s_ctype = _SCALAR_PTR_MAP.get(ptype_base, ctypes.c_ulong)
+                    scalar  = s_ctype(0)
+                    c_args.append(ctypes.byref(scalar))
+                    out_scalars.append((pname, scalar))
+
+                elif val is not None:
+                    # Normal input parameter
+                    atype = _ARGTYPE.get(ptype_base, ctypes.c_char_p)
+                    if atype == ctypes.c_char_p:
+                        c_args.append(ctypes.c_char_p(str(val).encode()))
+                    elif atype == ctypes.c_wchar_p:
+                        c_args.append(ctypes.c_wchar_p(str(val)))
+                    else:
+                        try:
+                            c_args.append(atype(int(val)))
+                        except (ValueError, TypeError):
+                            c_args.append(atype(0))
+                # else: no value, not an output pointer — optional / unknown param, skip
+
         elif not params:
             # No declared params — allocate a wchar output buffer only for
             # well-known wide-string output functions (name ends with W + keyword).
@@ -1571,12 +1683,29 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
         result = fn(*c_args)
 
+        # Collect output buffer / out-param values into the response.
+        output_parts: list[str] = []
+        for _, sbuf in out_str_bufs:
+            txt = sbuf.value
+            if isinstance(txt, bytes):
+                txt = txt.decode(errors="replace")
+            if txt:
+                output_parts.append(txt)
+        for _, wbuf in out_wchar_bufs:
+            txt = wbuf.value
+            if txt:
+                output_parts.append(txt)
+        for sc_name, scalar in out_scalars:
+            output_parts.append(f"{sc_name}={scalar.value}")
         if buf is not None:
-            return f"Returned: {buf.value}"
+            output_parts.append(str(buf.value))
+
         if restype == ctypes.c_char_p and isinstance(result, bytes):
             return f"Returned: {result.decode(errors='replace')}"
         if restype == ctypes.c_wchar_p and isinstance(result, str):
             return f"Returned: {result}"
+        if output_parts:
+            return f"Returned: {result}\n" + "\n".join(output_parts)
         return f"Returned: {result}"
     except Exception as exc:
         return f"DLL call error: {exc}"
