@@ -38,6 +38,7 @@ from api.storage import (
     _get_job_status,
     _get_invocable,
     _enqueue_analysis,
+    _load_findings,
 )
 from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
@@ -359,4 +360,16 @@ def download(job_id: str, filename: str):
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@app.get("/api/findings/{job_id}")
+def get_findings(job_id: str):
+    """Return all LLM-recorded findings for a job as JSON.
+
+    Findings are written by the record_finding synthetic tool during chat
+    sessions and persist in Blob Storage.  Clients can download this to get
+    a human-readable reverse-engineering document produced by the LLM.
+    """
+    findings = _load_findings(job_id)
+    return JSONResponse(content={"job_id": job_id, "findings": findings})
 

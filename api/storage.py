@@ -152,6 +152,46 @@ def _register_invocables(job_id: str, invocables: list[dict]) -> None:
         logger.warning("[%s] Failed to persist invocables to Blob: %s", job_id, exc)
 
 
+# ── Per-job LLM findings (probe-and-learn memory) ─────────────────────────
+# The LLM writes entries here via the record_finding synthetic tool.
+# Entries survive session end and are injected into the system prompt on the
+# next session so the model starts informed instead of probing from scratch.
+_JOB_FINDINGS: dict[str, list] = {}
+_JOB_FINDINGS_LOCK = threading.Lock()
+
+
+def _save_finding(job_id: str, entry: dict) -> None:
+    """Append a single finding dict to in-memory cache and blob."""
+    import datetime
+    entry.setdefault("recorded_at", datetime.datetime.utcnow().isoformat() + "Z")
+    with _JOB_FINDINGS_LOCK:
+        _JOB_FINDINGS.setdefault(job_id, []).append(entry)
+        findings = list(_JOB_FINDINGS[job_id])
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/findings.json",
+            json.dumps(findings, indent=2).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist finding to Blob: %s", job_id, exc)
+
+
+def _load_findings(job_id: str) -> list:
+    """Return all findings for a job; reads from blob on cache miss."""
+    with _JOB_FINDINGS_LOCK:
+        cached = _JOB_FINDINGS.get(job_id)
+    if cached is not None:
+        return cached
+    try:
+        data = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/findings.json"))
+        with _JOB_FINDINGS_LOCK:
+            _JOB_FINDINGS[job_id] = data
+        return data
+    except Exception:
+        return []
+
+
 def _get_invocable(job_id: str, name: str) -> dict | None:
     with _JOB_MAP_LOCK:
         result = _JOB_INVOCABLE_MAPS.get(job_id, {}).get(name)

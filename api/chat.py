@@ -31,7 +31,7 @@ from fastapi import HTTPException
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS
 from api.executor import _execute_tool
-from api.storage import _register_invocables, _get_invocable
+from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
@@ -43,7 +43,30 @@ _CONTEXT_WINDOW_TURNS = 20
 _GENERIC_PARAM = re.compile(r'^param_\d+$')
 
 
-def _schema_quality(invocables: list) -> str:
+# ── Synthetic record_finding tool definition (always injected) ────────────
+_RECORD_FINDING_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "record_finding",
+        "description": (
+            "Record a discovered fact about a function's calling convention or parameter semantics. "
+            "Call this ONLY when you have conclusive evidence: either a call succeeded (non-error return) "
+            "or you have definitively exhausted all encoding options for a parameter. "
+            "Findings persist across sessions so future calls start informed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string", "description": "The exact function name, e.g. CS_LookupCustomer"},
+                "param_name":    {"type": "string", "description": "The parameter this finding relates to, e.g. param_1"},
+                "finding":       {"type": "string", "description": "Plain English description: what works, what fails, and why"},
+                "working_call":  {"type": "object", "description": "The exact args dict that produced a non-error return, if any"},
+            },
+            "required": ["function_name", "finding"],
+        },
+    },
+}
+
     """Return 'basic' when every parameter across all invocables has a generic
     name (param_1, param_2…), 'rich' otherwise.  'basic' signals a black-box
     binary where the reasoning model should be preferred."""
@@ -100,7 +123,26 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-def _build_system_message(invocables: list) -> dict:
+def _build_system_message(invocables: list, job_id: str = "") -> dict:
+    # Load any findings from previous sessions for this job.
+    prior = _load_findings(job_id) if job_id else []
+    findings_block = ""
+    if prior:
+        lines = []
+        for f in prior:
+            fn   = f.get("function", "?")
+            pm   = f.get("param", "")
+            note = f.get("finding", "")
+            wc   = f.get("working_call")
+            line = f"  - {fn}{(' ' + pm) if pm else ''}: {note}"
+            if wc:
+                line += f" (working call: {wc})"
+            lines.append(line)
+        findings_block = (
+            "\nKNOWN WORKING PATTERNS (discovered in previous sessions — use these first):\n"
+            + "\n".join(lines)
+            + "\n"
+        )
     # Detect prerequisite/initialisation functions by common naming conventions.
     _INIT_SUFFIXES = ("initialize", "init", "startup", "start", "setup", "open", "login", "logon", "connect")
     init_fns = [
@@ -147,8 +189,11 @@ def _build_system_message(invocables: list) -> dict:
             "   - When a parameter value or encoding succeeds, record it explicitly in your next message "
             "and reuse it in all subsequent calls that session.\n"
             "   - Only report failure to the user after at least three retry attempts with different arguments.\n"
-            "Use only the tools provided in this session."
+            "7. Whenever you discover something conclusive about a function — a working call, a confirmed "
+            "failure mode, a required encoding — call record_finding immediately to persist it. "
+            "Do NOT call record_finding speculatively or as commentary; only call it for definitive results."
             + init_rule
+            + findings_block
         ),
     }
 
@@ -196,11 +241,23 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     sys_msgs  = [m for m in messages if m.get("role") == "system"]
     user_msgs = [m for m in messages if m.get("role") != "system"]
     if not sys_msgs:
-        sys_msgs = [_build_system_message(invocables)]
+        sys_msgs = [_build_system_message(invocables, job_id)]
     conversation = sys_msgs + user_msgs[-_CONTEXT_WINDOW_TURNS:]
 
     _AI_SEARCH_TOP_K = OPENAI_MAX_TOOLS
     _active_tools = list(tools)
+    # Always inject the synthetic findings tool so the LLM can record
+    # discoveries regardless of which DLL tools are in scope.
+    _findings_inv = {
+        "name": "record_finding",
+        "source_type": "findings",
+        "_job_id": job_id,
+        "execution": {"method": "findings"},
+        "parameters": [],
+    }
+    inv_map["record_finding"] = _findings_inv
+    if not any(t.get("function", {}).get("name") == "record_finding" for t in _active_tools):
+        _active_tools.append(_RECORD_FINDING_TOOL)
     _called_launchers: set[str] = set()
     _tools_executed: list[str] = []  # names of tool calls that actually ran
     _last_user_message = next(

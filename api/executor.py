@@ -298,6 +298,21 @@ def _execute_tool(inv: dict, args: dict) -> str:
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method    = execution.get("method", "")
 
+    # ── Synthetic findings tool — no bridge/DLL call needed ───────────────
+    if method == "findings" or name == "record_finding":
+        from api.storage import _save_finding
+        job_id = inv.get("_job_id", "")
+        entry = {
+            "function":    args.get("function_name", ""),
+            "param":       args.get("param_name", ""),
+            "finding":     args.get("finding", ""),
+            "working_call": args.get("working_call"),
+        }
+        _save_finding(job_id, {k: v for k, v in entry.items() if v is not None})
+        fn = entry["function"] or "unknown"
+        logger.info("[findings] recorded for %s: %s", fn, entry["finding"])
+        return f"Finding recorded for {fn}."
+
     # All Windows-native methods (dll_import, gui_action, cli) must run on the
     # Windows VM.  Forward to the bridge whenever it is configured; only fall
     # back to local execution when the bridge is absent (e.g., dev on Windows).
