@@ -53,11 +53,17 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(p, dict):
                 continue
             pname = p.get("name", "arg")
+            # Prefer the pre-computed json_type (set by ghidra_analyzer) so that
+            # numeric params get "integer"/"number" rather than always "string".
+            json_type = p.get("json_type") or "string"
             props[pname] = {
-                "type": "string",
-                "description": p.get("type", "string"),
+                "type":        json_type,
+                "description": p.get("description") or p.get("type", "string"),
             }
-            required.append(pname)
+            # Only "in" direction params go in required; "out" buffers are
+            # allocated by the executor, not passed by the caller.
+            if p.get("direction", "in") != "out":
+                required.append(pname)
 
         # Discovery pipeline uses `description`; older/generated schemas use
         # `doc` or `signature`.  Fall through all three, then the name.

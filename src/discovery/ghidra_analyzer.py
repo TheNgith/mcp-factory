@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,76 @@ _CC_MAP: dict[str, str] = {
     "unknown":    "cdecl",     # safe default for x86
     "default":    "cdecl",
 }
+
+# Ghidra / C type strings → JSON Schema type strings.
+# "undefined*" and pointer types are treated as strings so the LLM can pass
+# numeric ids, hex addresses, or string values without the schema rejecting them.
+_GHIDRA_TYPE_TO_JSON: dict[str, str] = {
+    "int":        "integer",
+    "uint":       "integer",
+    "long":       "integer",
+    "ulong":      "integer",
+    "longlong":   "integer",
+    "ulonglong":  "integer",
+    "short":      "integer",
+    "ushort":     "integer",
+    "char":       "integer",
+    "uchar":      "integer",
+    "bool":       "boolean",
+    "float":      "number",
+    "double":     "number",
+    "void":       "string",
+}
+
+
+def _ghidra_type_to_json_schema(ghidra_type: str) -> str:
+    """Convert a Ghidra/C type string to a JSON Schema primitive type.
+
+    Falls back to "string" for pointers, undefined*, and anything unknown so
+    the LLM can always pass a serialised value the executor can handle.
+    """
+    t = ghidra_type.lower().strip()
+    # Strip pointer stars and const so we check the base type
+    base = t.replace("*", "").replace("const", "").strip()
+    return _GHIDRA_TYPE_TO_JSON.get(base, "string")
+
+
+def _params_from_signature(sig: str) -> list[dict]:
+    """Parse parameter types/names from a C-style Ghidra prototype string.
+
+    Handles signatures like:
+        int __stdcall CS_Foo(undefined8 param1, float * param2, int param3)
+
+    Returns a list of {"name", "type", "ordinal"} dicts, or [] if unparseable.
+    This is used as a last-resort fallback when neither DecompInterface nor
+    getParameters() returned any parameters.
+    """
+    m = re.search(r'\(([^)]*)\)', sig)
+    if not m:
+        return []
+    params_str = m.group(1).strip()
+    if not params_str or params_str.lower() == "void":
+        return []
+    result = []
+    for i, part in enumerate(params_str.split(",")):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split()
+        if len(tokens) >= 2:
+            # Last token is the parameter name; preceding tokens are the type
+            raw_name = tokens[-1]
+            ptype    = " ".join(tokens[:-1])
+            # If the name starts with '*', it's a pointer — move stars to type
+            stars    = len(raw_name) - len(raw_name.lstrip("*"))
+            name     = raw_name.lstrip("*") or f"param_{i}"
+            if stars:
+                ptype += " " + ("*" * stars)
+        else:
+            name  = f"param_{i}"
+            ptype = tokens[0] if tokens else "undefined"
+        result.append({"name": name, "type": ptype, "ordinal": i})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +325,26 @@ def _parse_output(
 
         # Build parameter list in standard schema format
         parameters: list[dict] = []
-        for p in fn.get("parameters", []):
+
+        raw_params = fn.get("parameters", [])
+
+        # Last-resort fallback: if DecompInterface and getParameters() both
+        # returned nothing, try to parse the prototype string Ghidra built
+        # (getPrototypeString).  This typically looks like:
+        #   int __stdcall CS_Foo(undefined8 param1, undefined8 param2)
+        # and at least tells us how many parameters the function takes.
+        if not raw_params:
+            sig = fn.get("signature", "")
+            if sig:
+                parsed = _params_from_signature(sig)
+                if parsed:
+                    logger.debug(
+                        "ghidra_analyzer: parsed %d params from signature for %s: %s",
+                        len(parsed), name, sig,
+                    )
+                    raw_params = parsed
+
+        for p in raw_params:
             ptype    = p.get("type", "int")
             ptype_lc = ptype.lower()
             # Non-const pointer parameters are output buffers / out-params in Win32 C APIs.
@@ -267,6 +357,7 @@ def _parse_output(
             parameters.append({
                 "name":        p.get("name", f"param_{p.get('ordinal', 0)}"),
                 "type":        ptype,
+                "json_type":   _ghidra_type_to_json_schema(ptype),
                 "description": f"Parameter recovered by Ghidra decompiler (type: {ptype})",
                 "direction":   "out" if is_out else "in",
             })
