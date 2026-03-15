@@ -451,7 +451,7 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
         try:
             logger.info("Ghidra fallback triggered for %s (all other analyzers returned 0)", target.name)
             analyze_with_ghidra = _import_ghidra()
-            ghidra_results = analyze_with_ghidra(target, timeout_s=180)
+            ghidra_results = analyze_with_ghidra(target, timeout_s=180, exported_only=True)
             invocables.extend(ghidra_results)
             logger.info("Ghidra: %d functions recovered from %s",
                         len(ghidra_results), target.name)
