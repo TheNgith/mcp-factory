@@ -1685,14 +1685,28 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
                 elif val is not None:
                     # Normal input parameter.
-                    # IMPORTANT: if the Ghidra type is a pointer (byte*, undefined*,
-                    # BYTE*, etc.) and the caller supplied a value, always encode as
-                    # c_char_p.  Stripping the '*' and using the base type (e.g.
-                    # c_ubyte for "byte") would pass an integer that the function
-                    # then tries to dereference — e.g. c_ubyte(1042) truncates to
-                    # 18, the function reads address 0x12, instant access violation.
+                    # Pointer-typed params (byte*, undefined*, BYTE*, etc.) have two
+                    # valid encodings depending on what the DLL actually expects:
+                    #
+                    #   String / opaque pointer  → c_char_p(str(val).encode())
+                    #     RCX = address of heap bytes, e.g. b"1042\x00"
+                    #
+                    #   Raw integer in pointer slot → c_int64(int(val))
+                    #     RCX = 1042  (the DLL treats the register value as an ID,
+                    #     not as a memory address to dereference)
+                    #
+                    # The LLM signals which to use by the JSON value type:
+                    #   {"param_1": "1042"} → string → c_char_p  (default / first try)
+                    #   {"param_1": 1042}   → integer → c_int64  (retry / probe)
+                    #
+                    # This lets the probe-and-learn loop try both encodings without
+                    # any DLL-specific knowledge baked in here.
                     if is_ptr:
-                        c_args.append(ctypes.c_char_p(str(val).encode()))
+                        if isinstance(val, int):
+                            # LLM explicitly passed an integer — put raw value in register
+                            c_args.append(ctypes.c_int64(val))
+                        else:
+                            c_args.append(ctypes.c_char_p(str(val).encode()))
                     else:
                         atype = _ARGTYPE.get(ptype_base, ctypes.c_char_p)
                         if atype == ctypes.c_char_p:
