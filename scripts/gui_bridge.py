@@ -500,11 +500,27 @@ async def analyze(
             import shutil
             filename = Path(body.path).name
             target   = _UPLOAD_DIR / filename
-            target.write_bytes(base64.b64decode(body.content))
-            logger.info(
-                "Decoded uploaded binary to %s (%d bytes)",
-                target, target.stat().st_size,
-            )
+            # Decode first — a binascii.Error here means genuinely corrupt content.
+            _decoded = base64.b64decode(body.content)
+            try:
+                target.write_bytes(_decoded)
+                logger.info(
+                    "Decoded uploaded binary to %s (%d bytes)",
+                    target, target.stat().st_size,
+                )
+            except OSError as _write_err:
+                # The file may be locked because a previous /execute call loaded it
+                # via ctypes.LoadLibrary and the handle wasn't released yet.
+                # If the file already exists on disk (same binary, different session),
+                # continue analysis with the existing copy rather than aborting.
+                if target.exists():
+                    logger.warning(
+                        "Could not overwrite %s (%s) — file is locked by a loaded DLL; "
+                        "reusing existing on-disk copy for analysis.",
+                        target.name, _write_err,
+                    )
+                else:
+                    raise  # truly missing upload — propagate as 500
             # Prefer the real system-path binary for GUI analysis — persistent copies
             # of UWP/MSIX stubs (e.g. calc.exe) can't trigger package activation
             # from arbitrary directories.  Search system paths directly by
@@ -1557,6 +1573,7 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         "longpathw", "shortpathw", "folderw", "volumew",
     )
 
+    lib = None
     try:
         # Choose calling convention: cdecl functions must use CDLL; stdcall uses WinDLL.
         # Using the wrong convention on x86 32-bit corrupts the stack and returns garbage.
@@ -1570,9 +1587,9 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
         c_args = []
         buf    = None  # legacy: wchar buffer for W-suffix no-param functions
-        out_str_bufs:   list[tuple[str, object]] = []  # (name, create_string_buffer)
-        out_wchar_bufs: list[tuple[str, object]] = []  # (name, create_unicode_buffer)
-        out_scalars:    list[tuple[str, object]] = []  # (name, ctypes scalar)
+        out_str_bufs:   list[tuple[str, Any]] = []  # (name, create_string_buffer)
+        out_wchar_bufs: list[tuple[str, Any]] = []  # (name, create_unicode_buffer)
+        out_scalars:    list[tuple[str, Any]] = []  # (name, ctypes scalar)
 
         # Scalar ctypes used to allocate DWORD* / int* output parameters
         _SCALAR_PTR_MAP = {
@@ -1709,6 +1726,16 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         return f"Returned: {result}"
     except Exception as exc:
         return f"DLL call error: {exc}"
+    finally:
+        # Unload the DLL so the file is not held locked between execute calls.
+        # Without this, a subsequent /analyze call that tries to overwrite the
+        # same file in C:\mcp-factory\uploads\ would get ERROR_SHARING_VIOLATION
+        # and the bridge would return 400, preventing Ghidra from re-analyzing.
+        if lib is not None:
+            try:
+                ctypes.windll.kernel32.FreeLibrary(lib._handle)
+            except Exception:
+                pass
 
 
 @app.post("/execute")
