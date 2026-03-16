@@ -192,6 +192,33 @@ def _load_findings(job_id: str) -> list:
         return []
 
 
+def _patch_finding(job_id: str, function_name: str, patch: dict) -> None:
+    """Update the most recent finding for function_name in-place.
+
+    Used by the consistency-enforcement step in explore_worker to override
+    the LLM's classification with ground-truth observed DLL return values.
+    """
+    with _JOB_FINDINGS_LOCK:
+        findings = _JOB_FINDINGS.get(job_id, [])
+        updated = False
+        for i in range(len(findings) - 1, -1, -1):
+            if findings[i].get("function") == function_name:
+                findings[i].update(patch)
+                updated = True
+                break
+        all_findings = list(findings)
+    if not updated:
+        return
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/findings.json",
+            json.dumps(all_findings, indent=2).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to persist patched finding to Blob: %s", job_id, exc)
+
+
 def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
     """Apply a patch dict to an invocable and re-upload both blob artifacts.
 

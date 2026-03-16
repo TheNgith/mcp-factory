@@ -19,9 +19,9 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
@@ -298,6 +298,59 @@ def _build_explore_system_message(
     }
 
 
+def _synthesize(client, model: str, findings: list[dict]) -> str:
+    """Generate a full API reference Markdown document from completed findings.
+
+    Port of run_local.py's _synthesize() — same prompt, same section structure.
+    Result is uploaded to blob as api_reference.md after exploration completes.
+    """
+    findings_json = json.dumps(findings, indent=2, ensure_ascii=False)
+    system_msg = (
+        "You are a senior technical writer. Given structured reverse-engineering findings "
+        "for an undocumented Windows DLL, produce a complete API reference document in Markdown.\n\n"
+        "The document MUST include these sections in order:\n"
+        "## Overview\n"
+        "  One paragraph explaining what this DLL does and what business domain it serves.\n\n"
+        "## Data Model\n"
+        "  Infer the key entities (e.g. Customer, Order) from output buffer format strings "
+        "and parameter patterns. List their fields with types.\n\n"
+        "## Initialization\n"
+        "  The exact call sequence required before using other functions, with code example.\n\n"
+        "## Function Reference\n"
+        "  Group functions by category (Read, Write, Utility). For each function:\n"
+        "  - Signature with semantic parameter names\n"
+        "  - Description\n"
+        "  - Parameters table (name | type | direction | description)\n"
+        "  - Return values\n"
+        "  - Example call\n\n"
+        "## Error Code Reference\n"
+        "  Table of all observed error codes with meanings.\n\n"
+        "## Known Limitations\n"
+        "  Functions that could not be fully documented and why.\n\n"
+        "Be precise and concise. Use the semantic parameter names from the findings, not param_N."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Here are the reverse-engineering findings for this DLL:\n\n"
+                        f"```json\n{findings_json}\n```\n\n"
+                        "Produce the full API reference document now."
+                    ),
+                },
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as exc:
+        logger.debug("_synthesize failed: %s", exc)
+        return ""
+
+
 def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     """Background worker: explore each invocable with the LLM and enrich the schema."""
     if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
@@ -402,6 +455,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
         # Phase 0: extract static hints from the DLL binary (best-effort)
         _static_hints_block = ""
+        _dll_strings: dict = {}
         try:
             dll_path = next(
                 (inv.get("execution", {}).get("dll_path", "") for inv in invocables
@@ -417,6 +471,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 _ids     = [s for s in _raw if _re2.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
                 _emails  = [s for s in _raw if _re2.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, _re2.I)]
                 _fmts    = [s for s in _raw if "%" in s and any(c in s for c in ("s", "d", "u", "f", "lu")) and len(s) < 120]
+                _dll_strings = {"ids": _ids, "emails": _emails, "all": _raw}
                 _status  = [s for s in _raw if s.isupper() and 4 <= len(s) <= 16 and s.isalpha()
                             and s.lower() in {"active","inactive","pending","shipped","delivered",
                                               "cancelled","suspended","complete","unknown","locked","unlocked"}]
@@ -436,6 +491,25 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         except Exception as _e:
             logger.debug("[%s] explore_worker: phase0 string extraction failed: %s", job_id, _e)
 
+        # Phase 1: write-unlock probe — mirror of run_local.py --write-probe logic
+        write_unlock_block = ""
+        try:
+            logger.info("[%s] explore_worker: phase1 write-unlock probe…", job_id)
+            _set_explore_status(job_id, 0, total, "Testing write-mode unlock…")
+            unlock_result = _probe_write_unlock(invocables, _dll_strings)
+            if unlock_result.get("unlocked"):
+                write_unlock_block = (
+                    "\nWRITE MODE ACTIVE: The write-unlock sequence has already been executed. "
+                    "Write functions (ProcessPayment, RedeemLoyaltyPoints, UnlockAccount etc.) "
+                    "should now succeed. Probe them with real customer IDs from STATIC ANALYSIS HINTS.\n"
+                )
+                logger.info("[%s] explore_worker: phase1 UNLOCKED: %s", job_id, unlock_result["notes"])
+            else:
+                logger.info("[%s] explore_worker: phase1 not unlocked: %s", job_id,
+                            unlock_result.get("notes", ""))
+        except Exception as _we:
+            logger.debug("[%s] explore_worker: phase1 write-unlock probe failed: %s", job_id, _we)
+
         for inv in invocables:
             fn_name = inv["name"]
 
@@ -451,6 +525,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             # Build a focused conversation just for this function
             prior = _load_findings(job_id)
             sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=vocab)
+            _is_write_fn = bool(_re.search(
+                r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", fn_name, _re.I
+            ))
             conversation = [
                 sys_msg,
                 {
@@ -461,9 +538,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         "then call enrich_invocable and record_finding with what you learned. "
                         "Be brief — one summary sentence after you're done."
                         + _static_hints_block
+                        + (write_unlock_block if _is_write_fn else "")
                     ),
                 },
             ]
+
+            # Track calls that returned 0 for ground-truth consistency enforcement
+            _observed_successes: list[dict] = []
+            _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
                 try:
@@ -523,6 +605,24 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     else:
                         tool_result = f"Tool '{tc_name}' not found."
 
+                    # Ground-truth tracking: record direct observations of return=0
+                    if tc_name == fn_name:
+                        _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
+                        if _ret_m and int(_ret_m.group(1)) == 0:
+                            _out_bases = frozenset({
+                                "undefined", "undefined2", "undefined4", "undefined8",
+                                "uint", "uint32_t", "int", "int32_t", "dword",
+                                "ulong", "uint4", "uint8", "long", "ulong32",
+                            })
+                            _clean: dict = {}
+                            for _k, _v in tc_args.items():
+                                _p = _p_lookup.get(_k, {})
+                                _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                                _is_out = "*" in _p.get("type", "") and _pt in _out_bases
+                                if not _is_out and _p.get("direction", "in") != "out":
+                                    _clean[_k] = _v
+                            _observed_successes.append(_clean)
+
                     logger.info(
                         "[%s] explore_worker: tool=%s result=%s",
                         job_id, tc_name, str(tool_result)[:120],
@@ -538,6 +638,46 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             already_explored.add(fn_name)
             _set_explore_status(job_id, explored, total, f"Completed {fn_name}")
 
+            # Consistency enforcement (port of run_local.py _discover_loop logic)
+            if _observed_successes:
+                # Ground-truth override: we observed return=0 directly → force success
+                try:
+                    _patch_finding(job_id, fn_name, {
+                        "working_call": _observed_successes[0],
+                        "status": "success",
+                    })
+                    logger.info(
+                        "[%s] explore_worker: ground-truth override for %s working_call=%s",
+                        job_id, fn_name, _observed_successes[0],
+                    )
+                except Exception as _ce:
+                    logger.debug("[%s] consistency patch failed for %s: %s", job_id, fn_name, _ce)
+            else:
+                # Verify the LLM's claimed working_call by re-running it
+                _cur = _load_findings(job_id)
+                _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
+                if _ff and _ff.get("working_call") is not None:
+                    _vi = inv_map.get(fn_name)
+                    if _vi:
+                        try:
+                            _vr = _execute_tool(_vi, _ff["working_call"])
+                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                            if _vm:
+                                _vret = int(_vm.group(1))
+                                if _vret not in sentinels and _vret <= 0xFFFFFFF0:
+                                    _patch_finding(job_id, fn_name, {"status": "success"})
+                                else:
+                                    _patch_finding(job_id, fn_name, {
+                                        "working_call": None, "status": "error",
+                                    })
+                                    logger.info(
+                                        "[%s] explore_worker: discarded hallucinated working_call for %s",
+                                        job_id, fn_name,
+                                    )
+                        except Exception as _ve:
+                            logger.debug("[%s] working_call verify failed for %s: %s",
+                                         job_id, fn_name, _ve)
+
             # Update shared vocabulary from the latest finding for this function
             last_finding = _load_findings(job_id)
             if last_finding:
@@ -549,6 +689,24 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         vocab = _update_vocabulary(client, model, vocab, last)
                     except Exception as _ve:
                         logger.debug("[%s] vocab update failed for %s: %s", job_id, fn_name, _ve)
+
+        # Synthesis: generate API reference Markdown document from all findings
+        try:
+            _syn_findings = _load_findings(job_id)
+            if _syn_findings:
+                logger.info("[%s] explore_worker: synthesizing API reference (%d fns)…",
+                            job_id, len(_syn_findings))
+                _set_explore_status(job_id, explored, total, "Synthesizing API reference…")
+                _report = _synthesize(client, model, _syn_findings)
+                if _report:
+                    _upload_to_blob(
+                        ARTIFACT_CONTAINER,
+                        f"{job_id}/api_reference.md",
+                        _report.encode("utf-8"),
+                    )
+                    logger.info("[%s] explore_worker: api_reference.md saved to blob", job_id)
+        except Exception as _syn_e:
+            logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
 
         # Mark exploration done — update job status back to previous terminal state
         # or set a new "explore_done" sub-status so the UI knows it finished.
