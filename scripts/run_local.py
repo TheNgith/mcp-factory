@@ -356,6 +356,13 @@ PROTOCOL FOR EACH FUNCTION:
    - bare undefined* output buffer + adjacent uint size param: omit BOTH — the bridge allocates a
      4096-byte buffer and auto-supplies size=4096.  Do NOT pass the size param as 0.
    - Batch multiple probe variants in ONE round if possible.
+   ZERO-OUTPUT RETRY RULE: If the call returns SUCCESS (0) but every output param reports value=0,
+   the input values were likely too small to produce a non-trivial result.  Before concluding the
+   output is always zero, retry with MUCH LARGER numeric inputs:
+     - For financial/calculation functions (Calc*, Compute*, Interest*, Rate*, Balance*):
+       use principal=10000, rate=500, period=12 — typical basis-point and month scale.
+     - For general numeric functions: try inputs 1000, 10000, 100000.
+   Only classify the output param as "always returns 0" if it remains 0 after the large-value retry.
 3. Classify the return value:
    - 0 = success for action functions (Initialize, Process*, Unlock*, Redeem*)
    - 4294967295 (0xFFFFFFFF) = error sentinel ("not found" / "invalid input")
