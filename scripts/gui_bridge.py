@@ -1602,7 +1602,17 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
             "long":  ctypes.c_long,    "ulong":         ctypes.c_ulong,
             "word":  ctypes.c_ushort,  "byte":          ctypes.c_ubyte,
             "bool":  ctypes.c_bool,
+            # Ghidra "undefined*" types — specific sizes → typed scalar slots
+            "undefined":  ctypes.c_ulong,
+            "undefined2": ctypes.c_ushort,
+            "undefined4": ctypes.c_uint,
+            "undefined8": ctypes.c_ulonglong,
         }
+        # undefined4* / undefined8* are always output scalars; bare undefined* is a byte buffer.
+        # Treat val=="" the same as val=None for these types so the LLM's blank exploratory
+        # probes ("param_2": "") correctly allocate an output slot rather than a 1-byte char ptr.
+        _ALWAYS_OUT_SCALAR_BASES = frozenset({"undefined2", "undefined4", "undefined8"})
+        _ALWAYS_OUT_BUF_BASES    = frozenset({"undefined"})
         # Type names that represent a buffer-length argument following a char* out-buf
         _SIZE_TYPES = {
             "dword", "int", "uint", "unsigned int", "size_t",
@@ -1628,8 +1638,18 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                 # honour it as an input regardless of the direction heuristic —
                 # Ghidra often marks non-const pointers as "out" even when they
                 # are actually input strings (e.g. byte * for a customer-ID arg).
-                is_out_ptr    = is_ptr and not is_const_ptr and val is None
-                is_char_out   = is_out_ptr and "char" in ptype_base and "wchar" not in ptype_base
+                # Treat val=="" the same as val=None for undefined-typed pointer params.
+                # The LLM passes "" for unknown pointer args; for output-only types that
+                # is semantically "allocate for me", not "pass a 1-byte string pointer".
+                _val_is_blank = val is None or (
+                    isinstance(val, str) and val == "" and
+                    ptype_base in (_ALWAYS_OUT_SCALAR_BASES | _ALWAYS_OUT_BUF_BASES)
+                )
+                is_out_ptr    = is_ptr and not is_const_ptr and _val_is_blank
+                is_char_out   = is_out_ptr and (
+                    ("char" in ptype_base and "wchar" not in ptype_base) or
+                    ptype_base in _ALWAYS_OUT_BUF_BASES   # undefined* → byte buffer
+                )
                 is_wchar_out  = is_out_ptr and "wchar" in ptype_base
                 is_scalar_out = is_out_ptr and not is_char_out and not is_wchar_out
 
