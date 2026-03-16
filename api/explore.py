@@ -99,53 +99,87 @@ def _calibrate_sentinels(invocables: list[dict], client, model: str) -> dict[int
     return _SENTINEL_DEFAULTS
 
 
+_VOCAB_UPDATE_SYSTEM = """\
+You are a DLL reverse-engineering assistant maintaining a shared vocabulary table.
+Given a new function enrichment, update the vocabulary with any NEW generalisable facts.
+Output ONLY a JSON object with these optional keys (omit keys if nothing new to add):
+{
+  "string_param_convention": "<how string input params work in this DLL>",
+  "id_formats": ["<each distinct ID pattern found, e.g. 'CUST-NNN', 'ORD-YYYYMMDD-NNNN', 'PRO-xxx'>"],
+  "ignored_params": ["<any param that is always ignored or always 0>"],
+  "init_sequence": "<what must be called before write functions work>",
+  "write_blocked_by": "<what prevents write operations>",
+  "output_format": "<how output buffers are structured, e.g. 'pipe-delimited key=value'>",
+  "error_codes": {"<hex>": "<meaning>"},
+  "notes": "<anything else generalisable across functions>"
+}
+IMPORTANT: 'id_formats' must be a LIST of all distinct patterns seen so far.
+Different functions key on different entity types (customer IDs, order IDs, product codes).
+Never assume the first/most-common ID format is 'the' primary key for all functions.
+Only include keys where you have strong evidence. Keep values concise.
+If nothing new was learned, output {}.
+"""
+
+
 def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dict:
-    """After each successful enrichment, ask the LLM to extract generalisable
-    facts (ID formats, account codes, etc.) into a shared vocabulary dict."""
-    if enrichment.get("status") != "success":
-        return vocab
-    notes = enrichment.get("notes", "")
-    params = enrichment.get("params", {})
-    if not notes and not params:
-        return vocab
+    """Ask the LLM to extract generalisable facts from one enrichment into the vocab table.
+
+    Port of run_local.py's _update_vocabulary — uses _VOCAB_UPDATE_SYSTEM system prompt,
+    runs on every enrichment (not just successful ones), and merges carefully:
+    lists are deduplicated-extended, dicts are deep-merged, scalars are overwritten.
+    """
     prompt = (
-        "You are building a shared vocabulary table while reverse-engineering a DLL.\n"
-        f"Current vocabulary table (JSON):\n{json.dumps(vocab, indent=2)}\n\n"
-        f"New enrichment finding:\n"
-        f"  Function: {enrichment.get('function', '?')}\n"
-        f"  Notes: {notes}\n"
-        f"  Params: {json.dumps(params)}\n\n"
-        "Extract NEW generalisable facts (ID formats, email patterns, status codes, "
-        "expected field names) not already in the vocabulary.\n"
-        "For each fact, store a list called 'id_formats' for ID patterns. "
-        "Output ONLY the updated JSON vocabulary (same keys, may add new ones). "
-        "If nothing new, return the existing table unchanged."
+        f"Current vocabulary:\n{json.dumps(vocab, indent=2)}\n\n"
+        f"New function enrichment:\n{json.dumps(enrichment, indent=2)}\n\n"
+        "Update the vocabulary with any new generalisable facts. Output only the updated JSON."
     )
     try:
         resp = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": _VOCAB_UPDATE_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
             temperature=0,
         )
-        raw = (resp.choices[0].message.content or "{}").strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
-        updated = json.loads(raw)
-        if isinstance(updated, dict):
-            return updated
+        text = (resp.choices[0].message.content or "").strip()
+        if text.startswith("```"):
+            text = "\n".join(text.split("\n")[1:]).rstrip("`").strip()
+        start = text.find("{")
+        end   = text.rfind("}")
+        if start != -1 and end != -1:
+            updates = json.loads(text[start : end + 1])
+            # Merge: lists are deduplicated-extended, dicts are deep-merged, scalars overwritten
+            for k, v in updates.items():
+                if isinstance(v, list) and isinstance(vocab.get(k), list):
+                    existing = set(vocab[k])
+                    vocab[k] = vocab[k] + [x for x in v if x not in existing]
+                elif isinstance(v, dict) and isinstance(vocab.get(k), dict):
+                    vocab[k].update(v)
+                elif v:
+                    vocab[k] = v
     except Exception:
         pass
     return vocab
 
 
 def _vocab_block(vocab: dict) -> str:
-    """Render the vocabulary table as a prompt hint string."""
+    """Format the vocabulary table for injection into user prompts."""
     if not vocab:
         return ""
-    lines = ["VOCABULARY (facts already discovered — use these as probe values):"]
+    lines = ["ACCUMULATED DLL KNOWLEDGE (apply these conventions immediately):"]
     for k, v in vocab.items():
-        if isinstance(v, list):
-            lines.append(f"  {k} (try ALL): {', '.join(str(x) for x in v)}")
+        if k == "id_formats" and isinstance(v, list):
+            # Explicit try-all instruction — this is the most important convention
+            lines.append(
+                f"  id_formats (try ALL of these for each unknown string param, "
+                f"not just the most common one): {', '.join(str(x) for x in v)}"
+            )
+        elif isinstance(v, list):
+            lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
+        elif isinstance(v, dict):
+            for sk, sv in v.items():
+                lines.append(f"  {k}[{sk}]: {sv}")
         else:
             lines.append(f"  {k}: {v}")
     return "\n".join(lines) + "\n"
