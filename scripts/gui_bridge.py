@@ -1781,13 +1781,24 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         if buf is not None:
             output_parts.append(str(buf.value))
 
+        _SENTINEL_NOTES: dict[int, str] = {
+            0xFFFFFFFF: "sentinel: not found/invalid",
+            0xFFFFFFFE: "sentinel: null argument",
+            0xFFFFFFFD: "sentinel: not initialized",
+            0xFFFFFFFC: "sentinel: account locked",
+            0xFFFFFFFB: "sentinel: write denied",
+        }
+        _r32 = (result & 0xFFFFFFFF) if isinstance(result, int) else 0
+        _note = _SENTINEL_NOTES.get(_r32, "")
+        _ret_tag = f"Returned: {result}" + (f" ({_note})" if _note else "")
+
         if restype == ctypes.c_char_p and isinstance(result, bytes):
             return f"Returned: {result.decode(errors='replace')}"
         if restype == ctypes.c_wchar_p and isinstance(result, str):
             return f"Returned: {result}"
         if output_parts:
-            return f"Returned: {result}\n" + "\n".join(output_parts)
-        return f"Returned: {result}"
+            return _ret_tag + "\n" + "\n".join(output_parts)
+        return _ret_tag
     except Exception as exc:
         return f"DLL call error: {exc}"
     finally:

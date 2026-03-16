@@ -344,7 +344,9 @@ _DISCOVER_SYSTEM = """\
 You are a reverse-engineering agent systematically documenting an undocumented Windows DLL.
 
 PROTOCOL FOR EACH FUNCTION:
-1. If any init function exists (CS_Initialize, *Initialize*, *Init*, *Open*), call it FIRST silently.
+1. ALWAYS call the init function (*Initialize*, *Init*, CS_Initialize) as the VERY FIRST call,
+   even when exploring a function that seems unrelated to initialization.  This ensures consistent
+   DLL state across all explorations.  Do NOT skip this step even if you think it was called before.
 2. Call the target function with safe probe values.  For each parameter:
    - integer params (uint, int, ushort): try 0, then 1, then 64, then 256
    - input string/pointer params (byte*, char*): try "" (empty string), then "test", then integer 0
@@ -356,11 +358,15 @@ PROTOCOL FOR EACH FUNCTION:
    - Batch multiple probe variants in ONE round if possible.
 3. Classify the return value:
    - 0 = success for action functions (Initialize, Process*, Unlock*, Redeem*)
-   - 4294967295 (0xFFFFFFFF) = error sentinel ("not found", "invalid input")
-   - 4294967294 (0xFFFFFFFE) = secondary error code (e.g. "null argument")
+   - 4294967295 (0xFFFFFFFF) = error sentinel ("not found" / "invalid input")
+   - 4294967294 (0xFFFFFFFE) = secondary error code ("null argument" / bad param)
+   - 4294967293 (0xFFFFFFFD) = not initialized
+   - 4294967292 (0xFFFFFFFC) = account locked or suspended
+   - 4294967291 (0xFFFFFFFB) = write operation denied (system not in write-ready state)
    - IMPORTANT: for version/build/revision functions (GetVersion, GetBuild, GetRevision):
      the return value IS the version number (a UINT) — any non-zero integer is a VALID result,
      NOT an error. Mark status "success" and document the return as "version number as UINT".
+     Decode as: major=(val>>16)&0xFF, minor=(val>>8)&0xFF, patch=val&0xFF → e.g. 131841=2.3.1.
    - "access violation" or crash = wrong pointer arg, try different encoding
 4. Status classification rules — the PRIMARY indicator is always the INTEGER RETURN VALUE:
    - Output buffer values like `param_N=<value>` appended to the result are secondary;
@@ -373,6 +379,11 @@ PROTOCOL FOR EACH FUNCTION:
                   This is the expected result for data-dependent functions without real data.
    - "crash"    = function caused an access violation / process crash
    - "unknown"  = function not found in the DLL export table
+   HARD CONSISTENCY RULES (always enforced):
+   - If working_call is non-null, status MUST be "success" — no exceptions.
+   - working_call MUST only be set when a call returned integer 0 (or a valid semantic
+     integer for GetVersion-style functions).  If every probe returned a sentinel error
+     code, set working_call to null and status to "error".
 5. After gathering evidence, output ONLY a JSON block in this EXACT format:
 
 ENRICHMENT:
@@ -386,7 +397,9 @@ ENRICHMENT:
     "param_2": {"semantic_name": "<name>", "description": "<what it is>", "type_hint": "<input|output|size>"}
   },
   "working_call": <exact args dict that produced non-error result, or null>,
-  "notes": "<anything unusual: output buffers written values, required init, known failure modes>"
+"notes": "<anything unusual: output buffers written values, required init, known failure modes.
+              For GetVersion-style returns: decode the UINT and include e.g. 'decoded: 2.3.1'.
+              For error-only results: document every error code seen and what input triggered it.>"
 }
 
 RULES:
@@ -513,6 +526,12 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
         ]
 
         enrichment: dict | None = None
+        # Track calls to THIS function that returned 0 — used to definitively
+        # override the model's classification regardless of what JSON it emits.
+        _SENTINELS = {
+            0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xFFFFFFFB,
+        }
+        _observed_successes: list[dict] = []  # args that produced return=0
         for _round in range(4):  # up to 4 rounds: init + probe + probe + final
             resp = client.chat.completions.create(
                 model=deployment,
@@ -561,6 +580,18 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
                     fn_args = {}
                 fn_inv = inv_map.get(tc.function.name)
                 result = _execute_local(fn_inv, fn_args) if fn_inv else "[error] not found"
+                # Record successful calls to the current target function
+                if tc.function.name == name and fn_inv:
+                    m_ret = re.match(r"Returned:\s*(\d+)", result or "")
+                    if m_ret:
+                        rval = int(m_ret.group(1))
+                        if rval == 0:
+                            # Remove output params from working_call (auto-allocated)
+                            clean_args = {
+                                k: v for k, v in fn_args.items()
+                                if v is not None and str(v).strip() not in ("", "None")
+                            }
+                            _observed_successes.append(clean_args)
                 print(f"   call: {tc.function.name}({fn_args}) -> {result}")
                 conversation.append({"role": "tool", "tool_call_id": tc.id, "content": result})
         else:
@@ -579,6 +610,33 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
 
         if enrichment:
             enrichment.setdefault("function", name)
+
+            # ── Programmatic consistency enforcement ─────────────────────────
+            # Priority 1: if we OBSERVED a successful call (return=0) during probing,
+            # use the first one as the ground-truth working_call and force success.
+            if _observed_successes:
+                enrichment["working_call"] = _observed_successes[0]
+                enrichment["status"] = "success"
+            else:
+                # Priority 2: verify any working_call the model claims
+                wc = enrichment.get("working_call")
+                if wc is not None:
+                    verify_inv = inv_map.get(name)
+                    if verify_inv:
+                        vresult = _execute_local(verify_inv, wc)
+                        m = re.match(r"Returned:\s*(\d+)", vresult or "")
+                        if m:
+                            vret = int(m.group(1))
+                            if vret == 0 or (vret not in _SENTINELS and vret < 0xFFFFFFF0):
+                                # Verified — force status to success
+                                enrichment["status"] = "success"
+                            else:
+                                # working_call returned a sentinel — discard it
+                                enrichment["working_call"] = None
+                                if enrichment.get("status") == "success":
+                                    enrichment["status"] = "error"
+            # ─────────────────────────────────────────────────────────────────
+
             enrichments.append(enrichment)
             # Persist after each function so a crash doesn't lose progress
             if findings_path:

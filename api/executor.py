@@ -220,7 +220,20 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
 
         result = fn(*c_args)
 
-        output_parts: list[str] = [f"Returned: {result}"]
+        # Annotate well-known Windows error sentinels in the output so the LLM
+        # does not have to memorise numeric values.
+        _SENTINEL_NOTES: dict[int, str] = {
+            0xFFFFFFFF: "sentinel: not found/invalid",
+            0xFFFFFFFE: "sentinel: null argument",
+            0xFFFFFFFD: "sentinel: not initialized",
+            0xFFFFFFFC: "sentinel: account locked",
+            0xFFFFFFFB: "sentinel: write denied",
+        }
+        _r32 = result & 0xFFFFFFFF
+        _note = _SENTINEL_NOTES.get(_r32, "")
+        output_parts: list[str] = [
+            f"Returned: {result}" + (f" ({_note})" if _note else "")
+        ]
         for buf_name, sbuf in out_str_bufs:
             txt = sbuf.value
             if isinstance(txt, bytes):
