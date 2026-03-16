@@ -496,10 +496,34 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                  if inv.get("execution", {}).get("dll_path")),
                 "",
             )
+            import re as _re2
+            from pathlib import Path as _Path
+            _data: bytes | None = None
+            # Primary: read from local path (works when running on Windows or
+            # when the path is a valid Linux temp path from the upload worker).
             if dll_path:
-                import re as _re2
-                from pathlib import Path as _Path
-                _data = _Path(dll_path).read_bytes()
+                try:
+                    _data = _Path(dll_path).read_bytes()
+                except Exception:
+                    pass
+            # Fallback: download the original uploaded binary from Blob Storage.
+            # This handles the common Azure deployment case where dll_path is a
+            # Windows bridge VM path that doesn't exist on the Linux API container.
+            if _data is None:
+                try:
+                    from api.storage import _download_blob
+                    from api.config import UPLOAD_CONTAINER
+                    # The upload worker stores the file as {job_id}/input<suffix>
+                    # Try common DLL/EXE extensions, then any blob starting with input
+                    for _ext in (".dll", ".exe", ".bin", ""):
+                        try:
+                            _data = _download_blob(UPLOAD_CONTAINER, f"{job_id}/input{_ext}")
+                            break
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            if _data is not None:
                 _text = _data.decode("ascii", errors="ignore")
                 _raw  = sorted(set(m.group(0).strip() for m in _re2.finditer(r"[ -~]{6,}", _text) if m.group(0).strip()))
                 _ids     = [s for s in _raw if _re2.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
