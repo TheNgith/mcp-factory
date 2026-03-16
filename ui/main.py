@@ -933,10 +933,14 @@ $('discover-btn').addEventListener('click', async () => {
   $('discover-bar-msg').textContent = 'Starting exploration…';
 
   try {
+    const checkedBoxes = [...document.querySelectorAll('#inv-list input[type=checkbox]:checked')];
+    const selectedInvocables = checkedBoxes.length > 0
+      ? checkedBoxes.map(cb => state.invocables[parseInt(cb.id.replace('cb',''))])
+      : state.invocables;
     const res = await fetch(`/api/jobs/${state.jobId}/explore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invocables: state.invocables }),
+      body: JSON.stringify({ invocables: selectedInvocables }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
 
