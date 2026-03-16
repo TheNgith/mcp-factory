@@ -537,6 +537,12 @@ async def analyze(
                 Path(r"C:\Windows\SysWOW64") / target.name,
                 Path(r"C:\Program Files") / target.name,
                 Path(r"C:\Program Files (x86)") / target.name,
+                # Microsoft Office DLLs — check all Office versions
+                Path(r"C:\Program Files\Microsoft Office\root\Office16") / target.name,
+                Path(r"C:\Program Files\Microsoft Office\root\Office15") / target.name,
+                Path(r"C:\Program Files (x86)\Microsoft Office\root\Office16") / target.name,
+                Path(r"C:\Program Files (x86)\Microsoft Office\Office16") / target.name,
+                Path(r"C:\Program Files (x86)\Microsoft Office\Office15") / target.name,
             ]
             for _sys_candidate in _sys_paths:
                 if _sys_candidate.exists() and _sys_candidate.resolve() != target.resolve():
