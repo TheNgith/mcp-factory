@@ -449,7 +449,7 @@ Given a new function enrichment, update the vocabulary with any NEW generalisabl
 Output ONLY a JSON object with these optional keys (omit keys if nothing new to add):
 {
   "string_param_convention": "<how string input params work in this DLL>",
-  "id_format": "<pattern of ID strings, e.g. 'CUST-NNN, ORD-YYYYMMDD-NNNN'>",
+  "id_formats": ["<each distinct ID pattern found, e.g. 'CUST-NNN', 'ORD-YYYYMMDD-NNNN', 'PRO-xxx'>"],
   "ignored_params": ["<any param that is always ignored or always 0>"],
   "init_sequence": "<what must be called before write functions work>",
   "write_blocked_by": "<what prevents write operations>",
@@ -457,7 +457,10 @@ Output ONLY a JSON object with these optional keys (omit keys if nothing new to 
   "error_codes": {"<hex>": "<meaning>"},
   "notes": "<anything else generalisable across functions>"
 }
-Only include keys where you have strong evidence. Keep values concise (one sentence each).
+IMPORTANT: 'id_formats' must be a LIST of all distinct patterns seen so far.
+Different functions key on different entity types (customer IDs, order IDs, product codes).
+Never assume the first/most-common ID format is 'the' primary key for all functions.
+Only include keys where you have strong evidence. Keep values concise.
 If nothing new was learned, output {}.
 """
 
@@ -506,7 +509,13 @@ def _vocab_block(vocab: dict) -> str:
         return ""
     lines = ["ACCUMULATED DLL KNOWLEDGE (apply these conventions immediately):"]
     for k, v in vocab.items():
-        if isinstance(v, list):
+        if k == "id_formats" and isinstance(v, list):
+            # Explicit try-all instruction — this is the most important convention
+            lines.append(
+                f"  id_formats (try ALL of these for each unknown string param, "
+                f"not just the most common one): {', '.join(str(x) for x in v)}"
+            )
+        elif isinstance(v, list):
             lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
         elif isinstance(v, dict):
             for sk, sv in v.items():
@@ -541,11 +550,23 @@ def _probe_write_unlock(inv_map: dict, dll_strings: dict) -> dict:
     _UNLOCK_PATTERNS = [
         r"begin", r"start", r"enable", r"open", r"setmode", r"auth",
         r"login", r"logon", r"connect", r"session", r"transaction",
+        r"unlock",  # covers CS_UnlockAccount and similar
     ]
     _UNLOCK_FNS = [
         n for n in inv_map
         if any(re.search(p, n, re.I) for p in _UNLOCK_PATTERNS)
     ]
+
+    # Pull known ID and email strings from Phase 0 extraction
+    _known_ids    = (dll_strings or {}).get("ids", [])[:12]
+    _known_emails = (dll_strings or {}).get("emails", [])[:8]
+    # Short plain strings from binary that could be credentials/modes
+    _known_tokens = [
+        s for s in (dll_strings or {}).get("all", [])
+        if 3 <= len(s) <= 24 and s.isascii() and "|"
+        not in s and "%" not in s and s not in _known_ids
+        and s not in _known_emails
+    ][:20]
 
     sequence: list[dict] = []
 
@@ -558,10 +579,17 @@ def _probe_write_unlock(inv_map: dict, dll_strings: dict) -> dict:
         ret = int(m.group(1)) if m else None
         return result, ret
 
-    def _write_blocked(fn_name: str) -> bool:
-        """Return True if fn returns write-denied sentinel with CUST-001."""
-        _, ret = _call(fn_name, {"param_1": "CUST-001", "param_2": 0})
-        return ret in _WRITE_SENTINELS if ret is not None else False
+    def _test_canary_unlocked(label: str) -> bool | None:
+        """Call the canary and return True if write is now open, False if still blocked, None if no canary."""
+        if not write_canary:
+            return None
+        w_result, w_ret = _call(write_canary, {"param_1": _known_ids[0] if _known_ids else "CUST-001", "param_2": 0})
+        sequence.append({"fn": write_canary, "args": {"param_1": _known_ids[0] if _known_ids else "CUST-001", "param_2": 0}, "result": w_result})
+        print(f"    canary {write_canary} -> {w_result}")
+        if w_ret not in _WRITE_SENTINELS and w_ret == 0:
+            print(f"  [phase1] UNLOCKED after {label}")
+            return True
+        return False
 
     # Choose the first write-sentinel function as our canary
     write_canary = _WRITE_FN_NAMES[0] if _WRITE_FN_NAMES else None
@@ -569,60 +597,86 @@ def _probe_write_unlock(inv_map: dict, dll_strings: dict) -> dict:
     print("\n[phase1] Write-unlock probe")
     print(f"  Init functions:  {_INIT_NAMES or '(none)'}")
     print(f"  Write canary:    {write_canary or '(none)'}")
-    print(f"  Unlock patterns: {_UNLOCK_FNS or '(none)'}")
+    print(f"  Unlock fns:      {_UNLOCK_FNS or '(none)'}")
+    print(f"  Known IDs:       {_known_ids[:6]}")
+    print(f"  Known emails:    {_known_emails[:4]}")
 
-    # Baseline: is write already available?
+    # Baseline: is write already available after a plain no-arg init?
+    _call(next(iter(_INIT_NAMES), "CS_Initialize"), {})
     if write_canary:
-        base_result, base_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
-        sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": base_result})
+        base_result, base_ret = _call(write_canary, {"param_1": _known_ids[0] if _known_ids else "CUST-001", "param_2": 0})
+        sequence.append({"fn": write_canary, "args": {}, "result": base_result})
         if base_ret not in _WRITE_SENTINELS and base_ret == 0:
-            print(f"  [phase1] Write already available after plain init — no unlock needed")
+            print("  [phase1] Write already available after plain init — no unlock needed")
             return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
                     "notes": "write available without special unlock"}
 
-    # Try CS_Initialize with integer mode args
+    # For init functions WITH declared params, try integer mode sweep
     for init_fn in _INIT_NAMES:
-        for mode in (1, 2, 4, 8, 16, 256, 512):
+        inv_params = inv_map[init_fn].get("parameters", [])
+        if not inv_params:
+            print(f"  {init_fn} has no declared params — skipping integer mode sweep")
+            continue
+        for mode in (1, 2, 4, 8, 16, 32, 64, 128, 256, 512):
             result, ret = _call(init_fn, {"param_1": mode})
             sequence.append({"fn": init_fn, "args": {"param_1": mode}, "result": result})
             print(f"  {init_fn}(mode={mode}) -> {result}")
-            if ret == 0 and write_canary:
-                w_result, w_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
-                sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": w_result})
-                print(f"    canary {write_canary} -> {w_result}")
-                if w_ret not in _WRITE_SENTINELS and w_ret == 0:
-                    print(f"  [phase1] UNLOCKED via {init_fn}(mode={mode})")
-                    return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
-                            "notes": f"write unlocked by {init_fn}(param_1={mode})"}
+            if ret == 0 and _test_canary_unlocked(f"{init_fn}(mode={mode})"):
+                return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                        "notes": f"write unlocked by {init_fn}(param_1={mode})"}
+        # Also try string tokens if available
+        for tok in _known_tokens[:8]:
+            result, ret = _call(init_fn, {"param_1": tok})
+            sequence.append({"fn": init_fn, "args": {"param_1": tok}, "result": result})
+            print(f"  {init_fn}(tok={tok!r}) -> {result}")
+            if ret == 0 and _test_canary_unlocked(f"{init_fn}(tok={tok!r})"):
+                return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                        "notes": f"write unlocked by {init_fn}(param_1={tok!r})"}
 
-    # Try dedicated unlock-pattern functions
+    # Credential sweep: try every unlock/auth function with known ID × email combos
+    # Covers unlock patterns like CS_UnlockAccount(customer_id, email) etc.
+    _cred_pairs = [
+        (cid, email)
+        for cid in _known_ids
+        for email in _known_emails
+        if cid and email
+    ]
+    # Also try same-value pairs and token combos
+    _cred_pairs += [(cid, cid) for cid in _known_ids]
+    _cred_pairs += [(cid, tok) for cid in _known_ids[:4] for tok in _known_tokens[:4]]
+
+    print(f"  Credential sweep: {len(_cred_pairs)} pairs across {_UNLOCK_FNS or '(none)'}")
     for unlock_fn in _UNLOCK_FNS:
-        for args in [
-            {},
-            {"param_1": 0}, {"param_1": 1}, {"param_1": 2},
-            {"param_1": "CUST-001"},
-        ]:
+        # First try no-arg and single-arg cases
+        for args in [{}, {"param_1": 0}, {"param_1": 1}]:
             result, ret = _call(unlock_fn, args)
             sequence.append({"fn": unlock_fn, "args": args, "result": result})
-            print(f"  {unlock_fn}({args}) -> {result}")
-            if ret == 0 and write_canary:
-                w_result, w_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
-                sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": w_result})
-                print(f"    canary {write_canary} -> {w_result}")
-                if w_ret not in _WRITE_SENTINELS and w_ret == 0:
-                    print(f"  [phase1] UNLOCKED via {unlock_fn}({args})")
+            if ret == 0 and _test_canary_unlocked(f"{unlock_fn}({args})"):
+                return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                        "notes": f"write unlocked by {unlock_fn}({args})"}
+
+        # Then try credential pairs
+        for (p1, p2) in _cred_pairs:
+            result, ret = _call(unlock_fn, {"param_1": p1, "param_2": p2})
+            sequence.append({"fn": unlock_fn, "args": {"param_1": p1, "param_2": p2}, "result": result})
+            print(f"  {unlock_fn}({p1!r}, {p2!r}) -> {result}")
+            if ret == 0:
+                if _test_canary_unlocked(f"{unlock_fn}({p1!r}, {p2!r})"):
                     return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
-                            "notes": f"write unlocked by {unlock_fn}({args})"}
+                            "notes": f"write unlocked by {unlock_fn}(param_1={p1!r}, param_2={p2!r})"}
 
     print("  [phase1] Write mode not unlocked — write functions will be probed with best-effort")
+    tried = (
+        f"Tried: plain init, integer modes on parameterised init fns, "
+        f"credential sweep ({len(_cred_pairs)} ID×email/token pairs) on unlock-pattern fns. "
+        "All write functions continued returning 0xFFFFFFFB. "
+        "Likely requires an admin credential not embedded in the binary."
+    )
     return {
         "unlocked": False,
         "sequence": sequence,
         "write_fn_tested": write_canary,
-        "notes": (
-            "No unlock sequence found. CS_Initialize with modes 1-512 all left write functions "
-            "returning 0xFFFFFFFB. Likely requires a credential or token not embedded in the binary."
-        ),
+        "notes": tried,
     }
 
 

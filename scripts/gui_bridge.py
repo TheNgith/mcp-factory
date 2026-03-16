@@ -1776,8 +1776,21 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
             txt = wbuf.value
             if txt:
                 output_parts.append(txt)
+        # Sentinels defined here so we can use them for both return-value and scalar annotation
+        _SENTINEL_VALUES = frozenset({
+            0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xFFFFFFFB,
+        })
         for sc_name, scalar in out_scalars:
-            output_parts.append(f"{sc_name}={scalar.value}")
+            sv = scalar.value
+            # Flag values >= 2^31 that aren't known sentinels — likely packed data,
+            # float bits, or a wrong Ghidra type inference for this output slot.
+            if (isinstance(sv, int) and sv >= 0x80000000
+                    and sv not in _SENTINEL_VALUES):
+                output_parts.append(
+                    f"{sc_name}={sv} (large uint \u2014 may be packed/float data or wrong buffer type)"
+                )
+            else:
+                output_parts.append(f"{sc_name}={sv}")
         if buf is not None:
             output_parts.append(str(buf.value))
 
