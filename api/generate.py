@@ -36,6 +36,19 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
     if not selected:
         raise HTTPException(400, "No invocables selected")
 
+    # Load findings so we can produce human-readable param descriptions
+    # (same logic as the report generator — ensures schema descriptions match report)
+    try:
+        from api.storage import _load_findings
+        from api.main import _infer_param_desc
+        _findings_list = _load_findings(job_id)
+        _findings_by_fn: dict[str, list] = {}
+        for _f in _findings_list:
+            _findings_by_fn.setdefault(_f.get("function", ""), []).append(_f)
+    except Exception:
+        _findings_by_fn = {}
+        _infer_param_desc = None  # type: ignore[assignment]
+
     # Build OpenAI function-calling tool schema from selected invocables
     tools = []
     for inv in selected:
@@ -56,9 +69,18 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             # Prefer the pre-computed json_type (set by ghidra_analyzer) so that
             # numeric params get "integer"/"number" rather than always "string".
             json_type = p.get("json_type") or "string"
+            pdesc = p.get("description") or p.get("type", "string")
+            # Replace useless Ghidra boilerplate with human-readable descriptions
+            # using findings context — keeps schema descriptions in sync with report
+            if _infer_param_desc and (
+                not pdesc or pdesc.startswith("Parameter recovered by Ghidra")
+            ):
+                fn_findings = _findings_by_fn.get(inv.get("name", ""), [])
+                ptype = p.get("type", "")
+                pdesc = _infer_param_desc(pname, ptype, fn_findings)
             props[pname] = {
                 "type":        json_type,
-                "description": p.get("description") or p.get("type", "string"),
+                "description": pdesc,
             }
             # Only "in" direction params go in required; "out" buffers are
             # allocated by the executor, not passed by the caller.
