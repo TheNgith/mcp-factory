@@ -50,15 +50,28 @@ def _build_explore_system_message(invocables: list, findings: list) -> dict:
             "an undocumented Windows DLL and document what each function does.\n\n"
             "AVAILABLE FUNCTIONS: " + fn_names + "\n\n"
             "PROTOCOL:\n"
-            "1. Pick one unexplored function.\n"
-            "2. Call it with small safe probe values (e.g. integers 64/256/512, empty strings).\n"
-            "3. Observe the result. Infer what each parameter does from the return value and any error text.\n"
-            "4. If there are initialisation functions (Initialize, Init, Open, Login), call them FIRST.\n"
-            "5. Once you have a working call OR have exhausted safe probes, call BOTH:\n"
-            "   a. enrich_invocable — to rename generic params (param_1 → semantic_name) and set a description.\n"
-            "   b. record_finding   — to persist what you discovered in plain English.\n"
-            "6. Move on to the next function. Stop when every function has been attempted.\n\n"
+            "1. If init functions exist (Initialize, Init, Open, Login), call them FIRST.\n"
+            "2. Call each function with safe probe values:\n"
+            "   - integer params (uint, int, ushort): try 0, 1, 64, 256\n"
+            "   - input string/byte* params: try '', 'test', and any STATIC ANALYSIS HINTS provided\n"
+            "   - output pointer params (undefined4*, undefined8*, uint*): OMIT from the call — "
+            "the executor auto-allocates these. Their values appear as 'param_N=<value>' in the result.\n"
+            "   - undefined* output buffer + adjacent uint size param: OMIT BOTH — "
+            "executor allocates 4096-byte buffer and supplies size=4096 automatically.\n"
+            "3. Classify the return value:\n"
+            "   - 0 = success for action functions\n"
+            "   - 0xFFFFFFFF (4294967295) = error sentinel (not found / invalid input)\n"
+            "   - 0xFFFFFFFE (4294967294) = secondary error (null argument)\n"
+            "   - For GetVersion/GetBuild/GetRevision functions: the return value IS the version "
+            "number as a packed UINT — any non-zero integer is a valid result, NOT an error. "
+            "Decode as (val>>16)&0xFF . (val>>8)&0xFF . val&0xFF for major.minor.patch.\n"
+            "4. Once you have a working call OR have exhausted safe probes, call BOTH:\n"
+            "   a. enrich_invocable — rename generic params (param_1 → semantic_name), set description.\n"
+            "   b. record_finding   — persist what you discovered in plain English.\n"
+            "5. Move on to the next function. Stop when every function has been attempted.\n\n"
             "CONSTRAINTS:\n"
+            "- The PRIMARY indicator of success/failure is ALWAYS the integer return value, "
+            "not the output param values.\n"
             "- Never call dangerous functions (format, delete, write) with real data.\n"
             "- Keep probe values small and safe.\n"
             "- Be concise — after each function, proceed immediately to the next.\n"
@@ -156,6 +169,42 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         prior_findings = _load_findings(job_id)
         already_explored = {f.get("function") for f in prior_findings if f.get("function")}
 
+        # Phase 0: extract static hints from the DLL binary (best-effort)
+        _static_hints_block = ""
+        try:
+            dll_path = next(
+                (inv.get("execution", {}).get("dll_path", "") for inv in invocables
+                 if inv.get("execution", {}).get("dll_path")),
+                "",
+            )
+            if dll_path:
+                import re as _re2
+                from pathlib import Path as _Path
+                _data = _Path(dll_path).read_bytes()
+                _text = _data.decode("ascii", errors="ignore")
+                _raw  = sorted(set(m.group(0).strip() for m in _re2.finditer(r"[ -~]{6,}", _text) if m.group(0).strip()))
+                _ids     = [s for s in _raw if _re2.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
+                _emails  = [s for s in _raw if _re2.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, _re2.I)]
+                _fmts    = [s for s in _raw if "%" in s and any(c in s for c in ("s", "d", "u", "f", "lu")) and len(s) < 120]
+                _status  = [s for s in _raw if s.isupper() and 4 <= len(s) <= 16 and s.isalpha()
+                            and s.lower() in {"active","inactive","pending","shipped","delivered",
+                                              "cancelled","suspended","complete","unknown","locked","unlocked"}]
+                parts = []
+                if _ids:    parts.append("Known IDs/codes: " + ", ".join(_ids[:20]))
+                if _emails: parts.append("Known emails: " + ", ".join(_emails[:10]))
+                if _status: parts.append("Known status values: " + ", ".join(_status[:15]))
+                if _fmts:   parts.append("Output format strings: " + " | ".join(_fmts[:5]))
+                if parts:
+                    _static_hints_block = (
+                        "\nSTATIC ANALYSIS HINTS (strings extracted from DLL binary):\n"
+                        + "\n".join(parts)
+                        + "\nUse these as probe values for string params before trying generic ones.\n"
+                    )
+                    logger.info("[%s] explore_worker: phase0 found %d IDs, %d emails, %d formats",
+                                job_id, len(_ids), len(_emails), len(_fmts))
+        except Exception as _e:
+            logger.debug("[%s] explore_worker: phase0 string extraction failed: %s", job_id, _e)
+
         for inv in invocables:
             fn_name = inv["name"]
 
@@ -180,6 +229,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         "Call it with safe probe values, observe the result, "
                         "then call enrich_invocable and record_finding with what you learned. "
                         "Be brief — one summary sentence after you're done."
+                        + _static_hints_block
                     ),
                 },
             ]

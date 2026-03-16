@@ -115,6 +115,57 @@ def _infer_direction(c_type: str) -> str:
     return "out" if base in _OUT_SCALAR_BASES else "in"
 
 
+def _extract_dll_strings(dll_path: str, min_len: int = 6) -> dict[str, list[str]]:
+    """Phase 0 static analysis: extract printable ASCII strings from the DLL binary.
+
+    Returns a dict with categorised hints:
+      - 'ids'       : likely input IDs (CUST-NNN, ORD-..., product codes etc.)
+      - 'emails'    : email addresses embedded in the binary
+      - 'status'    : status/enum strings (ACTIVE, PENDING, SHIPPED...)
+      - 'formats'   : format strings (reveal output buffer structure)
+      - 'all'       : complete flat list of unique printable strings
+    """
+    try:
+        data = Path(dll_path).read_bytes()
+    except Exception:
+        return {"ids": [], "emails": [], "status": [], "formats": [], "all": []}
+
+    # Extract all runs of printable ASCII of length >= min_len
+    pat = re.compile(rb"[ -~]{" + str(min_len).encode() + rb",}")
+    raw_strings: list[str] = []
+    for m in pat.finditer(data):
+        try:
+            s = m.group(0).decode("ascii", errors="ignore").strip()
+            if s:
+                raw_strings.append(s)
+        except Exception:
+            pass
+    unique = sorted(set(raw_strings))
+
+    ids:     list[str] = []
+    emails:  list[str] = []
+    status:  list[str] = []
+    formats: list[str] = []
+
+    _STATUS_WORDS = {"active", "inactive", "pending", "shipped", "delivered",
+                     "cancelled", "suspended", "complete", "unknown", "error",
+                     "success", "enabled", "disabled", "locked", "unlocked"}
+
+    for s in unique:
+        sl = s.lower()
+        if "%s" in s or "%d" in s or "%u" in s or "%f" in s or "%lu" in s:
+            formats.append(s)
+        elif re.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40:
+            # Looks like an ID/code: CUST-001, ORD-20040301-0042, PRO-SVC-ANNUAL
+            ids.append(s)
+        elif re.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,6}", s, re.I):
+            emails.append(s)
+        elif sl in _STATUS_WORDS or (sl.isupper() and 4 <= len(s) <= 16 and s.isalpha()):
+            status.append(s)
+
+    return {"ids": ids, "emails": emails, "status": status, "formats": formats, "all": unique}
+
+
 def _ghidra_tools_to_invocables(tools: list[dict], dll_path: str) -> list[dict]:
     """Convert Ghidra OpenAI-format tool list to internal invocables."""
     invocables = []
@@ -300,7 +351,8 @@ PROTOCOL FOR EACH FUNCTION:
    - output pointer params (undefined4*, undefined8*, uint*, int*): omit from the call — the bridge
      auto-allocates an output buffer for params NOT included in the call.  You will see the written
      value reported as "param_N=<value>" appended to the return string.
-   - bare undefined* params: also omit — treated as a byte buffer by the bridge.
+   - bare undefined* output buffer + adjacent uint size param: omit BOTH — the bridge allocates a
+     4096-byte buffer and auto-supplies size=4096.  Do NOT pass the size param as 0.
    - Batch multiple probe variants in ONE round if possible.
 3. Classify the return value:
    - 0 = success for action functions (Initialize, Process*, Unlock*, Redeem*)
@@ -379,12 +431,14 @@ def _parse_enrichment(text: str) -> dict | None:
 
 
 def _discover_loop(client, deployment: str, invocables: list[dict],
-                   findings_path: Path | None = None) -> list[dict]:
+                   findings_path: Path | None = None,
+                   dll_strings: dict | None = None) -> list[dict]:
     """Probe every function, produce structured enrichment JSON, persist findings.
 
     Returns the list of enrichment dicts (one per function).
     If findings_path is given, load prior findings (skip already-enriched functions)
     and save after each function so a crash doesn't lose progress.
+    dll_strings: output of _extract_dll_strings(), injected into system prompt.
     """
     tools   = [inv["_tool_schema"] for inv in invocables if "_tool_schema" in inv]
     inv_map = {inv["name"]: inv for inv in invocables}
@@ -427,6 +481,21 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
 
         print(f"[{idx+1}/{total}] {name}({params_info})")
 
+        # Build static-analysis hints block
+        hints_block = ""
+        if dll_strings:
+            hint_parts = []
+            if dll_strings.get("ids"):
+                hint_parts.append("Known IDs/codes in binary: " + ", ".join(dll_strings["ids"][:20]))
+            if dll_strings.get("emails"):
+                hint_parts.append("Known emails: " + ", ".join(dll_strings["emails"][:10]))
+            if dll_strings.get("status"):
+                hint_parts.append("Known status values: " + ", ".join(dll_strings["status"][:15]))
+            if dll_strings.get("formats"):
+                hint_parts.append("Output format strings: " + " | ".join(dll_strings["formats"][:5]))
+            if hint_parts:
+                hints_block = "\nSTATIC ANALYSIS HINTS (strings extracted from DLL binary):\n" + "\n".join(hint_parts) + "\nUse these as probe values for string params before trying generic ones.\n"
+
         conversation = [
             {"role": "system", "content": _DISCOVER_SYSTEM},
             {
@@ -435,8 +504,9 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
                     f"Document this function:\n"
                     f"  Name: {name}\n"
                     f"  Prototype: {desc[:400]}\n"
-                    f"  Parameters: {params_info or '(none)'}\n\n"
-                    f"Previously learned about this DLL:\n{_context_block()}\n\n"
+                    f"  Parameters: {params_info or '(none)'}\n"
+                    + hints_block +
+                    f"\nPreviously learned about this DLL:\n{_context_block()}\n\n"
                     "Probe it and output the ENRICHMENT JSON block."
                 ),
             },
@@ -612,7 +682,13 @@ def main() -> None:
 
     if ns.discover:
         findings_path = Path(ns.save) if ns.save else None
-        _discover_loop(client, deployment, invocables, findings_path=findings_path)
+        dll_strings   = _extract_dll_strings(dll_path)
+        if dll_strings["ids"]:
+            print(f"[phase0] Found {len(dll_strings['ids'])} IDs: {', '.join(dll_strings['ids'][:8])}")
+        if dll_strings["formats"]:
+            print(f"[phase0] Found {len(dll_strings['formats'])} format strings")
+        _discover_loop(client, deployment, invocables,
+                       findings_path=findings_path, dll_strings=dll_strings)
         return
 
     prompt = ns.prompt

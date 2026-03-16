@@ -100,24 +100,113 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
                     pname    = tokens[-1].lstrip("*")
                     params.append({"name": pname, "type": raw_type})
 
+    # Type bases that should be auto-allocated as output scalar slots (never input strings).
+    # These match Ghidra's "undefined4 *", "undefined8 *", "uint *" etc.
+    _OUT_SCALAR_BASES = frozenset({
+        "undefined2", "undefined4", "undefined8",
+        "uint", "uint32_t", "int", "int32_t", "dword", "ulong",
+        "uint4", "uint8", "long", "ulong32",
+    })
+    # Bare "undefined *" is treated as a byte output buffer (written back as a string).
+    _OUT_BUF_BASES = frozenset({"undefined"})
+
+    _SCALAR_PTR_MAP: dict = {
+        "dword": ctypes.c_ulong,   "unsigned long": ctypes.c_ulong,
+        "uint":  ctypes.c_uint,    "uint32_t":      ctypes.c_uint,
+        "int":   ctypes.c_int,     "int32_t":       ctypes.c_int,
+        "long":  ctypes.c_long,    "ulong":         ctypes.c_ulong,
+        "word":  ctypes.c_ushort,  "byte":          ctypes.c_ubyte,
+        "bool":  ctypes.c_bool,
+        "undefined":  ctypes.c_ulong,
+        "undefined2": ctypes.c_ushort,
+        "undefined4": ctypes.c_uint,
+        "undefined8": ctypes.c_ulonglong,
+    }
+
     try:
         lib = ctypes.CDLL(dll_path)
         fn  = getattr(lib, func_name)
         fn.restype = restype
 
-        c_args = []
-        if params and args:
-            for p in params:
-                pname = p.get("name", "")
-                ptype = p.get("type", "string").lower().strip("*").rstrip()
-                val   = args.get(pname)
-                if val is None:
+        c_args: list = []
+        out_str_bufs:  list = []   # (name, create_string_buffer)
+        out_scalars:   list = []   # (name, ctypes scalar)
+
+        _SIZE_TYPES: frozenset[str] = frozenset({
+            "dword", "int", "uint", "unsigned int", "size_t",
+            "long", "unsigned long", "uint32_t",
+        })
+
+        if params:
+            params_seq = list(params)
+            i_skip: set[int] = set()
+            for idx, p in enumerate(params_seq):
+                if idx in i_skip:
                     continue
-                atype = _CTYPES_ARGTYPE.get(ptype, ctypes.c_char_p)
-                if atype == ctypes.c_char_p:
-                    c_args.append(ctypes.c_char_p(str(val).encode()))
-                else:
-                    c_args.append(atype(int(val)))
+                pname     = p.get("name", "")
+                ptype_raw = p.get("type", "string")
+                ptype_lc  = ptype_raw.lower()
+                ptype_base = ptype_lc.replace("const ", "").strip().rstrip(" *")
+                val       = args.get(pname)
+
+                is_ptr   = "*" in ptype_lc
+                is_const = is_ptr and "const " in ptype_lc
+
+                # Ghidra undefined*/undefined4*/undefined8* are ALWAYS output slots.
+                _val_blank = (
+                    val is None or
+                    ptype_base in (_OUT_SCALAR_BASES | _OUT_BUF_BASES)
+                )
+                is_out = is_ptr and not is_const and _val_blank
+
+                if is_out and ptype_base in _OUT_BUF_BASES:
+                    # undefined* — plain char* output buffer.
+                    # Look ahead: the next uint param is the buffer-size arg; always
+                    # supply ≥4096 so the DLL doesn't refuse or overflow on size=0.
+                    buf_size = 4096
+                    if idx + 1 < len(params_seq):
+                        np       = params_seq[idx + 1]
+                        np_name  = np.get("name", "")
+                        np_tbase = np.get("type", "").lower() \
+                                     .replace("const ", "").strip().rstrip(" *")
+                        np_val   = args.get(np_name)
+                        if np_tbase in _SIZE_TYPES:
+                            if np_val is not None:
+                                try:
+                                    buf_size = max(4096, int(np_val))
+                                except (ValueError, TypeError):
+                                    pass
+                            i_skip.add(idx + 1)            # skip; we supply it below
+                            sbuf = ctypes.create_string_buffer(buf_size)
+                            c_args.append(sbuf)
+                            c_args.append(ctypes.c_uint(buf_size))
+                            out_str_bufs.append((pname, sbuf))
+                            continue
+                    sbuf = ctypes.create_string_buffer(buf_size)
+                    c_args.append(sbuf)
+                    out_str_bufs.append((pname, sbuf))
+                elif is_out and (ptype_base in _OUT_SCALAR_BASES or
+                                 ptype_base in ("byte", "char", "uchar")):
+                    # Scalar output slot (undefined4 *, uint *, etc.)
+                    s_ctype = _SCALAR_PTR_MAP.get(ptype_base, ctypes.c_ulong)
+                    scalar  = s_ctype(0)
+                    c_args.append(ctypes.byref(scalar))
+                    out_scalars.append((pname, scalar))
+                elif val is not None:
+                    atype = _CTYPES_ARGTYPE.get(ptype_base, ctypes.c_char_p)
+                    if is_ptr:
+                        if isinstance(val, int):
+                            c_args.append(ctypes.c_int64(val))
+                        else:
+                            c_args.append(ctypes.c_char_p(str(val).encode()))
+                    elif atype == ctypes.c_char_p:
+                        c_args.append(ctypes.c_char_p(str(val).encode()))
+                    else:
+                        try:
+                            c_args.append(atype(int(val)))
+                        except (ValueError, TypeError):
+                            c_args.append(atype(0))
+                # else: omitted optional param — skip
         elif args:
             for v in args.values():
                 if isinstance(v, bool):
@@ -130,10 +219,17 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
                     c_args.append(ctypes.c_char_p(v.encode()))
 
         result = fn(*c_args)
-        if restype == ctypes.c_char_p:
-            if isinstance(result, bytes):
-                return f"Returned: {result.decode(errors='replace')}"
-        return f"Returned: {result}"
+
+        output_parts: list[str] = [f"Returned: {result}"]
+        for buf_name, sbuf in out_str_bufs:
+            txt = sbuf.value
+            if isinstance(txt, bytes):
+                txt = txt.decode(errors="replace")
+            if txt:
+                output_parts.append(f"{buf_name}={txt!r}")
+        for sc_name, scalar in out_scalars:
+            output_parts.append(f"{sc_name}={scalar.value}")
+        return "\n".join(output_parts)
     except Exception as exc:
         return f"DLL call error: {exc}"
 

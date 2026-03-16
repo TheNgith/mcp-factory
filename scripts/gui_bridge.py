@@ -1590,7 +1590,8 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
         c_args = []
         buf    = None  # legacy: wchar buffer for W-suffix no-param functions
-        out_str_bufs:   list[tuple[str, Any]] = []  # (name, create_string_buffer)
+        out_str_bufs:   list[tuple[str, Any]] = []  # (name, c_char_p | create_string_buffer)
+        out_str_alive:  list[Any] = []              # backing buffers kept alive for GC
         out_wchar_bufs: list[tuple[str, Any]] = []  # (name, create_unicode_buffer)
         out_scalars:    list[tuple[str, Any]] = []  # (name, ctypes scalar)
 
@@ -1641,8 +1642,10 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                 # Treat val=="" the same as val=None for undefined-typed pointer params.
                 # The LLM passes "" for unknown pointer args; for output-only types that
                 # is semantically "allocate for me", not "pass a 1-byte string pointer".
-                _val_is_blank = val is None or (
-                    isinstance(val, str) and val == "" and
+                # Ghidra undefined*/undefined4*/undefined8* are ALWAYS output slots —
+                # the model should never pass data values for these types.
+                _val_is_blank = (
+                    val is None or
                     ptype_base in (_ALWAYS_OUT_SCALAR_BASES | _ALWAYS_OUT_BUF_BASES)
                 )
                 is_out_ptr    = is_ptr and not is_const_ptr and _val_is_blank
@@ -1669,6 +1672,16 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
                         elif np_type in _SIZE_TYPES:
                             # Auto-supply the buffer length; skip that param in the loop
                             skip_indices.add(idx + 1)
+                    # For Ghidra "undefined*" out params: enforce minimum 4096-byte
+                    # buffer and always auto-supply the following size arg.  Passing
+                    # size=0 causes the DLL to refuse (returns null-arg error).
+                    if ptype_base in _ALWAYS_OUT_BUF_BASES:
+                        buf_size = max(4096, buf_size)
+                        if idx + 1 < len(params):
+                            _np_type = params[idx + 1].get("type", "").lower() \
+                                .replace("const ", "").strip(" *")
+                            if _np_type in _SIZE_TYPES and (idx + 1) not in skip_indices:
+                                skip_indices.add(idx + 1)
                     sbuf = ctypes.create_string_buffer(buf_size)
                     c_args.append(sbuf)
                     if (idx + 1) in skip_indices:
