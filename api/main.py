@@ -187,6 +187,7 @@ async def analyze_path(body: dict[str, Any]):
         "status": "queued",
         "progress": 0,
         "message": f"Queued analysis for {target.name}",
+        "hints": hints,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -244,6 +245,7 @@ async def analyze(
         "status": "queued",
         "progress": 0,
         "message": f"Queued analysis for {original_name}",
+        "hints": hints,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -440,6 +442,62 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
     )
 
 
+def _infer_param_desc(pname: str, ptype: str, fn_findings: list) -> str:
+    """Produce a human-readable parameter description from type info and findings.
+    Called when the stored description is just Ghidra boilerplate."""
+    import re as _re
+    t = (ptype or "").lower().replace("const ", "").strip()
+    base = t.rstrip(" *").strip()
+    is_ptr = "*" in t
+
+    # Collect all finding/notes text for this function
+    all_text = " ".join(
+        (f.get("finding", "") + " " + f.get("notes", ""))
+        for f in fn_findings
+    )
+
+    # Output integer pointer (uint *, ulong *, etc.)
+    if is_ptr and base in {"uint", "ulong", "ushort", "int", "uint32_t", "dword"}:
+        m = _re.search(rf"{_re.escape(pname)}\s*[=:]\s*(\S+)", all_text)
+        val = f" (observed: {m.group(1)})" if m else ""
+        return f"Output — receives integer result{val}"
+
+    # Output buffer (undefined*, undefined4*, undefined8*)
+    if is_ptr and base in {"undefined", "undefined2", "undefined4", "undefined8", "void"}:
+        # Try to describe what the output contains from findings
+        if "pipe-delimited" in all_text or "|" in all_text:
+            return "Output buffer — receives pipe-delimited key=value result string"
+        if "balance" in all_text and pname in ("param_2", "param_4"):
+            return "Output buffer — receives balance or result data"
+        return "Output buffer — receives result data (omit from call; auto-allocated)"
+
+    # Input string (byte *)
+    if t == "byte *":
+        hints = []
+        if "CUST-" in all_text:
+            hints.append("customer ID e.g. 'CUST-001'")
+        if "ORD-" in all_text:
+            hints.append("order ID e.g. 'ORD-20040301-0042'")
+        if hints:
+            return "Input string — " + " or ".join(hints)
+        return "Input string parameter"
+
+    # Windows DLL entry point params
+    if base == "hinstance__":
+        return "DLL instance handle (Windows DllMain param)"
+    if t == "void *":
+        return "Reserved pointer (Windows DllMain param)"
+
+    # Plain integers
+    if base in {"uint", "ulong", "ushort", "int", "uint32_t", "dword", "ulong32"}:
+        # Check if findings mention this param by name
+        m = _re.search(rf"{_re.escape(pname)}\s*[=:]\s*(\S+)", all_text)
+        val = f" (e.g. {m.group(1)})" if m else ""
+        return f"Integer input parameter{val}"
+
+    return f"Parameter of type {ptype}"
+
+
 @app.get("/api/jobs/{job_id}/report")
 async def get_report(job_id: str):
     """Generate a markdown documentation report for a job.
@@ -482,6 +540,7 @@ async def get_report(job_id: str):
             lines.append(desc)
             lines.append("")
 
+        fn_findings = findings_by_fn.get(fn_name, [])
         params = inv.get("parameters") or []
         if params:
             lines.append("**Parameters:**")
@@ -492,6 +551,9 @@ async def get_report(job_id: str):
                 pname = p.get("name", "?")
                 ptype = p.get("type") or p.get("json_type") or "unknown"
                 pdesc = p.get("description", "")
+                # Replace useless Ghidra boilerplate with a human-readable description
+                if not pdesc or pdesc.startswith("Parameter recovered by Ghidra"):
+                    pdesc = _infer_param_desc(pname, ptype, fn_findings)
                 lines.append(f"| `{pname}` | `{ptype}` | {pdesc} |")
             lines.append("")
 
@@ -500,7 +562,6 @@ async def get_report(job_id: str):
             lines.append(f"**Returns:** `{ret_type}`")
             lines.append("")
 
-        fn_findings = findings_by_fn.get(fn_name, [])
         if fn_findings:
             lines.append("**Findings from exploration:**")
             lines.append("")

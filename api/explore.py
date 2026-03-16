@@ -484,8 +484,34 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         except Exception as _se:
             logger.debug("[%s] explore_worker: phase0.5 failed, using defaults: %s", job_id, _se)
 
-        # Shared vocabulary table — grows as we learn things about this DLL
+        # Shared vocabulary table — grows as we learn things about this DLL.
+        # Reload from blob if a previous session already built one (cross-session memory).
         vocab: dict = {}
+        try:
+            from api.storage import _download_blob as _dl_blob
+            _vraw = _dl_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json")
+            vocab = json.loads(_vraw)
+            logger.info("[%s] explore_worker: reloaded vocab from blob (%d keys)", job_id, len(vocab))
+        except Exception:
+            pass  # normal on first run
+
+        # Seed vocab from user-supplied hints so the LLM starts informed
+        # even before Phase 0 extracts strings from the binary.
+        try:
+            _job_meta = _get_job_status(job_id) or {}
+            _user_hints = (_job_meta.get("hints") or "").strip()
+            if _user_hints:
+                import re as _re_h
+                # Extract ID-like patterns (e.g. CUST-001, ORD-20040301-0042)
+                _hint_ids = list(dict.fromkeys(_re_h.findall(r'[A-Z]{2,6}-[\w-]+', _user_hints)))
+                if _hint_ids and "id_formats" not in vocab:
+                    vocab["id_formats"] = _hint_ids
+                # Store full hint text as notes for the LLM to reason from
+                if "notes" not in vocab:
+                    vocab["notes"] = f"User description: {_user_hints}"
+                logger.info("[%s] explore_worker: seeded vocab from user hints: %s", job_id, _user_hints[:80])
+        except Exception as _he:
+            logger.debug("[%s] explore_worker: hints seed failed: %s", job_id, _he)
 
         # Phase 0: extract static hints from the DLL binary (best-effort)
         _static_hints_block = ""
@@ -603,6 +629,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
             # Track calls that returned 0 for ground-truth consistency enforcement
             _observed_successes: list[dict] = []
+            _enrich_called = False
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
@@ -663,6 +690,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     else:
                         tool_result = f"Tool '{tc_name}' not found."
 
+                    # Track whether enrich_invocable was called this function
+                    if tc_name == "enrich_invocable":
+                        _enrich_called = True
+
                     # Ground-truth tracking: record direct observations of return=0
                     if tc_name == fn_name:
                         _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
@@ -691,6 +722,51 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         "tool_call_id": tc.id,
                         "content": tool_result,
                     })
+
+            # Force enrich_invocable if the model skipped it and the function has params
+            if not _enrich_called and inv.get("parameters"):
+                _cur_findings = _load_findings(job_id)
+                _last_f = next(
+                    (f for f in reversed(_cur_findings) if f.get("function") == fn_name), None
+                )
+                _finding_summary = (
+                    f"Finding: {_last_f.get('finding', '')}. Notes: {_last_f.get('notes', '')}"
+                    if _last_f else "No finding recorded."
+                )
+                try:
+                    from typing import cast, Any as _Any
+                    _enrich_resp = client.chat.completions.create(
+                        model=model,
+                        messages=conversation + [{
+                            "role": "user",
+                            "content": (
+                                f"You did not call enrich_invocable for '{fn_name}'. "
+                                f"Based on what you observed, call it now. "
+                                f"Rename each param_N to a semantic name (e.g. customer_id, balance, output_buffer). "
+                                f"For each parameter description, write what it does AND include an example value from your testing "
+                                f"(e.g. 'Customer ID string, e.g. CUST-001' or 'Output pointer — receives account balance, observed 25000'). "
+                                f"Set the function description to a clear one-sentence summary. "
+                                f"{_finding_summary}"
+                            ),
+                        }],
+                        tools=cast(_Any, tool_schemas),
+                        tool_choice={"type": "function", "function": {"name": "enrich_invocable"}},
+                        temperature=0,
+                    )
+                    _em = _enrich_resp.choices[0].message
+                    if _em.tool_calls:
+                        _etc = _em.tool_calls[0]
+                        try:
+                            _eargs = json.loads(_etc.function.arguments)  # type: ignore[union-attr]
+                        except json.JSONDecodeError:
+                            _eargs = {}
+                        _execute_tool(inv_map["enrich_invocable"], _eargs)
+                        logger.info(
+                            "[%s] explore_worker: forced enrich_invocable for %s",
+                            job_id, fn_name,
+                        )
+                except Exception as _ee:
+                    logger.debug("[%s] forced enrich failed for %s: %s", job_id, fn_name, _ee)
 
             explored += 1
             already_explored.add(fn_name)
@@ -745,6 +821,15 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 if last:
                     try:
                         vocab = _update_vocabulary(client, model, vocab, last)
+                        # Persist updated vocab to blob so next session starts informed
+                        try:
+                            _upload_to_blob(
+                                ARTIFACT_CONTAINER,
+                                f"{job_id}/vocab.json",
+                                json.dumps(vocab).encode(),
+                            )
+                        except Exception as _vpe:
+                            logger.debug("[%s] vocab persist failed: %s", job_id, _vpe)
                     except Exception as _ve:
                         logger.debug("[%s] vocab update failed for %s: %s", job_id, fn_name, _ve)
 

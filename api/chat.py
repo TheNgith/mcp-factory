@@ -155,6 +155,20 @@ def _sse(event: dict) -> str:
 
 
 def _build_system_message(invocables: list, job_id: str = "") -> dict:
+    # Load vocab accumulated during exploration (id formats, conventions, etc.)
+    vocab_block = ""
+    if job_id:
+        try:
+            from api.storage import _download_blob
+            from api.config import ARTIFACT_CONTAINER
+            import json as _json
+            _vocab = _json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json"))
+            if _vocab:
+                from api.explore import _vocab_block
+                vocab_block = "\n" + _vocab_block(_vocab) + "\n"
+        except Exception:
+            pass  # vocab not yet built or blob miss — fine
+
     # Load any findings from previous sessions for this job.
     prior = _load_findings(job_id) if job_id else []
     findings_block = ""
@@ -235,6 +249,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "failure mode, a required encoding — call record_finding immediately to persist it. "
             "Do NOT call record_finding speculatively or as commentary; only call it for definitive results."
             + init_rule
+            + vocab_block
             + findings_block
         ),
     }
