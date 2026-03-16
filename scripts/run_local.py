@@ -338,6 +338,103 @@ def _chat_loop(client, deployment: str, invocables: list[dict], prompt: str, max
     print("\n[done]")
 
 
+# ── Sentinel calibration ──────────────────────────────────────────────────────
+
+def _calibrate_sentinels(invocables: list[dict], client, deployment: str) -> dict[int, str]:
+    """Phase 0.5: Automatically discover error-sentinel return values for this DLL.
+
+    Algorithm:
+      1. Call every exported function with no arguments (the bridge allocates
+         safe zero/null defaults).  Collect every non-zero return value.
+      2. Values that are >= 0x80000000 AND appear across >= 2 different functions
+         are candidate sentinel codes (high-bit unsigned integers used as errors).
+      3. Ask the LLM to assign short plain-English meanings to each candidate,
+         given the function names that produced it.
+      4. Return {int_value: meaning_str} — or the built-in Contoso defaults as a
+         fallback if no candidates are found.
+
+    This makes the discovery pipeline self-calibrating for any DLL.
+    """
+    _BUILTIN: dict[int, str] = {
+        0xFFFFFFFF: "not found / invalid input",
+        0xFFFFFFFE: "null argument",
+        0xFFFFFFFD: "not initialized",
+        0xFFFFFFFC: "account locked or suspended",
+        0xFFFFFFFB: "write operation denied",
+    }
+
+    from collections import defaultdict
+    inv_map = {inv["name"]: inv for inv in invocables}
+    counts: dict[int, int] = defaultdict(int)           # value → how many fns returned it
+    val_fns: dict[int, list[str]] = defaultdict(list)   # value → which function names
+
+    print("[phase0.5] calibrating sentinel error codes …")
+    for inv in invocables:
+        name = inv["name"]
+        result = _execute_local(inv, {})
+        m = re.match(r"Returned:\s*(\d+)", result or "")
+        if not m:
+            continue
+        val = int(m.group(1))
+        if val == 0:
+            continue                # success — not a sentinel candidate
+        counts[val] += 1
+        val_fns[val].append(name)
+
+    # Keep values that look like sentinel codes:
+    # high-bit set (>= 0x80000000) AND seen in >= 2 functions
+    candidates = {
+        v: fns for v, fns in val_fns.items()
+        if v >= 0x80000000 and counts[v] >= 2
+    }
+
+    if not candidates:
+        print("[phase0.5] no candidates found — using built-in defaults")
+        return _BUILTIN
+
+    # Ask the LLM to name each candidate
+    cand_lines = "\n".join(
+        f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
+        for v, fns in sorted(candidates.items(), reverse=True)
+    )
+    prompt = (
+        "You are analysing return values from an undocumented Windows DLL.\n"
+        "Below is a list of unsigned 32-bit values that appeared as return codes "
+        "across multiple functions when called with bad/null arguments.\n"
+        "Each is likely a sentinel error code.  Assign a SHORT plain-English meaning "
+        "(3-8 words) to each based on its value and the function names listed.\n\n"
+        f"{cand_lines}\n\n"
+        "Output ONLY a JSON object mapping each hex string to its meaning, e.g.:\n"
+        '  {"0xFFFFFFFF": "not found / invalid input", "0xFFFFFFFE": "null argument"}'
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = resp.choices[0].message.content or "{}"
+        # Strip markdown fences
+        if raw.strip().startswith("```"):
+            raw = "\n".join(raw.strip().splitlines()[1:])
+            raw = raw.rstrip("`").strip()
+        named: dict[str, str] = json.loads(raw)
+        result_map: dict[int, str] = {}
+        for k, meaning in named.items():
+            try:
+                result_map[int(k, 16)] = str(meaning)
+            except (ValueError, TypeError):
+                pass
+        if result_map:
+            print(f"[phase0.5] discovered {len(result_map)} sentinel(s): "
+                  + ", ".join(f"0x{v:08X}={m}" for v, m in sorted(result_map.items(), reverse=True)))
+            return result_map
+    except Exception as exc:
+        print(f"[phase0.5] LLM naming failed ({exc}) — using built-in defaults")
+
+    return _BUILTIN
+
+
 # ── Discover loop ──────────────────────────────────────────────────────────────
 
 _DISCOVER_SYSTEM = """\
@@ -365,12 +462,7 @@ PROTOCOL FOR EACH FUNCTION:
    Only classify the output param as "always returns 0" if it remains 0 after the large-value retry.
 3. Classify the return value:
    - 0 = success for action functions (Initialize, Process*, Unlock*, Redeem*)
-   - 4294967295 (0xFFFFFFFF) = error sentinel ("not found" / "invalid input")
-   - 4294967294 (0xFFFFFFFE) = secondary error code ("null argument" / bad param)
-   - 4294967293 (0xFFFFFFFD) = not initialized
-   - 4294967292 (0xFFFFFFFC) = account locked or suspended
-   - 4294967291 (0xFFFFFFFB) = write operation denied (system not in write-ready state)
-   - IMPORTANT: for version/build/revision functions (GetVersion, GetBuild, GetRevision):
+{sentinel_table}   - IMPORTANT: for version/build/revision functions (GetVersion, GetBuild, GetRevision):
      the return value IS the version number (a UINT) — any non-zero integer is a VALID result,
      NOT an error. Mark status "success" and document the return as "version number as UINT".
      Decode as: major=(val>>16)&0xFF, minor=(val>>8)&0xFF, patch=val&0xFF → e.g. 131841=2.3.1.
@@ -687,10 +779,21 @@ def _probe_write_unlock(inv_map: dict, dll_strings: dict) -> dict:
     }
 
 
+def _build_discover_system(sentinels: dict[int, str]) -> str:
+    """Render _DISCOVER_SYSTEM with the sentinel table filled in."""
+    lines = []
+    for val in sorted(sentinels, reverse=True):
+        meaning = sentinels[val]
+        lines.append(f"   - {val} (0x{val:08X}) = {meaning}")
+    table = "\n".join(lines) + "\n"
+    return _DISCOVER_SYSTEM.replace("{sentinel_table}", table)
+
+
 def _discover_loop(client, deployment, invocables: list[dict],
                    findings_path: Path | None = None,
                    dll_strings: dict | None = None,
-                   write_mode: bool = False) -> list[dict]:
+                   write_mode: bool = False,
+                   sentinels: dict[int, str] | None = None) -> list[dict]:
     """Probe every function, produce structured enrichment JSON, persist findings.
 
     Returns the list of enrichment dicts (one per function).
@@ -698,7 +801,18 @@ def _discover_loop(client, deployment, invocables: list[dict],
     and save after each function so a crash doesn't lose progress.
     dll_strings: output of _extract_dll_strings(), injected into system prompt.
     write_mode: if True, write-operation functions are probed after unlock sequence.
+    sentinels: auto-calibrated sentinel map from _calibrate_sentinels().
     """
+    _discover_sys = _build_discover_system(
+        sentinels if sentinels is not None else {
+            0xFFFFFFFF: "not found / invalid input",
+            0xFFFFFFFE: "null argument",
+            0xFFFFFFFD: "not initialized",
+            0xFFFFFFFC: "account locked or suspended",
+            0xFFFFFFFB: "write operation denied",
+        }
+    )
+
     tools   = [inv["_tool_schema"] for inv in invocables if "_tool_schema" in inv]
     inv_map = {inv["name"]: inv for inv in invocables}
 
@@ -779,7 +893,7 @@ def _discover_loop(client, deployment, invocables: list[dict],
         is_write_fn = bool(_WRITE_PATTERNS.search(name))
 
         conversation = [
-            {"role": "system", "content": _DISCOVER_SYSTEM},
+            {"role": "system", "content": _discover_sys},
             {
                 "role": "user",
                 "content": (
@@ -799,9 +913,10 @@ def _discover_loop(client, deployment, invocables: list[dict],
         enrichment: dict | None = None
         # Track calls to THIS function that returned 0 — used to definitively
         # override the model's classification regardless of what JSON it emits.
-        _SENTINELS = {
-            0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xFFFFFFFB,
-        }
+        _SENTINELS = set(
+            sentinels.keys() if sentinels is not None
+            else {0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC, 0xFFFFFFFB}
+        )
         _observed_successes: list[dict] = []  # args that produced return=0
         for _round in range(4):  # up to 4 rounds: init + probe + probe + final
             resp = client.chat.completions.create(
@@ -1101,6 +1216,9 @@ def main() -> None:
         if dll_strings["formats"]:
             print(f"[phase0] Found {len(dll_strings['formats'])} format strings")
 
+        # Phase 0.5: auto-calibrate sentinel error codes (no manual setup needed)
+        sentinels = _calibrate_sentinels(invocables, client, deployment)
+
         write_unlocked = False
         if ns.write_probe:
             inv_map_local = {inv["name"]: inv for inv in invocables}
@@ -1112,7 +1230,7 @@ def main() -> None:
 
         _discover_loop(client, deployment, invocables,
                        findings_path=findings_path, dll_strings=dll_strings,
-                       write_mode=write_unlocked)
+                       write_mode=write_unlocked, sentinels=sentinels)
 
         if ns.synthesize is not None and findings_path and findings_path.exists():
             findings = json.loads(findings_path.read_text(encoding="utf-8"))
