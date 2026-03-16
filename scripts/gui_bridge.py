@@ -326,11 +326,36 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
             logger.warning("CLI analysis failed: %s", exc)
             errors["cli"] = str(exc)
 
+    # ── Ghidra — run here, BEFORE registry, so system COM noise can't block it ──
+    # Fires when a .dll or .exe yielded zero invocables from every real PE
+    # analyzer (TLB, .NET, RPC, CLI).  Registry entries are machine-wide COM
+    # classes unrelated to the target binary and must never count toward the
+    # "already found something" gate.
+    _PE_EXTS = (".dll", ".exe")
+    if (not _aborted()
+            and "ghidra" in requested
+            and target.suffix.lower() in _PE_EXTS
+            and len(invocables) == 0):
+        try:
+            logger.info("Ghidra fallback triggered for %s (all other analyzers returned 0)", target.name)
+            analyze_with_ghidra = _import_ghidra()
+            ghidra_results = analyze_with_ghidra(target, timeout_s=180, exported_only=True)
+            invocables.extend(ghidra_results)
+            logger.info("Ghidra: %d functions recovered from %s",
+                        len(ghidra_results), target.name)
+        except Exception as exc:
+            logger.warning("Ghidra analysis failed: %s", exc)
+            errors["ghidra"] = str(exc)
+
     # ── Registry ─────────────────────────────────────────────────────────────
     if not _aborted() and "registry" in requested:
         try:
             analyze_registry = _import_registry()
-            results = analyze_registry(hints=hints or target.stem)
+            # Always filter by the target's stem (e.g. "contoso_cs") so we only
+            # return registry/COM entries that are actually related to this binary.
+            # Using user-supplied hints as the filter is wrong — free-text like
+            # "customer service COM DLL" would match every COM class entry.
+            results = analyze_registry(hints=target.stem)
             invocables.extend(_inv_to_dict(i) for i in results)
             logger.info("Registry: %d invocables", len(results))
         except Exception as exc:
@@ -438,26 +463,6 @@ def _run_analysis_sync(target: Path, requested: set, hints: str,
         except Exception as exc:
             logger.warning("JNDI analysis failed: %s", exc)
             errors["jndi"] = str(exc)
-
-    # ── Ghidra fallback — stripped / undocumented binaries ─────────────────
-    # Fires when a .dll or .exe yielded zero invocables from every other
-    # analyzer (no TLB, no .NET, no RPC, no CLI help).  Ghidra disassembles
-    # the binary and reconstructs function signatures from raw machine code.
-    _PE_EXTS = (".dll", ".exe")
-    if (not _aborted()
-            and "ghidra" in requested
-            and target.suffix.lower() in _PE_EXTS
-            and len(invocables) == 0):
-        try:
-            logger.info("Ghidra fallback triggered for %s (all other analyzers returned 0)", target.name)
-            analyze_with_ghidra = _import_ghidra()
-            ghidra_results = analyze_with_ghidra(target, timeout_s=180, exported_only=True)
-            invocables.extend(ghidra_results)
-            logger.info("Ghidra: %d functions recovered from %s",
-                        len(ghidra_results), target.name)
-        except Exception as exc:
-            logger.warning("Ghidra analysis failed: %s", exc)
-            errors["ghidra"] = str(exc)
 
     # De-duplicate by name
     seen: set[str] = set()
