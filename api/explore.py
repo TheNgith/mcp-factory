@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re as _re
 import time
+from collections import defaultdict
 from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL
@@ -27,8 +29,195 @@ logger = logging.getLogger("mcp_factory.api")
 _MAX_EXPLORE_ROUNDS_PER_FUNCTION = 3   # 3 rounds catches >95% of cases; 6 was wasteful
 _MAX_FUNCTIONS_PER_SESSION = 50  # safety cap
 
+_SENTINEL_DEFAULTS: dict[int, str] = {
+    0xFFFFFFFF: "not found / invalid input",
+    0xFFFFFFFE: "null argument",
+    0xFFFFFFFD: "not initialized",
+    0xFFFFFFFC: "account locked or suspended",
+    0xFFFFFFFB: "write operation denied",
+}
 
-def _build_explore_system_message(invocables: list, findings: list) -> dict:
+
+def _calibrate_sentinels(invocables: list[dict], client, model: str) -> dict[int, str]:
+    """Phase 0.5: probe every exported function with no args and cluster the
+    non-zero high-bit return values to discover this DLL's sentinel error codes.
+    Falls back to _SENTINEL_DEFAULTS if nothing useful is found."""
+    counts: dict[int, int] = defaultdict(int)
+    val_fns: dict[int, list[str]] = defaultdict(list)
+
+    for inv in invocables:
+        try:
+            result = _execute_tool(inv, {})
+            m = _re.match(r"Returned:\s*(\d+)", result or "")
+            if not m:
+                continue
+            val = int(m.group(1))
+            if val == 0:
+                continue
+            counts[val] += 1
+            val_fns[val].append(inv["name"])
+        except Exception:
+            pass
+
+    candidates = {
+        v: fns for v, fns in val_fns.items()
+        if v >= 0x80000000 and counts[v] >= 2
+    }
+    if not candidates:
+        return _SENTINEL_DEFAULTS
+
+    cand_lines = "\n".join(
+        f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
+        for v, fns in sorted(candidates.items(), reverse=True)
+    )
+    prompt = (
+        "Assign a SHORT plain-English meaning (3-8 words) to each of these "
+        "32-bit return codes from an undocumented Windows DLL.\n"
+        f"{cand_lines}\n"
+        "Output ONLY a JSON object: {\"0xFFFFFF..\": \"meaning\", ...}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = (resp.choices[0].message.content or "{}").strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
+        named: dict[str, str] = json.loads(raw)
+        result_map = {}
+        for k, meaning in named.items():
+            try:
+                result_map[int(k, 16)] = str(meaning)
+            except (ValueError, TypeError):
+                pass
+        if result_map:
+            return result_map
+    except Exception as exc:
+        logger.debug("[explore] sentinel calibration LLM call failed: %s", exc)
+    return _SENTINEL_DEFAULTS
+
+
+def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dict:
+    """After each successful enrichment, ask the LLM to extract generalisable
+    facts (ID formats, account codes, etc.) into a shared vocabulary dict."""
+    if enrichment.get("status") != "success":
+        return vocab
+    notes = enrichment.get("notes", "")
+    params = enrichment.get("params", {})
+    if not notes and not params:
+        return vocab
+    prompt = (
+        "You are building a shared vocabulary table while reverse-engineering a DLL.\n"
+        f"Current vocabulary table (JSON):\n{json.dumps(vocab, indent=2)}\n\n"
+        f"New enrichment finding:\n"
+        f"  Function: {enrichment.get('function', '?')}\n"
+        f"  Notes: {notes}\n"
+        f"  Params: {json.dumps(params)}\n\n"
+        "Extract NEW generalisable facts (ID formats, email patterns, status codes, "
+        "expected field names) not already in the vocabulary.\n"
+        "For each fact, store a list called 'id_formats' for ID patterns. "
+        "Output ONLY the updated JSON vocabulary (same keys, may add new ones). "
+        "If nothing new, return the existing table unchanged."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = (resp.choices[0].message.content or "{}").strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
+        updated = json.loads(raw)
+        if isinstance(updated, dict):
+            return updated
+    except Exception:
+        pass
+    return vocab
+
+
+def _vocab_block(vocab: dict) -> str:
+    """Render the vocabulary table as a prompt hint string."""
+    if not vocab:
+        return ""
+    lines = ["VOCABULARY (facts already discovered — use these as probe values):"]
+    for k, v in vocab.items():
+        if isinstance(v, list):
+            lines.append(f"  {k} (try ALL): {', '.join(str(x) for x in v)}")
+        else:
+            lines.append(f"  {k}: {v}")
+    return "\n".join(lines) + "\n"
+
+
+def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:
+    """Phase 1: try to flip the DLL from read-only to write-ready.
+    Tries CS_Initialize with mode integers, then any Begin/Enable/Auth-style
+    functions, then a 56-pair credential sweep.  Returns unlock result dict."""
+    _WRITE_SENTINELS = {0xFFFFFFFB}
+    inv_map = {inv["name"]: inv for inv in invocables}
+    _init_names = [n for n in inv_map if _re.search(r"init(ializ)?", n, _re.I)]
+    _write_fn_names = [
+        n for n in inv_map
+        if _re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", n, _re.I)
+    ]
+    tried = []
+
+    # Detect no-param init variants first
+    no_param_inits = [n for n in _init_names if not inv_map[n].get("parameters")]
+    if no_param_inits:
+        for n in no_param_inits:
+            r = _execute_tool(inv_map[n], {})
+            tried.append(f"{n}() -> {r}")
+
+    # Try mode-based init
+    for mode in (0, 1, 2, 4, 8, 16, 256, 512):
+        for n in _init_names:
+            if inv_map[n].get("parameters"):
+                _r = _execute_tool(inv_map[n], {"param_1": mode})
+                tried.append(f"{n}(mode={mode}) -> {_r}")
+                # Test against first write fn
+                if _write_fn_names:
+                    _wfn = _write_fn_names[0]
+                    _wr  = _execute_tool(inv_map[_wfn], {})
+                    _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
+                    _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
+                    if _ret not in _WRITE_SENTINELS and _ret == 0:
+                        return {"unlocked": True, "sequence": [{"fn": n, "args": {"param_1": mode}}],
+                                "notes": f"unlocked with {n}(mode={mode})"}
+
+    # Credential sweep using strings extracted from the binary
+    _all_strings = dll_strings.get("ids", []) + dll_strings.get("misc", [])
+    _cred_tokens = list(dict.fromkeys([  # preserve order, deduplicate
+        s for s in _all_strings if 3 < len(s) < 40
+    ]))[:28]
+    _canary = _write_fn_names[0] if _write_fn_names else None
+    for n in _init_names:
+        if not inv_map[n].get("parameters"):
+            continue
+        for tok in _cred_tokens:
+            _r = _execute_tool(inv_map[n], {"param_1": tok})
+            tried.append(f"{n}(cred={tok!r}) -> {_r}")
+            if _canary:
+                _wr  = _execute_tool(inv_map[_canary], {})
+                _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
+                _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
+                if _ret not in _WRITE_SENTINELS and _ret == 0:
+                    return {"unlocked": True,
+                            "sequence": [{"fn": n, "args": {"param_1": tok}}],
+                            "notes": f"unlocked with {n}(cred={tok!r})"}
+
+    return {"unlocked": False, "sequence": [], "write_fn_tested": _canary,
+            "notes": f"write-unlock failed after {len(tried)} attempts"}
+
+
+def _build_explore_system_message(
+    invocables: list,
+    findings: list,
+    sentinels: dict[int, str] | None = None,
+    vocab: dict | None = None,
+) -> dict:
     """System message for the autonomous exploration agent."""
     fn_names = ", ".join(inv["name"] for inv in invocables)
     findings_block = ""
@@ -43,6 +232,16 @@ def _build_explore_system_message(invocables: list, findings: list) -> dict:
             + "\n".join(lines)
             + "\n"
         )
+
+    # Build sentinel table from calibrated values (falls back to Contoso defaults)
+    _sents = sentinels if sentinels is not None else _SENTINEL_DEFAULTS
+    sentinel_lines = "\n".join(
+        f"   - {val} (0x{val:08X}) = {meaning}"
+        for val, meaning in sorted(_sents.items(), reverse=True)
+    )
+
+    vocab_block = ("\n" + _vocab_block(vocab) + "\n") if vocab else ""
+
     return {
         "role": "system",
         "content": (
@@ -60,13 +259,13 @@ def _build_explore_system_message(invocables: list, findings: list) -> dict:
             "the executor auto-allocates these. Their values appear as 'param_N=<value>' in the result.\n"
             "   - undefined* output buffer + adjacent uint size param: OMIT BOTH — "
             "executor allocates 4096-byte buffer and supplies size=4096 automatically.\n"
+            "   ZERO-OUTPUT RETRY RULE: if the call returns 0 (SUCCESS) but every output param "
+            "value is 0, the inputs were too small. Retry with LARGER values before concluding "
+            "the output is always zero: for financial/calculation functions use principal=10000, "
+            "rate=500, period=12; for general numeric functions try 1000, 10000, 100000.\n"
             "3. Classify the return value:\n"
             "   - 0 = success for action functions\n"
-            "   - 0xFFFFFFFF (4294967295) = not found / invalid input\n"
-            "   - 0xFFFFFFFE (4294967294) = null argument / bad param\n"
-            "   - 0xFFFFFFFD (4294967293) = not initialized\n"
-            "   - 0xFFFFFFFC (4294967292) = account locked or suspended\n"
-            "   - 0xFFFFFFFB (4294967291) = write operation denied (not in write-ready state)\n"
+            + sentinel_lines + "\n"
             "   - For GetVersion/GetBuild/GetRevision: the return value IS a packed UINT version — "
             "any non-zero integer is SUCCESS, not an error. "
             "Decode as (val>>16)&0xFF . (val>>8)&0xFF . val&0xFF (e.g. 131841 → 2.3.1) and "
@@ -87,6 +286,7 @@ def _build_explore_system_message(invocables: list, findings: list) -> dict:
             "- Keep probe values small and safe.\n"
             "- Be concise — after each function, proceed immediately to the next.\n"
             "- Do not ask for confirmation; work autonomously.\n"
+            + vocab_block
             + findings_block
         ),
     }
@@ -180,6 +380,20 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         prior_findings = _load_findings(job_id)
         already_explored = {f.get("function") for f in prior_findings if f.get("function")}
 
+        # Phase 0.5: auto-calibrate sentinel error codes for this DLL
+        sentinels = _SENTINEL_DEFAULTS
+        try:
+            logger.info("[%s] explore_worker: phase0.5 calibrating sentinels…", job_id)
+            _set_explore_status(job_id, 0, total, "Calibrating error codes…")
+            sentinels = _calibrate_sentinels(invocables, client, model)
+            logger.info("[%s] explore_worker: phase0.5 sentinels: %s", job_id,
+                        {f"0x{k:08X}": v for k, v in sentinels.items()})
+        except Exception as _se:
+            logger.debug("[%s] explore_worker: phase0.5 failed, using defaults: %s", job_id, _se)
+
+        # Shared vocabulary table — grows as we learn things about this DLL
+        vocab: dict = {}
+
         # Phase 0: extract static hints from the DLL binary (best-effort)
         _static_hints_block = ""
         try:
@@ -230,7 +444,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
             # Build a focused conversation just for this function
             prior = _load_findings(job_id)
-            sys_msg = _build_explore_system_message(invocables, prior)
+            sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=vocab)
             conversation = [
                 sys_msg,
                 {
@@ -317,6 +531,18 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             explored += 1
             already_explored.add(fn_name)
             _set_explore_status(job_id, explored, total, f"Completed {fn_name}")
+
+            # Update shared vocabulary from the latest finding for this function
+            last_finding = _load_findings(job_id)
+            if last_finding:
+                last = next(
+                    (f for f in reversed(last_finding) if f.get("function") == fn_name), None
+                )
+                if last:
+                    try:
+                        vocab = _update_vocabulary(client, model, vocab, last)
+                    except Exception as _ve:
+                        logger.debug("[%s] vocab update failed for %s: %s", job_id, fn_name, _ve)
 
         # Mark exploration done — update job status back to previous terminal state
         # or set a new "explore_done" sub-status so the UI knows it finished.
