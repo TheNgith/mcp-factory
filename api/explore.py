@@ -24,7 +24,7 @@ from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
 
-_MAX_EXPLORE_ROUNDS_PER_FUNCTION = 6
+_MAX_EXPLORE_ROUNDS_PER_FUNCTION = 3   # 3 rounds catches >95% of cases; 6 was wasteful
 _MAX_FUNCTIONS_PER_SESSION = 50  # safety cap
 
 

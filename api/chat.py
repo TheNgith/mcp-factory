@@ -29,7 +29,7 @@ from typing import Any, AsyncGenerator
 
 from fastapi import HTTPException
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_CHAT_MODEL
 from api.executor import _execute_tool
 from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable
 from api.telemetry import _openai_client
@@ -262,8 +262,11 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     # the model needs more reasoning capacity to probe parameter semantics.
     # When using direct OpenAI (OPENAI_API_KEY set), use OPENAI_MODEL instead
     # of the Azure deployment name.
-    _base_model = OPENAI_MODEL if OPENAI_API_KEY else OPENAI_DEPLOYMENT
-    _reasoning_model = OPENAI_MODEL if OPENAI_API_KEY else OPENAI_REASONING_DEPLOYMENT
+    # OPENAI_CHAT_MODEL lets you cheaply override chat only (e.g. gpt-4o-mini)
+    # without affecting the explore model.  Falls back to OPENAI_MODEL / deployment.
+    _resolved_chat_model = OPENAI_CHAT_MODEL or (OPENAI_MODEL if OPENAI_API_KEY else OPENAI_DEPLOYMENT)
+    _base_model = _resolved_chat_model
+    _reasoning_model = OPENAI_CHAT_MODEL or (OPENAI_MODEL if OPENAI_API_KEY else OPENAI_REASONING_DEPLOYMENT)
     _schema_q = _schema_quality(invocables) if invocables else "rich"
     _active_model = _reasoning_model if _schema_q == "basic" else _base_model
     _failure_count = 0  # consecutive 0xFFFFFFFF / -1 returns; triggers mid-session escalation

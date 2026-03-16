@@ -28,8 +28,9 @@ OPENAI_REASONING_DEPLOYMENT = os.getenv("AZURE_OPENAI_REASONING_DEPLOYMENT", OPE
 # override the default (gpt-4o).  OPENAI_EXPLORE_MODEL is used by the
 # explore worker (defaults to gpt-4o-mini for cost efficiency).
 OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL        = os.getenv("OPENAI_MODEL", OPENAI_DEPLOYMENT)          # chat
-OPENAI_EXPLORE_MODEL = os.getenv("OPENAI_EXPLORE_MODEL", "gpt-4o-mini")    # explore loop
+OPENAI_MODEL        = os.getenv("OPENAI_MODEL", OPENAI_DEPLOYMENT)          # chat (override with gpt-4o-mini to save cost)
+OPENAI_CHAT_MODEL   = os.getenv("OPENAI_CHAT_MODEL", "")                   # if set, overrides OPENAI_MODEL for chat only
+OPENAI_EXPLORE_MODEL = os.getenv("OPENAI_EXPLORE_MODEL", "gpt-4o-mini")    # explore loop (already cheap)
 MANAGED_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")   # Managed Identity clientId
 
 # Maximum number of tool definitions sent in a single OpenAI API call.
