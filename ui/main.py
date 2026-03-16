@@ -716,7 +716,7 @@ $('analyze-btn').addEventListener('click', async () => {
     // Poll GET /api/jobs/{id} until status is done or error
     let jobResult = null;
     let _pollMisses = 0;
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 200; i++) {
       await new Promise(r => setTimeout(r, 3000));
       btn.innerHTML = `<span class="spinner"></span> Analyzing… (${(i+1)*3}s)`;
       const poll = await fetch(`/api/jobs/${jobId}`);
@@ -731,7 +731,7 @@ $('analyze-btn').addEventListener('click', async () => {
       if (s.status === 'done') { jobResult = s.result; break; }
       if (s.status === 'error') throw new Error(s.error || 'Discovery failed');
     }
-    if (!jobResult) throw new Error('Analysis timed out after 450s');
+    if (!jobResult) throw new Error('Analysis timed out after 600s');
 
     state.invocables = flattenInvocables(jobResult.invocables);
     buildInvocablesList();
