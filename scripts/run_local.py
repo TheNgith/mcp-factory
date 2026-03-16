@@ -443,15 +443,200 @@ def _parse_enrichment(text: str) -> dict | None:
         return None
 
 
-def _discover_loop(client, deployment: str, invocables: list[dict],
+_VOCAB_UPDATE_SYSTEM = """\
+You are a DLL reverse-engineering assistant maintaining a shared vocabulary table.
+Given a new function enrichment, update the vocabulary with any NEW generalisable facts.
+Output ONLY a JSON object with these optional keys (omit keys if nothing new to add):
+{
+  "string_param_convention": "<how string input params work in this DLL>",
+  "id_format": "<pattern of ID strings, e.g. 'CUST-NNN, ORD-YYYYMMDD-NNNN'>",
+  "ignored_params": ["<any param that is always ignored or always 0>"],
+  "init_sequence": "<what must be called before write functions work>",
+  "write_blocked_by": "<what prevents write operations>",
+  "output_format": "<how output buffers are structured, e.g. 'pipe-delimited key=value'>",
+  "error_codes": {"<hex>": "<meaning>"},
+  "notes": "<anything else generalisable across functions>"
+}
+Only include keys where you have strong evidence. Keep values concise (one sentence each).
+If nothing new was learned, output {}.
+"""
+
+
+def _update_vocabulary(client, deployment: str, vocab: dict, enrichment: dict) -> dict:
+    """Ask the LLM to extract generalisable facts from one enrichment into the vocab table."""
+    prompt = (
+        f"Current vocabulary:\n{json.dumps(vocab, indent=2)}\n\n"
+        f"New function enrichment:\n{json.dumps(enrichment, indent=2)}\n\n"
+        "Update the vocabulary with any new generalisable facts. Output only the updated JSON."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": _VOCAB_UPDATE_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+        # Strip fences
+        if text.startswith("```"):
+            text = "\n".join(text.split("\n")[1:]).rstrip("`").strip()
+        start = text.find("{")
+        end   = text.rfind("}")
+        if start != -1 and end != -1:
+            updates = json.loads(text[start : end + 1])
+            # Merge: lists are extended, dicts are merged, scalars are overwritten
+            for k, v in updates.items():
+                if isinstance(v, list) and isinstance(vocab.get(k), list):
+                    existing = set(vocab[k])
+                    vocab[k] = vocab[k] + [x for x in v if x not in existing]
+                elif isinstance(v, dict) and isinstance(vocab.get(k), dict):
+                    vocab[k].update(v)
+                elif v:
+                    vocab[k] = v
+    except Exception:
+        pass
+    return vocab
+
+
+def _vocab_block(vocab: dict) -> str:
+    """Format the vocabulary table for injection into user prompts."""
+    if not vocab:
+        return ""
+    lines = ["ACCUMULATED DLL KNOWLEDGE (apply these conventions immediately):"]
+    for k, v in vocab.items():
+        if isinstance(v, list):
+            lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
+        elif isinstance(v, dict):
+            for sk, sv in v.items():
+                lines.append(f"  {k}[{sk}]: {sv}")
+        else:
+            lines.append(f"  {k}: {v}")
+    return "\n".join(lines) + "\n"
+
+
+def _probe_write_unlock(inv_map: dict, dll_strings: dict) -> dict:
+    """Phase 1: Try to find and execute a write-mode unlock sequence.
+
+    Systematically tries:
+    1. CS_Initialize with integer mode arguments (0,1,2,4,8,16,256,512)
+    2. Any function named *Begin*, *Start*, *Enable*, *Open*, *SetMode*, *Auth*
+    3. CS_Initialize(mode) then immediately retrying a write sentinel function
+
+    Returns a dict describing what was found:
+    {
+        "unlocked": bool,
+        "sequence": [{"fn": name, "args": {...}, "result": "..."}],
+        "write_fn_tested": name | None,   # first write-sentinel fn we tested
+        "notes": str,
+    }
+    """
+    _WRITE_SENTINELS = {0xFFFFFFFB}  # sentinel: write denied
+    _INIT_NAMES = [n for n in inv_map if re.search(r"init(ializ)?", n, re.I)]
+    _WRITE_FN_NAMES = [
+        n for n in inv_map
+        if re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", n, re.I)
+    ]
+    _UNLOCK_PATTERNS = [
+        r"begin", r"start", r"enable", r"open", r"setmode", r"auth",
+        r"login", r"logon", r"connect", r"session", r"transaction",
+    ]
+    _UNLOCK_FNS = [
+        n for n in inv_map
+        if any(re.search(p, n, re.I) for p in _UNLOCK_PATTERNS)
+    ]
+
+    sequence: list[dict] = []
+
+    def _call(fn_name: str, args: dict) -> tuple[str, int | None]:
+        inv = inv_map.get(fn_name)
+        if not inv:
+            return "[not found]", None
+        result = _execute_local(inv, args)
+        m = re.match(r"Returned:\s*(\d+)", result or "")
+        ret = int(m.group(1)) if m else None
+        return result, ret
+
+    def _write_blocked(fn_name: str) -> bool:
+        """Return True if fn returns write-denied sentinel with CUST-001."""
+        _, ret = _call(fn_name, {"param_1": "CUST-001", "param_2": 0})
+        return ret in _WRITE_SENTINELS if ret is not None else False
+
+    # Choose the first write-sentinel function as our canary
+    write_canary = _WRITE_FN_NAMES[0] if _WRITE_FN_NAMES else None
+
+    print("\n[phase1] Write-unlock probe")
+    print(f"  Init functions:  {_INIT_NAMES or '(none)'}")
+    print(f"  Write canary:    {write_canary or '(none)'}")
+    print(f"  Unlock patterns: {_UNLOCK_FNS or '(none)'}")
+
+    # Baseline: is write already available?
+    if write_canary:
+        base_result, base_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
+        sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": base_result})
+        if base_ret not in _WRITE_SENTINELS and base_ret == 0:
+            print(f"  [phase1] Write already available after plain init — no unlock needed")
+            return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                    "notes": "write available without special unlock"}
+
+    # Try CS_Initialize with integer mode args
+    for init_fn in _INIT_NAMES:
+        for mode in (1, 2, 4, 8, 16, 256, 512):
+            result, ret = _call(init_fn, {"param_1": mode})
+            sequence.append({"fn": init_fn, "args": {"param_1": mode}, "result": result})
+            print(f"  {init_fn}(mode={mode}) -> {result}")
+            if ret == 0 and write_canary:
+                w_result, w_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
+                sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": w_result})
+                print(f"    canary {write_canary} -> {w_result}")
+                if w_ret not in _WRITE_SENTINELS and w_ret == 0:
+                    print(f"  [phase1] UNLOCKED via {init_fn}(mode={mode})")
+                    return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                            "notes": f"write unlocked by {init_fn}(param_1={mode})"}
+
+    # Try dedicated unlock-pattern functions
+    for unlock_fn in _UNLOCK_FNS:
+        for args in [
+            {},
+            {"param_1": 0}, {"param_1": 1}, {"param_1": 2},
+            {"param_1": "CUST-001"},
+        ]:
+            result, ret = _call(unlock_fn, args)
+            sequence.append({"fn": unlock_fn, "args": args, "result": result})
+            print(f"  {unlock_fn}({args}) -> {result}")
+            if ret == 0 and write_canary:
+                w_result, w_ret = _call(write_canary, {"param_1": "CUST-001", "param_2": 0})
+                sequence.append({"fn": write_canary, "args": {"param_1": "CUST-001", "param_2": 0}, "result": w_result})
+                print(f"    canary {write_canary} -> {w_result}")
+                if w_ret not in _WRITE_SENTINELS and w_ret == 0:
+                    print(f"  [phase1] UNLOCKED via {unlock_fn}({args})")
+                    return {"unlocked": True, "sequence": sequence, "write_fn_tested": write_canary,
+                            "notes": f"write unlocked by {unlock_fn}({args})"}
+
+    print("  [phase1] Write mode not unlocked — write functions will be probed with best-effort")
+    return {
+        "unlocked": False,
+        "sequence": sequence,
+        "write_fn_tested": write_canary,
+        "notes": (
+            "No unlock sequence found. CS_Initialize with modes 1-512 all left write functions "
+            "returning 0xFFFFFFFB. Likely requires a credential or token not embedded in the binary."
+        ),
+    }
+
+
+def _discover_loop(client, deployment, invocables: list[dict],
                    findings_path: Path | None = None,
-                   dll_strings: dict | None = None) -> list[dict]:
+                   dll_strings: dict | None = None,
+                   write_mode: bool = False) -> list[dict]:
     """Probe every function, produce structured enrichment JSON, persist findings.
 
     Returns the list of enrichment dicts (one per function).
     If findings_path is given, load prior findings (skip already-enriched functions)
     and save after each function so a crash doesn't lose progress.
     dll_strings: output of _extract_dll_strings(), injected into system prompt.
+    write_mode: if True, write-operation functions are probed after unlock sequence.
     """
     tools   = [inv["_tool_schema"] for inv in invocables if "_tool_schema" in inv]
     inv_map = {inv["name"]: inv for inv in invocables}
@@ -467,17 +652,27 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
 
     enrichments: list[dict] = list(prior.values())
     total = len(invocables)
-    print(f"\n[discover] {total} functions  model={deployment}\n")
+    print(f"\n[discover] {total} functions  model={deployment}  write_mode={write_mode}\n")
 
-    # Build a short rolling context from prior findings to seed each call
-    def _context_block() -> str:
-        if not enrichments:
-            return "  (none yet)"
-        lines = []
-        for e in enrichments[-6:]:
-            wc = f" working_call={e['working_call']}" if e.get("working_call") else ""
-            lines.append(f"  - {e['function']} ({e.get('status','?')}): {e.get('description','')}{wc}")
-        return "\n".join(lines)
+    # Shared vocabulary table — grows as we learn things about the DLL
+    vocab: dict = {}
+    # Seed with any facts already present in prior findings
+    for e in enrichments:
+        vocab = _update_vocabulary(client, deployment, vocab, e)
+    if vocab:
+        print(f"[vocab] Seeded from prior findings: {list(vocab.keys())}")
+
+    # Write-unlock context injected into prompts for write-operation functions
+    _WRITE_PATTERNS = re.compile(
+        r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", re.I
+    )
+    write_unlock_block = ""
+    if write_mode:
+        write_unlock_block = (
+            "\nWRITE MODE ACTIVE: The write-unlock sequence has already been executed. "
+            "Write functions (ProcessPayment, RedeemLoyaltyPoints, UnlockAccount etc.) "
+            "should now succeed. Probe them with real customer IDs from STATIC ANALYSIS HINTS.\n"
+        )
 
     for idx, inv in enumerate(invocables):
         name = inv["name"]
@@ -509,6 +704,19 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
             if hint_parts:
                 hints_block = "\nSTATIC ANALYSIS HINTS (strings extracted from DLL binary):\n" + "\n".join(hint_parts) + "\nUse these as probe values for string params before trying generic ones.\n"
 
+        # Build per-function context: vocabulary + recent findings summary
+        def _context_block() -> str:
+            if not enrichments:
+                return "  (none yet)"
+            lines = []
+            for e in enrichments[-6:]:
+                wc = f" working_call={e['working_call']}" if e.get("working_call") else ""
+                lines.append(f"  - {e['function']} ({e.get('status','?')}): {e.get('description','')}{wc}")
+            return "\n".join(lines)
+
+        vocab_section = _vocab_block(vocab)
+        is_write_fn = bool(_WRITE_PATTERNS.search(name))
+
         conversation = [
             {"role": "system", "content": _DISCOVER_SYSTEM},
             {
@@ -518,8 +726,10 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
                     f"  Name: {name}\n"
                     f"  Prototype: {desc[:400]}\n"
                     f"  Parameters: {params_info or '(none)'}\n"
-                    + hints_block +
-                    f"\nPreviously learned about this DLL:\n{_context_block()}\n\n"
+                    + hints_block
+                    + ("\n" + vocab_section if vocab_section else "")
+                    + (write_unlock_block if is_write_fn else "")
+                    + f"\nPreviously discovered functions:\n{_context_block()}\n\n"
                     "Probe it and output the ENRICHMENT JSON block."
                 ),
             },
@@ -638,6 +848,10 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
             # ─────────────────────────────────────────────────────────────────
 
             enrichments.append(enrichment)
+
+            # Update the shared vocabulary with what we just learned
+            vocab = _update_vocabulary(client, deployment, vocab, enrichment)
+
             # Persist after each function so a crash doesn't lose progress
             if findings_path:
                 findings_path.write_text(
@@ -664,20 +878,89 @@ def _discover_loop(client, deployment: str, invocables: list[dict],
 
 
 
+def _synthesize(client, deployment: str, findings: list[dict], out_path: Path | None = None) -> str:
+    """Produce a unified API reference document from completed findings.
+
+    The document contains:
+      - Executive summary: what the DLL does, inferred data model
+      - Initialization / usage flow
+      - Function reference (grouped by category)
+      - Error code reference
+      - Known limitations
+    """
+    findings_json = json.dumps(findings, indent=2, ensure_ascii=False)
+
+    system_msg = (
+        "You are a senior technical writer. Given structured reverse-engineering findings "
+        "for an undocumented Windows DLL, produce a complete API reference document in Markdown.\n\n"
+        "The document MUST include these sections in order:\n"
+        "## Overview\n"
+        "  One paragraph explaining what this DLL does and what business domain it serves.\n\n"
+        "## Data Model\n"
+        "  Infer the key entities (e.g. Customer, Order) from output buffer format strings "
+        "and parameter patterns. List their fields with types.\n\n"
+        "## Initialization\n"
+        "  The exact call sequence required before using other functions, with code example.\n\n"
+        "## Function Reference\n"
+        "  Group functions by category (Read, Write, Utility). For each function:\n"
+        "  - Signature with semantic parameter names\n"
+        "  - Description\n"
+        "  - Parameters table (name | type | direction | description)\n"
+        "  - Return values\n"
+        "  - Example call\n\n"
+        "## Error Code Reference\n"
+        "  Table of all observed error codes with meanings.\n\n"
+        "## Known Limitations\n"
+        "  Functions that could not be fully documented and why.\n\n"
+        "Be precise and concise. Use the semantic parameter names from the findings, not param_N."
+    )
+
+    user_msg = (
+        f"Here are the reverse-engineering findings for this DLL:\n\n"
+        f"```json\n{findings_json}\n```\n\n"
+        "Produce the full API reference document now."
+    )
+
+    print(f"\n[synthesize] Generating API reference from {len(findings)} findings…")
+    resp = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": user_msg},
+        ],
+        temperature=0.2,  # slight creativity for prose quality
+    )
+    doc = resp.choices[0].message.content or ""
+
+    if out_path:
+        out_path.write_text(doc, encoding="utf-8")
+        print(f"[synthesize] Written to {out_path}")
+    else:
+        print("\n" + "=" * 72)
+        print(doc)
+        print("=" * 72)
+
+    return doc
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
     _load_env()
 
     ap = argparse.ArgumentParser(description="Local DLL debug runner (Ghidra JSON or invocables_map)")
-    ap.add_argument("--dll",      default=None,         help="Path to the .dll file (required for chat/discover)")
-    ap.add_argument("--json",     default=None,         help="Ghidra JSON or invocables_map.json path (required for chat/discover)")
-    ap.add_argument("--prompt",   default=None,         help="Chat prompt (interactive if omitted)")
-    ap.add_argument("--discover", action="store_true",  help="Autonomous probe+document loop across all functions")
-    ap.add_argument("--save",     default=None,         help="Save findings to this JSON file (auto-resumes if exists)")
-    ap.add_argument("--report",   default=None,         help="Print a previously saved findings JSON (no LLM call)")
-    ap.add_argument("--model",    default=None,         help="Override model (e.g. gpt-4o)")
-    ap.add_argument("--rounds",   type=int, default=8,  help="Max tool-call rounds per chat (default 8)")
+    ap.add_argument("--dll",          default=None,         help="Path to the .dll file (required for chat/discover)")
+    ap.add_argument("--json",         default=None,         help="Ghidra JSON or invocables_map.json path (required for chat/discover)")
+    ap.add_argument("--prompt",       default=None,         help="Chat prompt (interactive if omitted)")
+    ap.add_argument("--discover",     action="store_true",  help="Autonomous probe+document loop across all functions")
+    ap.add_argument("--write-probe",  action="store_true",  help="Run Phase 1 write-unlock probe before discovery")
+    ap.add_argument("--synthesize",   default=None,         metavar="FINDINGS_JSON",
+                                                            help="Generate API reference from a completed findings JSON")
+    ap.add_argument("--out",          default=None,         help="Output path for --synthesize (default: print to stdout)")
+    ap.add_argument("--save",         default=None,         help="Save findings to this JSON file (auto-resumes if exists)")
+    ap.add_argument("--report",       default=None,         help="Print a previously saved findings JSON (no LLM call)")
+    ap.add_argument("--model",        default=None,         help="Override model (e.g. gpt-4o)")
+    ap.add_argument("--rounds",       type=int, default=8,  help="Max tool-call rounds per chat (default 8)")
     ns = ap.parse_args()
 
     # --report: just pretty-print a saved findings file
@@ -738,6 +1021,17 @@ def main() -> None:
         deployment = ns.model
     print(f"[info] Model: {deployment}")
 
+    if ns.synthesize is not None:
+        # --synthesize <findings.json> [--out api_ref.md]  (no DLL/LLM discover needed)
+        src_path = Path(ns.synthesize)
+        if not src_path.exists():
+            print(f"[!] Findings file not found: {src_path}")
+            sys.exit(1)
+        findings = json.loads(src_path.read_text(encoding="utf-8"))
+        out_path = Path(ns.out) if ns.out else None
+        _synthesize(client, deployment, findings, out_path=out_path)
+        return
+
     if ns.discover:
         findings_path = Path(ns.save) if ns.save else None
         dll_strings   = _extract_dll_strings(dll_path)
@@ -745,8 +1039,24 @@ def main() -> None:
             print(f"[phase0] Found {len(dll_strings['ids'])} IDs: {', '.join(dll_strings['ids'][:8])}")
         if dll_strings["formats"]:
             print(f"[phase0] Found {len(dll_strings['formats'])} format strings")
+
+        write_unlocked = False
+        if ns.write_probe:
+            inv_map_local = {inv["name"]: inv for inv in invocables}
+            unlock_result = _probe_write_unlock(inv_map_local, dll_strings)
+            write_unlocked = unlock_result["unlocked"]
+            print(f"[phase1] write-unlock probe: {unlock_result['notes']}")
+            if write_unlocked:
+                print(f"[phase1] unlock sequence: {unlock_result['sequence']}")
+
         _discover_loop(client, deployment, invocables,
-                       findings_path=findings_path, dll_strings=dll_strings)
+                       findings_path=findings_path, dll_strings=dll_strings,
+                       write_mode=write_unlocked)
+
+        if ns.synthesize is not None and findings_path and findings_path.exists():
+            findings = json.loads(findings_path.read_text(encoding="utf-8"))
+            out_path = Path(ns.out) if ns.out else None
+            _synthesize(client, deployment, findings, out_path=out_path)
         return
 
     prompt = ns.prompt
