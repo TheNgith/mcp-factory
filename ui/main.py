@@ -1027,13 +1027,13 @@ $('discover-btn').addEventListener('click', async () => {
             list.innerHTML = '';
             gaps.forEach(g => {
               const li = document.createElement('li');
-              li.style.marginBottom = '4px';
-              const fn = g.function && g.function !== 'general' ? `<strong>${g.function}</strong>: ` : '';
-              li.innerHTML = `${fn}${g.question}`;
-              if (g.uncertainty) {
+              li.style.marginBottom = '8px';
+              li.innerHTML = g.question || g.uncertainty || '';
+              const detail = g.technical_detail || g.uncertainty;
+              if (detail) {
                 const sub = document.createElement('span');
-                sub.style.cssText = 'display:block;font-size:.78rem;color:#92400e;margin-top:1px';
-                sub.textContent = `Uncertain: ${g.uncertainty}`;
+                sub.style.cssText = 'display:block;font-size:.76rem;color:#6b7280;margin-top:3px;font-family:monospace';
+                sub.textContent = `Technical detail: ${detail}`;
                 li.appendChild(sub);
               }
               list.appendChild(li);

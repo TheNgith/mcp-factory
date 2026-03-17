@@ -123,8 +123,8 @@ Output ONLY valid JSON (no markdown fences):
   "gaps": [
     {
       "function": "<function_name or 'general'>",
-      "uncertainty": "<what specifically is uncertain, in 1 sentence>",
-      "question": "<a clear, specific question the domain expert could answer>"
+      "question": "<plain-English question for a business user — NO function names, NO error codes, NO jargon. E.g. 'Does processing a payment require any kind of setup or login step first?'>",
+      "technical_detail": "<one sentence for developers: what was observed — include the actual return value or error code. E.g. 'CS_ProcessPayment consistently returned 0xFFFFFFFB (write denied) on every probe.'>"
     }
   ]
 }
@@ -134,7 +134,9 @@ Rules:
 - Only ask about genuinely uncertain things (not obvious things like what Initialize does)
 - Prefer questions about: numeric value units, enum/status meanings, unknown ID formats,
   error conditions not observed, functions that always failed
-- Questions must be answerable by a user familiar with the system but without source code
+- `question` must be plain English — a product owner or QA analyst should immediately understand it
+  with no programming knowledge. Never include raw numbers, hex codes, or C function names.
+- `technical_detail` is for developers: include the actual observed values (return codes, hex, function name)
 - If everything is well-documented and confident, return {"gaps": []}
 """
 
