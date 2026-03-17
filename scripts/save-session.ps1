@@ -146,18 +146,27 @@ if (-not (Test-Path $transcriptPath)) {
     Write-Host "`n  Created chat-transcript.md (fill this in after testing)" -ForegroundColor Yellow
 }
 
+# ── 7. Append a row to sessions/README.md index ───────────────────────────────
+$readmePath = Join-Path $SessionsRoot "README.md"
+if (Test-Path $readmePath) {
+    $component  = if ($meta -and $meta.component -ne "unknown") { $meta.component } else { "(unknown)" }
+    $newRow     = "| $datePart | ``$commitHash`` | ``$JobId`` | $($Note ? $Note : '-') | $component — (fill in key findings) |"
+    $readmeText = Get-Content $readmePath -Raw
+    if ($readmeText -notlike "*$JobId*") {
+        # Append after the last table row
+        $updated = $readmeText.TrimEnd() + "`n$newRow`n"
+        Set-Content -Path $readmePath -Value $updated -Encoding UTF8
+        Write-Host "  Updated sessions/README.md index" -ForegroundColor Green
+    }
+}
+
 Write-Host "`n=== Done ===`n" -ForegroundColor Green
 Write-Host "Next steps:"
-Write-Host "  1. Paste your chat session into: $transcriptPath"
-Write-Host "  2. git add sessions\$folderName && git commit -m `"session: $folderName`""
+Write-Host "  1. Paste your chat session into:"
+Write-Host "     $transcriptPath" -ForegroundColor White
+Write-Host "  2. Commit:"
+Write-Host "     git add sessions\ ; git commit -m `"session: $folderName`" ; git push" -ForegroundColor White
 
-# Creates a dated snapshot folder under sessions/ with all current artifacts.
-#
-# Usage:
-#   .\scripts\save-session.ps1
-#   .\scripts\save-session.ps1 -JobId "a0fc70e8" -Note "payment-flow-test"
-#   .\scripts\save-session.ps1 -DownloadsDir "C:\Users\me\Downloads" -JobId "abc123"
-#
 # What it captures:
 #   - Git commit hash + message (folder name)
 #   - Any .md/.py/.json files in Downloads matching *example* or *refinement*
