@@ -1,0 +1,15 @@
+﻿{
+    "job_id":  "a0fc70e8",
+    "component":  "unknown",
+    "explore_phase":  "done",
+    "hints":  "CORRECTION: CS_UnlockAccount: param_2 is the current account status string (e.g. \u0027LOCKED\u0027), \nnot a second customer ID. The function signature is unlock_account(customer_id, current_status).\n\nCS_CalculateInterest: param_1 is principal in cents, param_2 is annual interest rate \nin basis points (e.g. 500 = 5.00%), param_3 is period in months.\n\nCS_ProcessPayment: requires that the account is NOT locked before calling. Locked \naccounts return write-denied. Call CS_UnlockAccount first if needed.\n\nCS_RedeemLoyaltyPoints: fails with account-locked because the test customer CUST-001 \nis in LOCKED state. Must call CS_UnlockAccount(CUST-001, LOCKED) first, then retry.",
+    "use_cases":  "",
+    "created_at":  1773763770.5084379,
+    "updated_at":  1773778279.1776798,
+    "gap_count":  5,
+    "finding_count":  16,
+    "commit":  "b8e0744",
+    "commit_msg":  "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
+    "note":  "unknown-run2",
+    "saved_at":  "2026-03-17T17:09:10.3171926-04:00"
+}

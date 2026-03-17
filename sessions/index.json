@@ -1,0 +1,38 @@
+﻿[
+    {
+        "date":  "2026-03-17",
+        "commit":  "b8e0744",
+        "commit_msg":  "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
+        "job_id":  "a0fc70e8",
+        "component":  "unknown",
+        "note":  "unknown-run2",
+        "folder":  "2026-03-17-b8e0744-unknown-run2",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "saved_at":  "2026-03-17T17:08:36.1809403-04:00"
+    },
+    {
+        "date":  "2026-03-17",
+        "commit":  "b8e0744",
+        "commit_msg":  "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
+        "job_id":  "a0fc70e8",
+        "component":  "unknown",
+        "note":  "unknown-run2",
+        "folder":  "2026-03-17-b8e0744-unknown-run2",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  16
+                           },
+        "gap_count":  5,
+        "known_ids":  "(none recorded)",
+        "saved_at":  "2026-03-17T17:09:10.3383861-04:00"
+    }
+]
