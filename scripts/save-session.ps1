@@ -212,46 +212,33 @@ $sm += "## What to investigate next`n`n> Fill this in after testing`n`n-`n"
 Set-Content -Path (Join-Path $sessionDir "SUMMARY.md") -Value $sm -Encoding UTF8
 Write-Host "  Wrote SUMMARY.md" -ForegroundColor Green
 
-# ?? 14. chat-transcript.txt — copy from Downloads or create stub ????????????
-$destTranscript = Join-Path $sessionDir "chat-transcript.txt"
-
-# Resolve transcript source: explicit path > auto-search Downloads by JobId > stub
-$resolvedTranscript = ""
-if ($TranscriptPath -and (Test-Path $TranscriptPath)) {
-    $resolvedTranscript = $TranscriptPath
-    Write-Host "  Using provided transcript: $TranscriptPath" -ForegroundColor Cyan
-} else {
-    # Auto-search: Downloads folder for mcp-transcript-{JobId}.txt
+# ?? 14. chat_transcript.txt — pull from API ????????????????????????????????????
+$destTranscript = Join-Path $sessionDir "chat_transcript.txt"
+# Transcript is now persisted server-side during chat. Pull via the snapshot ZIP
+# (already extracted above). If not present in ZIP, fall back to Downloads search.
+if (-not (Test-Path $destTranscript)) {
+    # Fallback: look in Downloads for a manually-exported transcript
     $downloadsDir = Join-Path $env:USERPROFILE "Downloads"
     $autoMatch    = Join-Path $downloadsDir ("mcp-transcript-" + $JobId + ".txt")
-    if (Test-Path $autoMatch) {
-        $resolvedTranscript = $autoMatch
-        Write-Host "  Auto-found transcript: $autoMatch" -ForegroundColor Green
+    if ($TranscriptPath -and (Test-Path $TranscriptPath)) {
+        Copy-Item $TranscriptPath $destTranscript
+        Write-Host "  Copied provided transcript -> chat_transcript.txt" -ForegroundColor Green
+    } elseif (Test-Path $autoMatch) {
+        Copy-Item $autoMatch $destTranscript
+        Write-Host "  Copied Downloads transcript -> chat_transcript.txt" -ForegroundColor Green
     } else {
-        # Fallback: most recent mcp-transcript-*.txt in Downloads (within last 2 hours)
         $recent = Get-ChildItem $downloadsDir -Filter "mcp-transcript-*.txt" -ErrorAction SilentlyContinue |
                   Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-2) } |
                   Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($recent) {
-            $resolvedTranscript = $recent.FullName
-            Write-Host "  Auto-found recent transcript: $($recent.Name) (job ID may differ — verify)" -ForegroundColor Yellow
+            Copy-Item $recent.FullName $destTranscript
+            Write-Host "  Copied recent transcript ($($recent.Name)) -> chat_transcript.txt (verify job ID)" -ForegroundColor Yellow
+        } else {
+            Write-Host "  No transcript found (run more chat prompts to generate one server-side)" -ForegroundColor DarkYellow
         }
     }
-}
-
-if ($resolvedTranscript) {
-    Copy-Item $resolvedTranscript $destTranscript
-    Write-Host "  Copied transcript -> chat-transcript.txt" -ForegroundColor Green
 } else {
-    # Create a stub so the folder is still useful
-    $stub  = "# Chat Transcript - " + $datePart + "`n`n"
-    $stub += "**Commit:** " + $commitHash + "`n"
-    $stub += "**Job ID:** " + $JobId + "`n"
-    $stub += "**Component:** " + $component + "`n`n"
-    $stub += "No transcript found. Download it from the UI chat panel ('Transcript' button) "
-    $stub += "and re-run save-session.ps1 with -TranscriptPath pointing to the file.`n"
-    Set-Content -Path $destTranscript -Value $stub -Encoding UTF8
-    Write-Host "  No transcript found — created stub chat-transcript.txt" -ForegroundColor Yellow
+    Write-Host "  chat_transcript.txt present in snapshot" -ForegroundColor Green
 }
 
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????

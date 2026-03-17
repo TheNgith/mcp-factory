@@ -504,7 +504,9 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
             # ── No tool calls → final text answer ─────────────────────────
             if not msg.tool_calls:
+                _final_text = ""
                 if msg.content:
+                    _final_text = msg.content
                     yield _sse({"type": "token", "content": msg.content})
                 elif _tools_executed:
                     # Model returned no summary text (common at temperature=0 after
@@ -533,16 +535,27 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                                             "message": "Generating response..."})
                         _summary_text = _summary_resp.choices[0].message.content
                         if _summary_text:
+                            _final_text = _summary_text
                             yield _sse({"type": "token", "content": _summary_text})
                         else:
                             names = ", ".join(_tools_executed[-3:])
-                            yield _sse({"type": "token",
-                                        "content": f"Done — executed {len(_tools_executed)} step(s): {names}."})
+                            _final_text = f"Done — executed {len(_tools_executed)} step(s): {names}."
+                            yield _sse({"type": "token", "content": _final_text})
                     except Exception as _se:
                         logger.warning("[stream_chat] Summary call failed: %s", _se)
                         names = ", ".join(_tools_executed[-3:])
-                        yield _sse({"type": "token",
-                                    "content": f"Done — executed {len(_tools_executed)} step(s): {names}."})
+                        _final_text = f"Done — executed {len(_tools_executed)} step(s): {names}."
+                        yield _sse({"type": "token", "content": _final_text})
+                # Persist this exchange to the per-job blob transcript
+                if job_id and _last_user_message and _final_text:
+                    try:
+                        from api.storage import _append_transcript as _at
+                        loop.run_in_executor(
+                            None,
+                            lambda u=_last_user_message, a=_final_text: _at(job_id, u, a),
+                        )
+                    except Exception:
+                        pass
                 yield _sse({"type": "done", "rounds": _round + 1})
                 return
 

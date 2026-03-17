@@ -667,6 +667,14 @@ async def session_snapshot(job_id: str):
                 lines.append(f"**Answer:** {ans if ans else '(unanswered)'}\n")
             zf.writestr("clarification-questions.md", "\n".join(lines))
 
+        # ── Chat transcript ────────────────────────────────────────────────
+        try:
+            zf.writestr("chat_transcript.txt",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/chat_transcript.txt"))
+        except Exception:
+            zf.writestr("chat_transcript.txt",
+                        "(No transcript recorded yet. Start a chat session to generate one.)")
+
         # ── Session metadata ───────────────────────────────────────────────────
         meta = {
             "job_id":        job_id,

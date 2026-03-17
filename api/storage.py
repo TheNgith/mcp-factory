@@ -63,6 +63,24 @@ def _download_blob(container: str, blob_name: str) -> bytes:
     return cc.download_blob(blob_name).readall()
 
 
+def _append_transcript(job_id: str, user_text: str, assistant_text: str) -> None:
+    """Append a user/assistant exchange to {job_id}/chat_transcript.txt in blob.
+
+    Read-modify-write: safe for single-threaded chat sessions (one active
+    stream_chat per job_id at a time).  Non-fatal on any error.
+    """
+    try:
+        blob_name = f"{job_id}/chat_transcript.txt"
+        entry = f"[USER]\n{user_text}\n\n---\n\n[ASSISTANT]\n{assistant_text}\n\n---\n\n"
+        try:
+            existing = _download_blob(ARTIFACT_CONTAINER, blob_name).decode("utf-8", errors="replace")
+        except Exception:
+            existing = ""
+        _upload_to_blob(ARTIFACT_CONTAINER, blob_name, (existing + entry).encode("utf-8"))
+    except Exception as exc:
+        logger.warning("[%s] _append_transcript failed: %s", job_id, exc)
+
+
 
 def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bool:
     """Write job status to in-memory cache and persist to Blob.
