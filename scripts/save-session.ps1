@@ -42,11 +42,11 @@ $ErrorActionPreference = "Stop"
 
 # ── 1. Git metadata ────────────────────────────────────────────────────────────
 Push-Location $PSScriptRoot\..
-$commitHash = (git rev-parse --short HEAD 2>$null) ?? "nogit"
-$commitMsg  = (git log -1 --format="%s" 2>$null) ?? "no-message"
-$commitBody = (git log -1 --format="%B" 2>$null) ?? $commitMsg
-$diffStat   = (git diff HEAD~1 HEAD --stat 2>$null) ?? "(no previous commit to diff against)"
-$diffFull   = (git diff HEAD~1 HEAD -- api/ ui/ scripts/ 2>$null) ?? ""
+$_ch = git rev-parse --short HEAD 2>$null; $commitHash = if ($_ch) { $_ch } else { "nogit" }
+$_cm = git log -1 --format="%s" 2>$null; $commitMsg  = if ($_cm) { $_cm } else { "no-message" }
+$_cb = git log -1 --format="%B" 2>$null; $commitBody = if ($_cb) { $_cb } else { $commitMsg }
+$_ds = git diff HEAD~1 HEAD --stat 2>$null; $diffStat   = if ($_ds) { $_ds } else { "(no previous commit to diff against)" }
+$_df = git diff HEAD~1 HEAD -- api/ ui/ scripts/ 2>$null; $diffFull = if ($_df) { $_df } else { "" }
 Pop-Location
 
 $datePart = Get-Date -Format "yyyy-MM-dd"
@@ -70,7 +70,8 @@ if ($ApiKey) { $headers["X-API-Key"] = $ApiKey }
 Write-Host "  Downloading snapshot from $snapshotUrl ..." -ForegroundColor Yellow
 try {
     Invoke-WebRequest -Uri $snapshotUrl -Headers $headers -OutFile $zipPath -UseBasicParsing
-    Write-Host "  Download complete ($([Math]::Round((Get-Item $zipPath).Length / 1KB, 1)) KB)" -ForegroundColor Green
+    $sizeKB = [Math]::Round((Get-Item $zipPath).Length / 1024, 1)
+    Write-Host "  Download complete ($sizeKB KB)" -ForegroundColor Green
 } catch {
     Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Error "  Failed to download snapshot: $_"
@@ -309,7 +310,7 @@ if (-not (Test-Path $transcriptPath)) {
 # ── 14. Update sessions/README.md index ───────────────────────────────────────
 $readmePath = Join-Path $SessionsRoot "README.md"
 if (Test-Path $readmePath) {
-    $newRow     = "| $datePart | ``$commitHash`` | ``$JobId`` | $Note | $component — (fill in after testing) |"
+    $newRow     = "| $datePart | ``$commitHash`` | ``$JobId`` | $Note | $component - (fill in after testing) |"
     $readmeText = Get-Content $readmePath -Raw
     if ($readmeText -notlike "*$folderName*") {
         $updated = $readmeText.TrimEnd() + "`n$newRow`n"
