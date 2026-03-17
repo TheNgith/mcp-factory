@@ -71,10 +71,10 @@ Write-Host "  Downloading snapshot from $snapshotUrl ..." -ForegroundColor Yello
 try {
     Invoke-WebRequest -Uri $snapshotUrl -Headers $headers -OutFile $zipPath -UseBasicParsing
     $sizeKB = [Math]::Round((Get-Item $zipPath).Length / 1024, 1)
-    Write-Host "  Download complete ($sizeKB KB)" -ForegroundColor Green
+    Write-Host ("  Download complete (" + $sizeKB + " KB)") -ForegroundColor Green
 } catch {
     Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Error "  Failed to download snapshot: $_"
+    Write-Host ("  FAILED to download snapshot: " + $_) -ForegroundColor Red
     exit 1
 }
 
