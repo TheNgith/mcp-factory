@@ -268,9 +268,13 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "   - 'access violation': a pointer argument was missing — infer from user context and retry.\n"
             "   - If a prerequisite function (Initialize, Open, Login) exists, call it first.\n"
             "   - Only report failure to the user after exhausting all steps above.\n"
-            "7. Whenever you discover something conclusive about a function — a working call, a confirmed "
-            "failure mode, a required encoding — call record_finding immediately to persist it. "
-            "Do NOT call record_finding speculatively or as commentary; only call it for definitive results."
+            "7. MANDATORY PERSISTENCE: after ANY tool call that returns 0 (success), you MUST call "
+            "record_finding in the SAME response round with status='success' and working_call set to "
+            "the exact args that produced 0. This is not optional — skipping it means the discovery "
+            "is permanently lost. Similarly, after exhausting all probes on a failing function, call "
+            "record_finding with status='error' and note the exact error code(s) observed. "
+            "Do NOT call record_finding speculatively or for intermediate/uncertain results — only "
+            "for definitive success (return=0) or confirmed failure (all probes returned sentinels)."
             + init_rule
             + criticality_block
             + vocab_block
