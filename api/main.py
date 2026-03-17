@@ -594,6 +594,101 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     return JSONResponse({"job_id": job_id, "answers_stored": len(gap_answers)})
 
 
+@app.get("/api/jobs/{job_id}/session-snapshot")
+async def session_snapshot(job_id: str):
+    """Return a ZIP archive containing every artifact for this job.
+
+    The ZIP is structured so save-session.ps1 can extract it directly into a
+    dated sessions/ folder.  Contents:
+
+      schema/01-pre-enrichment.json   ← mcp_schema snapshotted before explore
+      schema/02-post-enrichment.json  ← mcp_schema after explore/refine
+      artifacts/findings.json
+      artifacts/vocab.json
+      artifacts/api_reference.md
+      artifacts/behavioral_spec.py
+      hints.txt                       ← user hints + use_cases verbatim
+      clarification-questions.md      ← formatted from explore_questions
+      session-meta.json               ← job_id, component, timestamps
+    """
+    import io
+    import zipfile as _zf
+
+    status = _get_job_status(job_id) or {}
+
+    zbuf = io.BytesIO()
+    with _zf.ZipFile(zbuf, "w", _zf.ZIP_DEFLATED) as zf:
+
+        # ── Schema snapshots ─────────────────────────────────────────────────
+        for blob_name, zip_name in [
+            (f"{job_id}/mcp_schema_t0.json",  "schema/01-pre-enrichment.json"),
+            (f"{job_id}/mcp_schema.json",      "schema/02-post-enrichment.json"),
+        ]:
+            try:
+                zf.writestr(zip_name, _download_blob(ARTIFACT_CONTAINER, blob_name))
+            except Exception:
+                pass  # blob not yet created is fine — optional at each stage
+
+        # ── Core artifacts ───────────────────────────────────────────────────
+        for blob_name, zip_name in [
+            (f"{job_id}/findings.json",       "artifacts/findings.json"),
+            (f"{job_id}/vocab.json",           "artifacts/vocab.json"),
+            (f"{job_id}/api_reference.md",     "artifacts/api_reference.md"),
+            (f"{job_id}/behavioral_spec.py",   "artifacts/behavioral_spec.py"),
+            (f"{job_id}/invocables_map.json",  "artifacts/invocables_map.json"),
+        ]:
+            try:
+                zf.writestr(zip_name, _download_blob(ARTIFACT_CONTAINER, blob_name))
+            except Exception:
+                pass
+
+        # ── Hints ─────────────────────────────────────────────────────────────
+        hints_lines = []
+        if status.get("hints"):
+            hints_lines.append("# User Hints\n")
+            hints_lines.append(status["hints"])
+        if status.get("use_cases"):
+            hints_lines.append("\n\n# Use Cases\n")
+            hints_lines.append(status["use_cases"])
+        zf.writestr("hints.txt", "\n".join(hints_lines) if hints_lines else "(none)")
+
+        # ── Clarification questions → markdown ────────────────────────────────
+        gaps = status.get("explore_questions") or []
+        if gaps:
+            lines = ["# Clarification Questions from Discovery\n"]
+            for i, g in enumerate(gaps, 1):
+                q = g.get("question") or g.get("uncertainty") or ""
+                td = g.get("technical_detail") or ""
+                fn = g.get("function") or "general"
+                lines.append(f"## {i}. {fn}\n**Question:** {q}\n")
+                if td:
+                    lines.append(f"**Technical detail:** `{td}`\n")
+                ans = (status.get("vocab_gap_answers") or {}).get(fn, "")
+                lines.append(f"**Answer:** {ans if ans else '(unanswered)'}\n")
+            zf.writestr("clarification-questions.md", "\n".join(lines))
+
+        # ── Session metadata ───────────────────────────────────────────────────
+        meta = {
+            "job_id":        job_id,
+            "component":     status.get("component_name", "unknown"),
+            "explore_phase": status.get("explore_phase"),
+            "hints":         status.get("hints", ""),
+            "use_cases":     status.get("use_cases", ""),
+            "created_at":    status.get("created_at"),
+            "updated_at":    status.get("updated_at"),
+            "gap_count":     len(gaps),
+            "finding_count": len(_load_findings(job_id)),
+        }
+        zf.writestr("session-meta.json", json.dumps(meta, indent=2))
+
+    zbuf.seek(0)
+    return StreamingResponse(
+        iter([zbuf.read()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="session-{job_id}.zip"'},
+    )
+
+
 @app.get("/api/jobs/{job_id}/report")
 async def get_report(job_id: str):
     """Generate a markdown documentation report for a job.

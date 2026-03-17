@@ -20,7 +20,7 @@ from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob
 from api.telemetry import _openai_client
 from api.explore_phases import (
     _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
@@ -123,6 +123,16 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     try:
         prior_findings = _load_findings(job_id)
         already_explored = {f.get("function") for f in prior_findings if f.get("function")}
+
+        # Snapshot the schema before any exploration mutates it.
+        # Stored as mcp_schema_t0.json so the session-snapshot endpoint can
+        # include it as "pre-enrichment" alongside the final post-explore schema.
+        try:
+            _raw_schema = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/mcp_schema.json")
+            _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/mcp_schema_t0.json", _raw_schema)
+            logger.info("[%s] explore_worker: pre-enrichment schema snapshot saved", job_id)
+        except Exception as _snap_e:
+            logger.debug("[%s] explore_worker: schema snapshot failed: %s", job_id, _snap_e)
 
         # Phase 0.5: auto-calibrate sentinel error codes for this DLL
         sentinels = _SENTINEL_DEFAULTS

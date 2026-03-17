@@ -1491,6 +1491,21 @@ async def proxy_answer_gaps(job_id: str, body: dict[str, Any]) -> JSONResponse:
     return await _proxy_json(f"/api/jobs/{job_id}/answer-gaps", body)
 
 
+@app.get("/api/jobs/{job_id}/session-snapshot")
+async def proxy_session_snapshot(job_id: str) -> Response:
+    """Proxy session snapshot ZIP download from the pipeline."""
+    try:
+        r = await _client().get(f"/api/jobs/{job_id}/session-snapshot")
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="session-{job_id}.zip"'},
+        )
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+
+
 @app.get("/api/download/{job_id}/{filename}")
 async def proxy_download(job_id: str, filename: str) -> Response:
     """Stream artifact download from the pipeline."""
