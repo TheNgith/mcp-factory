@@ -4,15 +4,19 @@
 # Usage:
 #   .\scripts\save-session.ps1 -ApiUrl "https://your-ui.azurecontainerapps.io" -JobId "a0fc70e8"
 #   .\scripts\save-session.ps1 -ApiUrl "https://your-ui.azurecontainerapps.io" -JobId "a0fc70e8" -Note "payment-test"
+#   .\scripts\save-session.ps1 -ApiUrl "..." -JobId "a0fc70e8" -TranscriptPath "C:\Users\you\Downloads\mcp-transcript-abc123.txt"
 #
 # -Note is optional. Auto-derived as "{component}-run{N}" if omitted.
+# -TranscriptPath is optional. If omitted, the script searches Downloads for mcp-transcript-{JobId}.txt.
+#   If the transcript was downloaded under a different name, pass it explicitly.
 
 param(
     [Parameter(Mandatory=$true)][string]$JobId,
     [Parameter(Mandatory=$true)][string]$ApiUrl,
     [string]$Note = "",
     [string]$SessionsRoot = "$PSScriptRoot\..\sessions",
-    [string]$ApiKey = ""
+    [string]$ApiKey = "",
+    [string]$TranscriptPath = ""
 )
 
 if (-not $ApiKey) {
@@ -208,20 +212,46 @@ $sm += "## What to investigate next`n`n> Fill this in after testing`n`n-`n"
 Set-Content -Path (Join-Path $sessionDir "SUMMARY.md") -Value $sm -Encoding UTF8
 Write-Host "  Wrote SUMMARY.md" -ForegroundColor Green
 
-# ?? 14. chat-transcript.md template ?????????????????????????????????????????
-$transcriptPath = Join-Path $sessionDir "chat-transcript.md"
-if (-not (Test-Path $transcriptPath)) {
-    $t  = "# Chat Transcript - " + $datePart + "`n`n"
-    $t += "**Commit:** " + $commitHash + " - " + $commitMsg + "`n"
-    $t += "**Job ID:** " + $JobId + "`n"
-    $t += "**Component:** " + $component + "`n"
-    $t += "**Note:** " + $Note + "`n`n---`n`n"
-    $t += "## Test prompts`n`n### Prompt 1`n`n**User:** `"`"`n`n"
-    $t += "| Round | Tool | Args | Result |`n|---|---|---|---|`n| 1 | | | |`n`n"
-    $t += "**Outcome:**`n`n---`n`n## What worked`n`n-`n`n"
-    $t += "## What failed / open questions`n`n-`n`n## Follow-up for next session`n`n-`n"
-    Set-Content -Path $transcriptPath -Value $t -Encoding UTF8
-    Write-Host "  Created chat-transcript.md" -ForegroundColor Yellow
+# ?? 14. chat-transcript.txt — copy from Downloads or create stub ????????????
+$destTranscript = Join-Path $sessionDir "chat-transcript.txt"
+
+# Resolve transcript source: explicit path > auto-search Downloads by JobId > stub
+$resolvedTranscript = ""
+if ($TranscriptPath -and (Test-Path $TranscriptPath)) {
+    $resolvedTranscript = $TranscriptPath
+    Write-Host "  Using provided transcript: $TranscriptPath" -ForegroundColor Cyan
+} else {
+    # Auto-search: Downloads folder for mcp-transcript-{JobId}.txt
+    $downloadsDir = Join-Path $env:USERPROFILE "Downloads"
+    $autoMatch    = Join-Path $downloadsDir ("mcp-transcript-" + $JobId + ".txt")
+    if (Test-Path $autoMatch) {
+        $resolvedTranscript = $autoMatch
+        Write-Host "  Auto-found transcript: $autoMatch" -ForegroundColor Green
+    } else {
+        # Fallback: most recent mcp-transcript-*.txt in Downloads (within last 2 hours)
+        $recent = Get-ChildItem $downloadsDir -Filter "mcp-transcript-*.txt" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-2) } |
+                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($recent) {
+            $resolvedTranscript = $recent.FullName
+            Write-Host "  Auto-found recent transcript: $($recent.Name) (job ID may differ — verify)" -ForegroundColor Yellow
+        }
+    }
+}
+
+if ($resolvedTranscript) {
+    Copy-Item $resolvedTranscript $destTranscript
+    Write-Host "  Copied transcript -> chat-transcript.txt" -ForegroundColor Green
+} else {
+    # Create a stub so the folder is still useful
+    $stub  = "# Chat Transcript - " + $datePart + "`n`n"
+    $stub += "**Commit:** " + $commitHash + "`n"
+    $stub += "**Job ID:** " + $JobId + "`n"
+    $stub += "**Component:** " + $component + "`n`n"
+    $stub += "No transcript found. Download it from the UI chat panel ('Transcript' button) "
+    $stub += "and re-run save-session.ps1 with -TranscriptPath pointing to the file.`n"
+    Set-Content -Path $destTranscript -Value $stub -Encoding UTF8
+    Write-Host "  No transcript found — created stub chat-transcript.txt" -ForegroundColor Yellow
 }
 
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
