@@ -1347,13 +1347,13 @@ async def _proxy_json(path: str, body: Any) -> JSONResponse:
 # ── Proxied endpoints ──────────────────────────────────────────────────────
 
 @app.post("/api/analyze")
-async def proxy_analyze(file: UploadFile = File(...), hints: str = Form(default="")):
+async def proxy_analyze(file: UploadFile = File(...), hints: str = Form(default=""), use_cases: str = Form(default="")):
     """Proxy file upload to the pipeline /api/analyze."""
     content = await file.read()
     try:
         r = await _client().post(
             "/api/analyze",
-            data={"hints": hints},
+            data={"hints": hints, "use_cases": use_cases},
             files={"file": (file.filename, content, file.content_type or "application/octet-stream")},
         )
         return JSONResponse(content=r.json(), status_code=r.status_code)
@@ -1412,6 +1412,18 @@ async def proxy_job_status(job_id: str) -> JSONResponse:
     except Exception as e:
         logger.error(f"Proxy job status error: {e}")
         return JSONResponse({"detail": str(e)}, status_code=502)
+
+
+@app.post("/api/jobs/{job_id}/explore")
+async def proxy_explore(job_id: str, body: dict[str, Any]) -> JSONResponse:
+    """Proxy exploration trigger to the pipeline /api/jobs/{job_id}/explore."""
+    return await _proxy_json(f"/api/jobs/{job_id}/explore", body)
+
+
+@app.post("/api/jobs/{job_id}/refine")
+async def proxy_refine(job_id: str, body: dict[str, Any]) -> JSONResponse:
+    """Proxy refinement trigger to the pipeline /api/jobs/{job_id}/refine."""
+    return await _proxy_json(f"/api/jobs/{job_id}/refine", body)
 
 
 @app.get("/api/download/{job_id}/{filename}")
