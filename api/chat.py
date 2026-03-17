@@ -379,6 +379,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         _active_tools.append(_ENRICH_INVOCABLE_TOOL)
     _called_launchers: set[str] = set()
     _tools_executed: list[str] = []  # names of tool calls that actually ran
+    _tool_log: list[dict] = []       # full call+result log for transcript
     _last_user_message = next(
         (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
         "",
@@ -552,7 +553,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         from api.storage import _append_transcript as _at
                         loop.run_in_executor(
                             None,
-                            lambda u=_last_user_message, a=_final_text: _at(job_id, u, a),
+                            lambda u=_last_user_message, a=_final_text, tl=list(_tool_log): _at(job_id, u, a, tl),
                         )
                     except Exception:
                         pass
@@ -595,6 +596,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     fn_args = {}
 
                 yield _sse({"type": "tool_call", "name": fn_name, "args": fn_args})
+                _tool_log.append({"call": fn_name, "args": fn_args, "result": None})
 
                 inv = inv_map.get(fn_name)
                 if inv is None and job_id:
@@ -636,6 +638,8 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     _tool_ms = 0.0
 
                 yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
+                if _tool_log:
+                    _tool_log[-1]["result"] = tool_result
                 logger.info(
                     "[stream_chat/%d] tool=%s latency=%.1f ms result=%s",
                     _round,

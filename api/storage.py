@@ -63,15 +63,33 @@ def _download_blob(container: str, blob_name: str) -> bytes:
     return cc.download_blob(blob_name).readall()
 
 
-def _append_transcript(job_id: str, user_text: str, assistant_text: str) -> None:
+def _append_transcript(job_id: str, user_text: str, assistant_text: str,
+                       tool_log: list | None = None) -> None:
     """Append a user/assistant exchange to {job_id}/chat_transcript.txt in blob.
+
+    If tool_log is provided (list of {"call", "args", "result"} dicts) it is
+    formatted between the user turn and the assistant turn so the full agentic
+    trace is captured.
 
     Read-modify-write: safe for single-threaded chat sessions (one active
     stream_chat per job_id at a time).  Non-fatal on any error.
     """
     try:
         blob_name = f"{job_id}/chat_transcript.txt"
-        entry = f"[USER]\n{user_text}\n\n---\n\n[ASSISTANT]\n{assistant_text}\n\n---\n\n"
+        if tool_log:
+            lines = []
+            for entry in tool_log:
+                args_str = json.dumps(entry.get("args") or {}, separators=(",", ":"))
+                result = entry.get("result") or ""
+                lines.append(f"🔧 {entry['call']}({args_str})\n   ↳ {result}")
+            tool_section = "[TOOL CALLS]\n" + "\n".join(lines) + "\n\n---\n\n"
+        else:
+            tool_section = ""
+        entry = (
+            f"[USER]\n{user_text}\n\n---\n\n"
+            f"{tool_section}"
+            f"[ASSISTANT]\n{assistant_text}\n\n---\n\n"
+        )
         try:
             existing = _download_blob(ARTIFACT_CONTAINER, blob_name).decode("utf-8", errors="replace")
         except Exception:
