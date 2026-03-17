@@ -560,9 +560,24 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     except Exception as _bf_e:
                         logger.debug("[%s] explore_worker: backfill failed: %s", job_id, _bf_e)
 
+                    # Gap resolution pass: attempt one more focused round on functions
+                    # that failed every probe in the main loop, using known-good IDs
+                    # and explicit retry strategies.  Resolved functions won't appear
+                    # in the gap questions that reach the user.
+                    try:
+                        logger.info("[%s] explore_worker: gap resolution pass…", job_id)
+                        _set_explore_status(job_id, explored, total, "Retrying failed functions…")
+                        _attempt_gap_resolution(
+                            job_id, invocables, client, model,
+                            sentinels, vocab, _use_cases_text,
+                            inv_map, tool_schemas,
+                        )
+                    except Exception as _gr_e:
+                        logger.debug("[%s] explore_worker: gap resolution failed: %s", job_id, _gr_e)
+
                     # Self-assessment: generate confidence gap questions for the user.
-                    # Asks the LLM what it was uncertain about so the UI can surface
-                    # targeted clarification prompts to domain experts.
+                    # Runs AFTER gap resolution, so only genuinely unresolvable unknowns
+                    # (undocumented error codes, business rules) surface to the user.
                     try:
                         logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
                         _set_explore_status(job_id, explored, total, "Generating clarification questions…")
@@ -627,6 +642,181 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             },
             sync=True,
         )
+
+
+def _attempt_gap_resolution(
+    job_id: str,
+    invocables: list[dict],
+    client,
+    model: str,
+    sentinels: dict,
+    vocab: dict,
+    use_cases_text: str,
+    inv_map: dict,
+    tool_schemas: list[dict],
+) -> None:
+    """Targeted second-pass re-probe of functions that failed every probe in the main loop.
+
+    Runs before gap questions are generated so questions that the system CAN answer
+    automatically never reach the user.  A bounded conversation with explicit retry
+    strategies (re-init, known-good IDs, parameter permutation) is run for each
+    failed function.  Findings are updated in-place via _patch_finding so that the
+    subsequent _generate_confidence_gaps() call sees the resolved results.
+    """
+    from api.storage import _load_findings
+
+    all_findings = _load_findings(job_id)
+
+    failed_invs = [
+        inv for inv in invocables
+        if not any(
+            f.get("function") == inv["name"] and f.get("status") == "success"
+            for f in all_findings
+        )
+    ]
+    if not failed_invs:
+        logger.info("[%s] gap_resolution: no failed functions — skipping", job_id)
+        return
+
+    fn_list = [inv["name"] for inv in failed_invs]
+    logger.info("[%s] gap_resolution: targeted retry of %d function(s): %s", job_id, len(failed_invs), fn_list)
+
+    # Build a concise "known-good" block from successful findings so the LLM can
+    # reuse proven IDs and argument shapes from sibling functions.
+    successful_findings = [f for f in all_findings if f.get("status") == "success" and f.get("working_call")]
+    kb_lines = [f"  - {sf['function']}({sf['working_call']})" for sf in successful_findings[:6]]
+    kb_block = (
+        "\nKNOWN-GOOD CALLS (reuse these IDs/values as inputs):\n" + "\n".join(kb_lines) + "\n"
+    ) if kb_lines else ""
+
+    for i, inv in enumerate(failed_invs):
+        fn_name = inv["name"]
+        _set_explore_status(job_id, i, len(failed_invs), f"Gap resolution: retrying {fn_name}…")
+
+        prev_finding = next((f for f in reversed(all_findings) if f.get("function") == fn_name), None)
+        prev_ctx = (
+            f"Previous attempt: {prev_finding.get('finding', 'no finding')}.\n"
+            if prev_finding else ""
+        )
+
+        sys_msg = _build_explore_system_message(
+            invocables, _load_findings(job_id),
+            sentinels=sentinels, vocab=vocab, use_cases=use_cases_text,
+        )
+        conversation = [
+            sys_msg,
+            {
+                "role": "user",
+                "content": (
+                    f"SECOND-PASS RETRY for '{fn_name}'.\n"
+                    f"{prev_ctx}"
+                    f"{kb_block}\n"
+                    "This function failed every probe in the first pass. "
+                    "Try these strategies in order:\n"
+                    "1. Call the init function first (even if called before), then call this function.\n"
+                    "2. Use the customer/order IDs from the KNOWN-GOOD CALLS above.\n"
+                    "3. Permute numeric parameters: try 0, 1, 100, 1000, 10000.\n"
+                    "4. For string params: try empty string, then each known-good ID format.\n"
+                    "Goal: find ANY call that returns 0. Once found, call record_finding with "
+                    "status='success' and working_call set to the exact args that worked.\n"
+                    "If still failing after all strategies, call record_finding with "
+                    "status='error' and note the exact error code(s) observed."
+                ),
+            },
+        ]
+
+        _observed_successes: list[dict] = []
+        _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
+
+        for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
+            try:
+                from typing import cast, Any as _Any
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=conversation,
+                    tools=cast(_Any, tool_schemas),
+                    tool_choice="auto",
+                    temperature=0,
+                )
+            except Exception as exc:
+                logger.warning("[%s] gap_resolution: OpenAI call failed for %s round %d: %s",
+                               job_id, fn_name, _round, exc)
+                break
+
+            msg = response.choices[0].message
+            if not msg.tool_calls:
+                break
+
+            conversation.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,  # type: ignore[union-attr]
+                            "arguments": tc.function.arguments,  # type: ignore[union-attr]
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+
+            for tc in msg.tool_calls:
+                _fn = tc.function  # type: ignore[union-attr]
+                tc_name = _fn.name
+                try:
+                    tc_args = json.loads(_fn.arguments)
+                except json.JSONDecodeError:
+                    tc_args = {}
+
+                tc_inv = inv_map.get(tc_name)
+                tool_result = _execute_tool(tc_inv, tc_args) if tc_inv else f"Tool '{tc_name}' not found."
+
+                if tc_name == fn_name:
+                    _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
+                    if _ret_m and int(_ret_m.group(1)) == 0:
+                        _out_bases = frozenset({
+                            "undefined", "undefined2", "undefined4", "undefined8",
+                            "uint", "uint32_t", "int", "int32_t", "dword",
+                            "ulong", "uint4", "uint8", "long", "ulong32",
+                        })
+                        _clean: dict = {}
+                        for _k, _v in tc_args.items():
+                            _p = _p_lookup.get(_k, {})
+                            _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                            _is_out = "*" in _p.get("type", "") and _pt in _out_bases
+                            if not _is_out and _p.get("direction", "in") != "out":
+                                _clean[_k] = _v
+                        _observed_successes.append(_clean)
+
+                logger.info("[%s] gap_resolution: tool=%s result=%s", job_id, tc_name, str(tool_result)[:120])
+                conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+
+        # Consistency enforcement — same logic as main loop
+        if _observed_successes:
+            _patch_finding(job_id, fn_name, {"working_call": _observed_successes[0], "status": "success"})
+            logger.info("[%s] gap_resolution: resolved %s → success %s", job_id, fn_name, _observed_successes[0])
+        else:
+            # Verify any working_call the LLM may have claimed
+            _cur = _load_findings(job_id)
+            _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
+            if _ff and _ff.get("working_call") is not None:
+                _vi = inv_map.get(fn_name)
+                if _vi:
+                    try:
+                        _vr = _execute_tool(_vi, _ff["working_call"])
+                        _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                        if _vm:
+                            _vret = int(_vm.group(1))
+                            if _vret not in sentinels and _vret <= 0xFFFFFFF0:
+                                _patch_finding(job_id, fn_name, {"status": "success"})
+                                logger.info("[%s] gap_resolution: resolved %s via verification", job_id, fn_name)
+                            else:
+                                _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
+                    except Exception as _ve:
+                        logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
 
 
 def _set_explore_status(job_id: str, explored: int, total: int, message: str) -> None:
