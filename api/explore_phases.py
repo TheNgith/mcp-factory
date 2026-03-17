@@ -1,0 +1,199 @@
+"""api/explore_phases.py – Phase-level probing utilities.
+
+Contains the sentinel-calibration pass (Phase 0.5), the write-unlock probe
+(Phase 1), and the _infer_param_desc helper used by the report endpoint.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re as _re
+from collections import defaultdict
+
+from api.executor import _execute_tool
+
+logger = logging.getLogger("mcp_factory.api")
+
+_MAX_EXPLORE_ROUNDS_PER_FUNCTION = 3   # 3 rounds catches >95% of cases; 6 was wasteful
+_MAX_FUNCTIONS_PER_SESSION = 50  # safety cap
+
+_SENTINEL_DEFAULTS: dict[int, str] = {
+    0xFFFFFFFF: "not found / invalid input",
+    0xFFFFFFFE: "null argument",
+    0xFFFFFFFD: "not initialized",
+    0xFFFFFFFC: "account locked or suspended",
+    0xFFFFFFFB: "write operation denied",
+}
+
+
+def _calibrate_sentinels(invocables: list[dict], client, model: str) -> dict[int, str]:
+    """Phase 0.5: probe every exported function with no args and cluster the
+    non-zero high-bit return values to discover this DLL's sentinel error codes.
+    Falls back to _SENTINEL_DEFAULTS if nothing useful is found."""
+    counts: dict[int, int] = defaultdict(int)
+    val_fns: dict[int, list[str]] = defaultdict(list)
+
+    for inv in invocables:
+        try:
+            result = _execute_tool(inv, {})
+            m = _re.match(r"Returned:\s*(\d+)", result or "")
+            if not m:
+                continue
+            val = int(m.group(1))
+            if val == 0:
+                continue
+            counts[val] += 1
+            val_fns[val].append(inv["name"])
+        except Exception:
+            pass
+
+    candidates = {
+        v: fns for v, fns in val_fns.items()
+        if v >= 0x80000000 and counts[v] >= 2
+    }
+    if not candidates:
+        return _SENTINEL_DEFAULTS
+
+    cand_lines = "\n".join(
+        f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
+        for v, fns in sorted(candidates.items(), reverse=True)
+    )
+    prompt = (
+        "Assign a SHORT plain-English meaning (3-8 words) to each of these "
+        "32-bit return codes from an undocumented Windows DLL.\n"
+        f"{cand_lines}\n"
+        "Output ONLY a JSON object: {\"0xFFFFFF..\": \"meaning\", ...}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = (resp.choices[0].message.content or "{}").strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
+        named: dict[str, str] = json.loads(raw)
+        result_map = {}
+        for k, meaning in named.items():
+            try:
+                result_map[int(k, 16)] = str(meaning)
+            except (ValueError, TypeError):
+                pass
+        if result_map:
+            return result_map
+    except Exception as exc:
+        logger.debug("[explore] sentinel calibration LLM call failed: %s", exc)
+    return _SENTINEL_DEFAULTS
+
+
+def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:
+    """Phase 1: try to flip the DLL from read-only to write-ready.
+    Tries Init with mode integers, then any Begin/Enable/Auth-style functions,
+    then a credential sweep using strings extracted from the binary.
+    Returns unlock result dict."""
+    _WRITE_SENTINELS = {0xFFFFFFFB}
+    inv_map = {inv["name"]: inv for inv in invocables}
+    _init_names = [n for n in inv_map if _re.search(r"init(ializ)?", n, _re.I)]
+    _write_fn_names = [
+        n for n in inv_map
+        if _re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", n, _re.I)
+    ]
+    tried = []
+
+    # Detect no-param init variants first
+    no_param_inits = [n for n in _init_names if not inv_map[n].get("parameters")]
+    if no_param_inits:
+        for n in no_param_inits:
+            r = _execute_tool(inv_map[n], {})
+            tried.append(f"{n}() -> {r}")
+
+    # Try mode-based init
+    for mode in (0, 1, 2, 4, 8, 16, 256, 512):
+        for n in _init_names:
+            if inv_map[n].get("parameters"):
+                _r = _execute_tool(inv_map[n], {"param_1": mode})
+                tried.append(f"{n}(mode={mode}) -> {_r}")
+                # Test against first write fn
+                if _write_fn_names:
+                    _wfn = _write_fn_names[0]
+                    _wr  = _execute_tool(inv_map[_wfn], {})
+                    _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
+                    _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
+                    if _ret not in _WRITE_SENTINELS and _ret == 0:
+                        return {"unlocked": True, "sequence": [{"fn": n, "args": {"param_1": mode}}],
+                                "notes": f"unlocked with {n}(mode={mode})"}
+
+    # Credential sweep using strings extracted from the binary
+    _all_strings = dll_strings.get("ids", []) + dll_strings.get("misc", [])
+    _cred_tokens = list(dict.fromkeys([  # preserve order, deduplicate
+        s for s in _all_strings if 3 < len(s) < 40
+    ]))[:28]
+    _canary = _write_fn_names[0] if _write_fn_names else None
+    for n in _init_names:
+        if not inv_map[n].get("parameters"):
+            continue
+        for tok in _cred_tokens:
+            _r = _execute_tool(inv_map[n], {"param_1": tok})
+            tried.append(f"{n}(cred={tok!r}) -> {_r}")
+            if _canary:
+                _wr  = _execute_tool(inv_map[_canary], {})
+                _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
+                _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
+                if _ret not in _WRITE_SENTINELS and _ret == 0:
+                    return {"unlocked": True,
+                            "sequence": [{"fn": n, "args": {"param_1": tok}}],
+                            "notes": f"unlocked with {n}(cred={tok!r})"}
+
+    return {"unlocked": False, "sequence": [], "write_fn_tested": _canary,
+            "notes": f"write-unlock failed after {len(tried)} attempts"}
+
+
+def _infer_param_desc(pname: str, ptype: str, fn_findings: list) -> str:
+    """Produce a human-readable parameter description from type info and findings.
+    Called when the stored description is just Ghidra boilerplate."""
+    t = (ptype or "").lower().replace("const ", "").strip()
+    base = t.rstrip(" *").strip()
+    is_ptr = "*" in t
+
+    # Collect all finding/notes text for this function
+    all_text = " ".join(
+        (f.get("finding", "") + " " + f.get("notes", ""))
+        for f in fn_findings
+    )
+
+    # Output integer pointer (uint *, ulong *, etc.)
+    if is_ptr and base in {"uint", "ulong", "ushort", "int", "uint32_t", "dword"}:
+        m = _re.search(rf"{_re.escape(pname)}\s*[=:]\s*(\S+)", all_text)
+        val = f" (observed: {m.group(1)})" if m else ""
+        return f"Output — receives integer result{val}"
+
+    # Output buffer (undefined*, undefined4*, undefined8*)
+    if is_ptr and base in {"undefined", "undefined2", "undefined4", "undefined8", "void"}:
+        if "pipe-delimited" in all_text or "|" in all_text:
+            return "Output buffer — receives pipe-delimited key=value result string"
+        if "balance" in all_text and pname in ("param_2", "param_4"):
+            return "Output buffer — receives balance or result data"
+        return "Output buffer — receives result data (omit from call; auto-allocated)"
+
+    # Input string (byte *) — extract ID patterns observed in findings generically
+    if t == "byte *":
+        id_patterns = list(dict.fromkeys(_re.findall(r'[A-Z]{2,6}-[\w-]+', all_text)))
+        if id_patterns:
+            return "Input string — e.g. " + " or ".join(f"'{p}'" for p in id_patterns[:3])
+        return "Input string parameter"
+
+    # Windows DLL entry point params
+    if base == "hinstance__":
+        return "DLL instance handle (Windows DllMain param)"
+    if t == "void *":
+        return "Reserved pointer (Windows DllMain param)"
+
+    # Plain integers
+    if base in {"uint", "ulong", "ushort", "int", "uint32_t", "dword", "ulong32"}:
+        m = _re.search(rf"{_re.escape(pname)}\s*[=:]\s*(\S+)", all_text)
+        val = f" (e.g. {m.group(1)})" if m else ""
+        return f"Integer input parameter{val}"
+
+    return f"Parameter of type {ptype}"

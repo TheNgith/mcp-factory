@@ -384,7 +384,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         # and causes the model to hang on round 2+ (after tool execution).
         if len(tools) > _AI_SEARCH_TOP_K and job_id and _last_user_message:
             try:
-                from search import retrieve_tools as _retrieve_tools  # type: ignore
+                from api.search import retrieve_tools as _retrieve_tools  # type: ignore
                 _semantic_tools = await loop.run_in_executor(
                     None,
                     lambda: _retrieve_tools(job_id, _last_user_message, client, top_k=_AI_SEARCH_TOP_K),
@@ -417,7 +417,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         _rolling_query = m["content"]
                         break
                 try:
-                    from search import retrieve_tools as _retrieve_tools  # type: ignore
+                    from api.search import retrieve_tools as _retrieve_tools  # type: ignore
                     _semantic_tools = await loop.run_in_executor(
                         None,
                         lambda q=_rolling_query: _retrieve_tools(job_id, q, client, top_k=_AI_SEARCH_TOP_K),
