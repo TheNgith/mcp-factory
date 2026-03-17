@@ -20,7 +20,7 @@ flowchart TD
 
     F --> H[Refine Stage\ngap questions]
     G --> H
-    H -->|POST /api/jobs/job_id/answer-gaps\nuser fills in gap answers| I(Blob: vocab.json updated\ngap_answers merged in)
+    H -->|POST /api/jobs/job_id/answer-gaps\nuser fills in gap answers\n→ auto-triggers refine\non failed functions| I(Blob: vocab.json updated\ngap_answers + user_context\ndescription synthesized)
 
     I --> J[Chat Stage\nchat.py _build_system_message]
     G --> J
@@ -115,6 +115,30 @@ field the developer enters at job creation — it persists through to chat time.
 vocab.json grows incrementally as each function is probed. The explore stage
 runs functions with synthetic inputs, observes outputs, and infers semantics.
 Gap answers (user-supplied) are merged on top during the Refine stage.
+
+---
+
+## UX Design Decisions (implemented 2026-03-17)
+
+**Gap answers auto-trigger refinement:**  
+Submitting gap answers (`answer-gaps` endpoint) now automatically calls `POST /refine`
+with the exact failed functions as targets. The user answers questions in plain English
+and the system re-probes — they never need to know function names or manually re-run Discover.
+
+**User should never see raw schema JSON as a required step:**  
+The schema JSON viewer in the Generate section is for debugging only. User-facing
+outputs are: Documentation (human-readable API reference), Python Spec (behavioral test
+spec), and the chat interface. The schema JSON download is available but not the primary CTA.
+
+**Download buttons are in the Generate section:**  
+All three downloads (Documentation, Python Spec, Schema JSON) appear in the Generate
+section once Discover completes — not in Chat. By the time the user reaches Chat,
+the artifacts are already produced; burying downloads there creates friction.
+
+**Refine panel stays for manual corrections:**  
+The manual Refine panel (corrections + missing functions) remains for cases where the
+user knows something is wrong after testing in Chat. Gap answers auto-refine; manual
+corrections require the user to explicitly describe what's wrong.
 
 ---
 

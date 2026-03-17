@@ -547,6 +547,10 @@ _HTML = r"""<!DOCTYPE html>
           style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
           🐍 Download Python Spec
         </button>
+        <button class="btn btn-secondary" id="download-schema-btn"
+          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
+          ⬇ Download Schema JSON
+        </button>
       </div>
 
       <!-- Confidence gap questions surfaced after exploration -->
@@ -554,7 +558,7 @@ _HTML = r"""<!DOCTYPE html>
         background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;font-size:.85rem">
         <strong style="color:#92400e">💡 Clarification questions from discovery</strong>
         <p style="margin:4px 0 8px;color:#78350f;font-size:.82rem">
-          The system was uncertain about these items. Answers can improve the schema — paste them into chat or re-run Discover with updated hints.
+          The system was uncertain about these items. Answer what you know — submitting will automatically re-run discovery on the affected functions.
         </p>
         <ul id="gap-questions-list" style="margin:0;padding-left:18px;color:#451a03"></ul>
         <div id="gap-answers-row" style="display:none;margin-top:10px;display:flex;gap:8px;align-items:center">
@@ -634,7 +638,6 @@ _HTML = r"""<!DOCTYPE html>
 
       <div class="btn-row" style="margin-top:18px">
         <button class="btn btn-secondary" id="back3-btn">← Back</button>
-        <button class="btn btn-success" id="download-btn">⬇ Download Schema JSON</button>
         <button class="btn btn-secondary" id="transcript-btn">⬇ Transcript</button>
         <button class="btn btn-secondary" id="restart-btn">↺ Start Over</button>
       </div>
@@ -1032,6 +1035,7 @@ $('discover-btn').addEventListener('click', async () => {
           renderGapQuestions(gaps);
           // Show Python spec download button and refine panel
           $('download-spec-btn').style.display = 'inline-flex';
+          $('download-schema-btn').style.display = 'inline-flex';
           $('refine-box').style.display = 'block';
           // Re-render gap questions after refinement completes
           try {
@@ -1062,6 +1066,11 @@ $('download-doc-btn').addEventListener('click', () => {
 $('download-spec-btn').addEventListener('click', () => {
   if (!state.jobId) return;
   window.location.href = `/api/download/${state.jobId}/behavioral_spec.py`;
+});
+
+$('download-schema-btn').addEventListener('click', () => {
+  if (!state.jobId) return;
+  window.location.href = `/api/download/${state.jobId}/mcp_schema.json`;
 });
 
 // ── Gap question helpers ──────────────────────────────────
@@ -1120,10 +1129,43 @@ $('submit-gap-answers-btn').addEventListener('click', async () => {
       body: JSON.stringify({ answers }),
     });
     if (!res.ok) throw new Error(await res.text());
-    $('gap-answers-msg').textContent = `✓ ${answers.length} answer(s) saved — re-run Discover or paste into chat.`;
+    $('gap-answers-msg').textContent = `✓ ${answers.length} answer(s) saved — re-running discovery on affected functions…`;
+
+    // Auto-trigger refinement on only the functions that had gap questions answered.
+    // The user should never have to manually re-run discover after answering gaps.
+    const targetFns = [...new Set(answers.map(a => a.function).filter(f => f && f !== 'general'))];
+    const refineRes = await fetch(`/api/jobs/${state.jobId}/refine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_functions: targetFns }),
+    });
+    if (refineRes.ok) {
+      $('gap-answers-msg').textContent = `✓ Answers saved — refining ${targetFns.length || 'all'} function(s)…`;
+      $('discover-bar-msg').textContent = 'Refining with your answers…';
+      $('discover-bar').style.display = 'flex';
+      // Reuse explore poller
+      if (_explorePoller) clearInterval(_explorePoller);
+      _explorePoller = setInterval(async () => {
+        try {
+          const pr = await fetch(`/api/jobs/${state.jobId}`);
+          if (!pr.ok) return;
+          const s = await pr.json();
+          if (s.explore_phase === 'exploring') {
+            $('discover-bar-msg').textContent = `Refining… (${s.explore_progress ?? ''}) — ${s.explore_message ?? ''}`;
+          } else if (s.explore_phase === 'done') {
+            clearInterval(_explorePoller);
+            $('discover-bar-msg').textContent = `✓ Refinement complete — schema updated`;
+            $('gap-answers-msg').textContent = `✓ Done — schema updated with your answers.`;
+            $('submit-gap-answers-btn').disabled = false;
+          }
+        } catch (_) {}
+      }, 2500);
+    } else {
+      $('gap-answers-msg').textContent = `✓ ${answers.length} answer(s) saved.`;
+      $('submit-gap-answers-btn').disabled = false;
+    }
   } catch(e) {
     $('gap-answers-msg').textContent = `Failed: ${e.message}`;
-  } finally {
     $('submit-gap-answers-btn').disabled = false;
   }
 });
@@ -1321,12 +1363,7 @@ $('chat-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
-// ── Download ──────────────────────────────────────────────
-$('download-btn').addEventListener('click', () => {
-  if (!state.jobId) return;
-  window.location.href = `/api/download/${state.jobId}/mcp_schema.json`;
-});
-
+// ── Download (transcript only — schema download is in Generate section) ──
 $('transcript-btn').addEventListener('click', () => {
   const lines = state.messages
     .filter(m => m.role !== 'system')
