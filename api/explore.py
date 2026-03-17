@@ -163,6 +163,229 @@ def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dic
     return vocab
 
 
+# ---------------------------------------------------------------------------
+# Hypothesis-driven interpretation (Layer 2.5)
+# ---------------------------------------------------------------------------
+
+_HYPOTHESIS_SYSTEM = """\
+You are a DLL reverse-engineering analyst. A function has been probed and raw numeric values
+were observed. Give the most probable semantic interpretation of each ambiguous value, then
+propose ONE targeted cross-validation call against an already-explored function to confirm it.
+
+Draw on common Win32/enterprise DLL conventions:
+- Financial amounts are commonly stored as cents (uint * 100 = dollars)
+- Packed version UINTs: (val>>16)&0xFF . (val>>8)&0xFF . val&0xFF
+- Status/handle integers > 100000 are likely handles, not error codes
+- Output params named balance/amount/total in financial DLLs are overwhelmingly cents
+
+Output ONLY valid JSON (no markdown fences):
+{
+  "interpretations": {
+    "<param_name_or_return>": "<semantic meaning, e.g. 'balance in cents — divide by 100'>"
+  },
+  "confidence": "high|medium|low",
+  "cross_validation": null
+}
+OR if cross-validation would help:
+{
+  "interpretations": {...},
+  "confidence": "medium",
+  "cross_validation": {
+    "function": "<already-explored function name>",
+    "args": {"<param>": "<value>"},
+    "confirms": "<what matching result would prove>"
+  }
+}
+"""
+
+
+def _generate_hypothesis(
+    client,
+    model: str,
+    fn_name: str,
+    raw_result: str,
+    vocab: dict,
+    all_findings: list[dict],
+) -> dict:
+    """Interpret ambiguous numeric outputs from a function call using LLM reasoning.
+
+    Returns dict with interpretations and optional cross-validation probe.
+    Only fires when a successful call (return=0) produced non-trivial output values.
+    """
+    vocab_summary = json.dumps(vocab, ensure_ascii=False)[:600]
+    explored_fns = list(dict.fromkeys(f.get("function", "") for f in all_findings if f.get("function")))
+    findings_summary = "\n".join(
+        f"  {f.get('function')}: {f.get('finding', '')[:120]}"
+        for f in all_findings[-8:]
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _HYPOTHESIS_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Function: {fn_name}\n"
+                        f"Raw call result: {raw_result}\n\n"
+                        f"Already-explored functions (usable for cross-validation): {', '.join(explored_fns)}\n\n"
+                        f"DLL vocabulary so far:\n{vocab_summary}\n\n"
+                        f"Recent findings:\n{findings_summary}\n\n"
+                        "Produce the JSON interpretation now."
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        raw = resp.choices[0].message.content or "{}"
+        return json.loads(raw)
+    except Exception as exc:
+        logger.debug("_generate_hypothesis failed for %s: %s", fn_name, exc)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 schema backfill from synthesis document
+# ---------------------------------------------------------------------------
+
+_BACKFILL_SYSTEM = """\
+You are a technical API documentation specialist. You have:
+1. A synthesized API reference document produced from reverse-engineering findings
+2. The current tool schema JSON for this DLL
+
+Your task: produce patches to enrich each function's schema description and parameter
+annotations using knowledge from the synthesis document that is NOT yet in the schema.
+
+Focus on:
+- Return value semantics with observed values (e.g. "returns balance as raw UINT in cents")
+- Output parameter descriptions with confirmed example values
+- Cross-references to related functions
+- Any initialization requirements noted in the synthesis
+- Criticality classification: mark functions that MUST be called before others work,
+  or that are gating dependencies for write operations
+
+Output ONLY valid JSON (no markdown fences):
+{
+  "patches": [
+    {
+      "function": "<function_name>",
+      "description": "<enriched 1-2 sentence description including return semantics>",
+      "criticality": "required_first|read|write|utility|unknown",
+      "depends_on": ["<function that must be called before this one, if any>"],
+      "param_patches": [
+        {"name": "<param_name>", "description": "<enriched description with observed values>"}
+      ]
+    }
+  ]
+}
+
+criticality values:
+- required_first: must be called before ANY other function works (e.g. Initialize)
+- read: safe read-only query, no side effects
+- write: modifies state — payment, refund, redemption, update
+- utility: diagnostic, versioning, metadata
+- unknown: could not determine
+
+Only include functions and params where the synthesis adds something beyond the current schema.
+"""
+
+
+def _backfill_schema_from_synthesis(
+    client,
+    model: str,
+    synthesis_md: str,
+    invocables: list[dict],
+    job_id: str,
+) -> None:
+    """Layer 3: re-annotate stored schema using the completed synthesis document.
+
+    After _synthesize() produces api_reference.md this pass asks the LLM to use the
+    full synthesis context to enrich every function's description and parameter
+    annotations with proven semantics (units, entity refs, example values).
+    Results are patched back into stored invocables via _patch_invocable.
+    """
+    current_schema = [
+        {
+            "name": inv["name"],
+            "description": inv.get("description") or inv.get("doc") or "",
+            "parameters": [
+                {
+                    "name": p.get("name"),
+                    "type": p.get("type"),
+                    "description": p.get("description", ""),
+                }
+                for p in (inv.get("parameters") or [])
+                if isinstance(p, dict)
+            ],
+        }
+        for inv in invocables
+    ]
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _BACKFILL_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"## Synthesis Document\n\n{synthesis_md[:6000]}\n\n"
+                        f"## Current Schema\n\n```json\n"
+                        f"{json.dumps(current_schema, indent=2)[:4000]}\n```\n\n"
+                        "Produce the patches JSON now."
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        patches_data = json.loads(resp.choices[0].message.content or "{}")
+        patches = patches_data.get("patches", [])
+
+        patched = 0
+        for patch in patches:
+            fn_name = patch.get("function", "")
+            if not fn_name:
+                continue
+            target_inv = next((inv for inv in invocables if inv["name"] == fn_name), None)
+            if not target_inv:
+                continue
+
+            update: dict = {}
+            if patch.get("description"):
+                update["description"] = patch["description"]
+            if patch.get("criticality"):
+                update["criticality"] = patch["criticality"]
+            if patch.get("depends_on"):
+                update["depends_on"] = patch["depends_on"]
+
+            param_patches = {
+                pp["name"]: pp["description"]
+                for pp in patch.get("param_patches", [])
+                if pp.get("name") and pp.get("description")
+            }
+            if param_patches:
+                updated_params = []
+                for p in (target_inv.get("parameters") or []):
+                    if isinstance(p, dict):
+                        pname = p.get("name", "")
+                        if pname in param_patches:
+                            p = {**p, "description": param_patches[pname]}
+                    updated_params.append(p)
+                update["parameters"] = updated_params
+
+            if update:
+                try:
+                    _patch_invocable(job_id, fn_name, update)
+                    patched += 1
+                except Exception as _pe:
+                    logger.debug("[%s] backfill: patch failed for %s: %s", job_id, fn_name, _pe)
+
+        logger.info("[%s] backfill_schema: applied patches to %d/%d functions", job_id, patched, len(patches))
+    except Exception as exc:
+        logger.debug("[%s] _backfill_schema_from_synthesis failed: %s", job_id, exc)
+
+
 def _vocab_block(vocab: dict) -> str:
     """Format the vocabulary table for injection into user prompts."""
     if not vocab:
@@ -630,6 +853,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             # Track calls that returned 0 for ground-truth consistency enforcement
             _observed_successes: list[dict] = []
             _enrich_called = False
+            _best_raw_result: str = ""  # best successful result captured for hypothesis generation
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
@@ -711,6 +935,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 if not _is_out and _p.get("direction", "in") != "out":
                                     _clean[_k] = _v
                             _observed_successes.append(_clean)
+                            _best_raw_result = tool_result  # capture for hypothesis generation
 
                     logger.info(
                         "[%s] explore_worker: tool=%s result=%s",
@@ -812,6 +1037,40 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                             logger.debug("[%s] working_call verify failed for %s: %s",
                                          job_id, fn_name, _ve)
 
+            # Hypothesis-driven interpretation: ask LLM what ambiguous output values mean,
+            # then optionally cross-validate against an already-explored function.
+            if _best_raw_result:
+                try:
+                    _hyp = _generate_hypothesis(
+                        client, model, fn_name, _best_raw_result, vocab, _load_findings(job_id)
+                    )
+                    if _hyp.get("interpretations"):
+                        _patch_finding(job_id, fn_name, {"interpretation": _hyp["interpretations"]})
+                        # Merge into vocab so downstream functions benefit immediately
+                        if "value_semantics" not in vocab:
+                            vocab["value_semantics"] = {}
+                        vocab["value_semantics"].update(_hyp["interpretations"])
+                        logger.info("[%s] hypothesis for %s: %s", job_id, fn_name, _hyp["interpretations"])
+                    # Run cross-validation if proposed and the target has already been explored
+                    _cv = _hyp.get("cross_validation")
+                    if (
+                        _cv and isinstance(_cv, dict)
+                        and _cv.get("function") in inv_map
+                        and _cv.get("function") in already_explored
+                    ):
+                        _cv_inv = inv_map[_cv["function"]]
+                        _cv_result = _execute_tool(_cv_inv, _cv.get("args") or {})
+                        _patch_finding(
+                            job_id, fn_name,
+                            {"cross_validation": f"{_cv['function']}({_cv.get('args')}) → {_cv_result}"},
+                        )
+                        logger.info(
+                            "[%s] cross-validated %s via %s: %s",
+                            job_id, fn_name, _cv["function"], str(_cv_result)[:80],
+                        )
+                except Exception as _hyp_e:
+                    logger.debug("[%s] hypothesis failed for %s: %s", job_id, fn_name, _hyp_e)
+
             # Update shared vocabulary from the latest finding for this function
             last_finding = _load_findings(job_id)
             if last_finding:
@@ -848,6 +1107,16 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         _report.encode("utf-8"),
                     )
                     logger.info("[%s] explore_worker: api_reference.md saved to blob", job_id)
+
+                    # Layer 3: backfill schema descriptions from synthesis document.
+                    # Uses the completed synthesis to enrich param descriptions with
+                    # proven semantics (units, entity refs, example values).
+                    try:
+                        logger.info("[%s] explore_worker: layer3 schema backfill…", job_id)
+                        _set_explore_status(job_id, explored, total, "Enriching schema from synthesis…")
+                        _backfill_schema_from_synthesis(client, model, _report, invocables, job_id)
+                    except Exception as _bf_e:
+                        logger.debug("[%s] explore_worker: backfill failed: %s", job_id, _bf_e)
         except Exception as _syn_e:
             logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
 

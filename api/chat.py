@@ -188,16 +188,39 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             + "\n".join(lines)
             + "\n"
         )
-    # Detect prerequisite/initialisation functions by common naming conventions.
-    _INIT_SUFFIXES = ("initialize", "init", "startup", "start", "setup", "open", "login", "logon", "connect")
-    init_fns = [
+    # Detect prerequisite/initialisation functions — first from schema criticality labels,
+    # then fall back to naming convention heuristics.
+    required_first = [
         inv["name"] for inv in invocables
-        if any(inv["name"].lower() == s or inv["name"].lower().endswith(s) or f"_{s}" in inv["name"].lower()
-               for s in _INIT_SUFFIXES)
+        if inv.get("criticality") == "required_first"
     ]
+    if not required_first:
+        _INIT_SUFFIXES = ("initialize", "init", "startup", "start", "setup", "open", "login", "logon", "connect")
+        required_first = [
+            inv["name"] for inv in invocables
+            if any(inv["name"].lower() == s or inv["name"].lower().endswith(s) or f"_{s}" in inv["name"].lower()
+                   for s in _INIT_SUFFIXES)
+        ]
+
+    # Build criticality summary block — surfaces write vs read classification
+    _crit_lines = []
+    for inv in invocables:
+        c = inv.get("criticality")
+        if c and c != "unknown":
+            deps = inv.get("depends_on") or []
+            dep_str = f" (requires: {', '.join(deps)})" if deps else ""
+            _crit_lines.append(f"  {inv['name']}: {c}{dep_str}")
+    criticality_block = ""
+    if _crit_lines:
+        criticality_block = (
+            "\nFUNCTION ROLES (from enrichment analysis):\n"
+            + "\n".join(_crit_lines)
+            + "\n"
+        )
+
     init_rule = ""
-    if init_fns:
-        names = ", ".join(init_fns)
+    if required_first:
+        names = ", ".join(required_first)
         init_rule = (
             f"\n6. This session includes setup/initialisation functions: {names}. "
             "Call ALL of them silently before any other function from the same library. "
@@ -249,6 +272,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "failure mode, a required encoding — call record_finding immediately to persist it. "
             "Do NOT call record_finding speculatively or as commentary; only call it for definitive results."
             + init_rule
+            + criticality_block
             + vocab_block
             + findings_block
         ),
