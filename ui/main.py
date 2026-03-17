@@ -472,6 +472,10 @@ _HTML = r"""<!DOCTYPE html>
         <label>Hints / description (optional)</label>
         <textarea id="hints" placeholder="e.g. calculator CLI, zstd compression library…"></textarea>
       </div>
+      <div class="form-row">
+        <label>Use cases (optional)</label>
+        <textarea id="use-cases" placeholder="e.g. Check balance before processing a payment; lock account after failed auth…"></textarea>
+      </div>
 
       <div class="alert alert-error" id="upload-error"></div>
 
@@ -539,6 +543,10 @@ _HTML = r"""<!DOCTYPE html>
           style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
           ⬇ Download Documentation
         </button>
+        <button class="btn btn-secondary" id="download-spec-btn"
+          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
+          🐍 Download Python Spec
+        </button>
       </div>
 
       <!-- Confidence gap questions surfaced after exploration -->
@@ -549,6 +557,34 @@ _HTML = r"""<!DOCTYPE html>
           The system was uncertain about these items. Answers can improve the schema — paste them into chat or re-run Discover with updated hints.
         </p>
         <ul id="gap-questions-list" style="margin:0;padding-left:18px;color:#451a03"></ul>
+      </div>
+
+      <!-- Iterative refinement panel -->
+      <div id="refine-box" style="display:none;margin:12px 0;padding:14px 16px;
+        background:#f0fdf4;border:1px solid #86efac;border-radius:8px;font-size:.85rem">
+        <strong style="color:#14532d">🔄 Refine Discovery</strong>
+        <p style="margin:4px 0 8px;color:#166534;font-size:.82rem">
+          Found something wrong or missing? Describe it below and re-run targeted discovery on specific functions.
+        </p>
+        <div style="margin-bottom:8px">
+          <label style="display:block;font-size:.8rem;color:#15803d;margin-bottom:3px">Corrections (what's wrong)</label>
+          <textarea id="refine-corrections" rows="2" placeholder="e.g. CS_GetAccountBalance amounts are in millicents, not cents"
+            style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #86efac;border-radius:6px;font-size:.82rem;resize:vertical"></textarea>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="display:block;font-size:.8rem;color:#15803d;margin-bottom:3px">Missing functionality</label>
+          <textarea id="refine-missing" rows="2" placeholder="e.g. CS_ApplyDiscount — applies a percentage discount to an order"
+            style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #86efac;border-radius:6px;font-size:.82rem;resize:vertical"></textarea>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="display:block;font-size:.8rem;color:#15803d;margin-bottom:3px">Target specific functions (comma-separated, or leave blank for all)</label>
+          <input id="refine-targets" type="text" placeholder="e.g. CS_GetAccountBalance, CS_ProcessRefund"
+            style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #86efac;border-radius:6px;font-size:.82rem">
+        </div>
+        <button class="btn btn-secondary" id="refine-btn" style="padding:7px 14px;font-size:.82rem;background:#16a34a;color:#fff;border-color:#16a34a">
+          🔄 Run Refinement
+        </button>
+        <span id="refine-msg" style="margin-left:10px;font-size:.8rem;color:#15803d"></span>
       </div>
 
       <div class="json-preview" id="schema-preview"></div>
@@ -699,7 +735,7 @@ $('analyze-btn').addEventListener('click', async () => {
       const res = await fetch('/api/analyze-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: dirPath, hints: $('hints').value.trim() }),
+        body: JSON.stringify({ path: dirPath, hints: $('hints').value.trim(), use_cases: $('use-cases').value.trim() }),
       });
       if (!res.ok) {
         const err = await res.text();
@@ -711,6 +747,7 @@ $('analyze-btn').addEventListener('click', async () => {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('hints', $('hints').value.trim());
+      fd.append('use_cases', $('use-cases').value.trim());
       const res = await fetch('/api/analyze', { method: 'POST', body: fd });
       if (!res.ok) {
         const err = await res.text();
@@ -1003,6 +1040,9 @@ $('discover-btn').addEventListener('click', async () => {
             });
             $('gap-questions-box').style.display = 'block';
           }
+          // Show Python spec download button and refine panel
+          $('download-spec-btn').style.display = 'inline-flex';
+          $('refine-box').style.display = 'block';
         } else if (phase === 'error') {
           clearInterval(_explorePoller);
           $('discover-bar-msg').textContent = `Discovery error: ${s.explore_error ?? 'unknown'}`;
@@ -1022,6 +1062,78 @@ $('discover-btn').addEventListener('click', async () => {
 $('download-doc-btn').addEventListener('click', () => {
   if (!state.jobId) return;
   window.location.href = `/api/jobs/${state.jobId}/report`;
+});
+
+$('download-spec-btn').addEventListener('click', () => {
+  if (!state.jobId) return;
+  window.location.href = `/api/download/${state.jobId}/behavioral_spec.py`;
+});
+
+$('refine-btn').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  const corrections = $('refine-corrections').value.trim();
+  const missing     = $('refine-missing').value.trim();
+  const targetsRaw  = $('refine-targets').value.trim();
+  const targets     = targetsRaw ? targetsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+  if (!corrections && !missing) {
+    $('refine-msg').textContent = 'Enter a correction or missing function description first.';
+    return;
+  }
+
+  const btn = $('refine-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Refining…';
+  $('refine-msg').textContent = '';
+
+  try {
+    const res = await fetch(`/api/jobs/${state.jobId}/refine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ corrections, missing, target_functions: targets }),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+
+    $('refine-msg').textContent = 'Refinement started — watch the progress bar above.';
+    // Re-use the same explore poller to watch progress
+    $('discover-bar-msg').textContent = 'Refining…';
+    _explorePoller = setInterval(async () => {
+      try {
+        const pr = await fetch(`/api/jobs/${state.jobId}`);
+        if (!pr.ok) return;
+        const s = await pr.json();
+        const phase = s.explore_phase;
+        const progress = s.explore_progress ?? '';
+        if (phase === 'exploring') {
+          $('discover-bar-msg').textContent = `Refining… (${progress}) — ${s.explore_message ?? ''}`;
+        } else if (phase === 'done') {
+          clearInterval(_explorePoller);
+          $('discover-bar-msg').textContent = `✓ Refinement complete (${progress})`;
+          btn.disabled = false;
+          btn.textContent = '🔄 Run Refinement';
+          $('refine-msg').textContent = 'Done. Schema and spec have been updated.';
+          // Refresh schema preview
+          try {
+            const sr = await fetch(`/api/download/${state.jobId}/mcp_schema.json`);
+            if (sr.ok) {
+              const ns = await sr.json();
+              state.tools = ns.tools ?? state.tools;
+              $('schema-preview').textContent = JSON.stringify(ns, null, 2);
+            }
+          } catch(_e) {}
+        } else if (phase === 'error') {
+          clearInterval(_explorePoller);
+          $('discover-bar-msg').textContent = `Refinement error: ${s.explore_error ?? 'unknown'}`;
+          btn.disabled = false;
+          btn.textContent = '🔄 Run Refinement';
+        }
+      } catch(_e) {}
+    }, 3000);
+  } catch(e) {
+    $('refine-msg').textContent = `Refinement failed: ${e.message}`;
+    btn.disabled = false;
+    btn.textContent = '🔄 Run Refinement';
+  }
 });
 
 // ── Chat ──────────────────────────────────────────────────
@@ -1179,7 +1291,7 @@ $('restart-btn').addEventListener('click', () => {
   state.jobId = null; state.invocables = []; state.tools = [];
   state.schemaBlob = null; state.messages = [];
   fileInput.value = ''; $('file-name').textContent = '';
-  $('dir-path').value = ''; $('hints').value = '';
+  $('dir-path').value = ''; $('hints').value = ''; $('use-cases').value = '';
   $('analyze-btn').disabled = true;
   $('chat-window').innerHTML =
     '<div class="chat-empty" id="chat-empty">Send a message to start the conversation.<br/><span style="font-size:.75rem;">e.g. "What tools are available?" or "Run add(3, 4)"</span></div>';

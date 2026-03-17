@@ -57,7 +57,7 @@ _RECORD_FINDING_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "function_name": {"type": "string", "description": "The exact function name, e.g. CS_LookupCustomer"},
+                "function_name": {"type": "string", "description": "The exact function name from the schema"},
                 "param_name":    {"type": "string", "description": "The parameter this finding relates to, e.g. param_1"},
                 "finding":       {"type": "string", "description": "Plain English description: what works, what fails, and why"},
                 "working_call":  {"type": "object", "description": "The exact args dict that produced a non-error return, if any"},
@@ -81,7 +81,7 @@ _ENRICH_INVOCABLE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "function_name": {"type": "string", "description": "The exact function name, e.g. CS_LookupCustomer"},
+                "function_name": {"type": "string", "description": "The exact function name from the schema"},
                 "function_description": {"type": "string", "description": "Human-readable description of what this function does"},
                 "params": {
                     "type": "object",
@@ -246,7 +246,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "   Params typed as undefined*, undefined4*, undefined8*, uint*, or int* that are output "
             "buffers must NEVER be included in tool call arguments. Omit them entirely; the executor "
             "auto-allocates the buffer and returns their value as 'param_N=<value>' in the result. "
-            "If CS_GetOrderStatus or any function has an undefined* param_2, do NOT pass it — omit it.\n"
+            "Any function with an output-buffer param (typed as undefined*, undefined4*, undefined8*, uint*, int*) must have that param omitted — do NOT pass it.\n"
             "ZERO-OUTPUT RETRY RULE:\n"
             "   If a call returns 0 (success) but every output param shows value=0, the inputs were "
             "too small. Retry once with LARGER values before concluding the output is always zero: "

@@ -158,8 +158,9 @@ async def analyze_path(body: dict[str, Any]):
     """Section 2.b: Analyze a file path already on the server's filesystem.
     Body: {path, hints?}. Returns {job_id, status_url}; poll GET /api/jobs/{id}.
     """
-    path_str = (body.get("path") or "").strip()
-    hints    = (body.get("hints") or "").strip()
+    path_str  = (body.get("path") or "").strip()
+    hints     = (body.get("hints") or "").strip()
+    use_cases = (body.get("use_cases") or "").strip()
 
     if not path_str:
         raise HTTPException(400, "path is required")
@@ -188,6 +189,7 @@ async def analyze_path(body: dict[str, Any]):
         "progress": 0,
         "message": f"Queued analysis for {target.name}",
         "hints": hints,
+        "use_cases": use_cases,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -217,6 +219,7 @@ async def analyze_path(body: dict[str, Any]):
 async def analyze(
     file: UploadFile = File(...),
     hints: str = Form(default=""),
+    use_cases: str = Form(default=""),
 ):
     """Section 2-3: Upload a binary, start async discovery.
     Returns {job_id, status_url}; poll GET /api/jobs/{id}.
@@ -246,6 +249,7 @@ async def analyze(
         "progress": 0,
         "message": f"Queued analysis for {original_name}",
         "hints": hints,
+        "use_cases": use_cases,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -438,6 +442,101 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
     logger.info("[%s] Exploration worker spawned for %d invocables", job_id, len(invocables))
     return JSONResponse(
         {"job_id": job_id, "status": "exploring", "invocable_count": len(invocables)},
+        status_code=202,
+    )
+
+
+@app.post("/api/jobs/{job_id}/refine")
+async def refine_job(job_id: str, body: dict[str, Any] = None):
+    """Targeted re-exploration based on user feedback after initial discovery.
+
+    Accepts user corrections and a list of specific functions to re-explore.
+    Only re-runs the named functions — already-correct functions are untouched.
+    Also accepts free-text feedback that is injected as high-priority hints.
+
+    Body:
+      {
+        "corrections": "CS_GetAccountBalance description is wrong — amounts are millicents",
+        "target_functions": ["CS_GetAccountBalance", "CS_ProcessRefund"],
+        "missing": "CS_ApplyDiscount — applies a percentage discount to an order"
+      }
+
+    Returns 202 immediately; poll GET /api/jobs/{job_id} for explore_phase progress.
+    """
+    from api.explore import _explore_worker
+    from api.storage import _JOB_INVOCABLE_MAPS, _patch_finding
+
+    body = body or {}
+    corrections: str = (body.get("corrections") or "").strip()
+    target_names: list[str] = body.get("target_functions") or []
+    missing_desc: str = (body.get("missing") or "").strip()
+
+    # Load all invocables for this job
+    inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
+    if not inv_map:
+        try:
+            raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+            inv_map = json.loads(raw)
+        except Exception:
+            inv_map = None
+    if not inv_map:
+        raise HTTPException(404, f"No invocables found for job '{job_id}'.")
+
+    all_invocables = list(inv_map.values())
+
+    # Determine target set — default to all if none specified
+    if target_names:
+        target_invocables = [inv for inv in all_invocables if inv["name"] in target_names]
+        if not target_invocables:
+            raise HTTPException(400, f"None of the specified functions found in job '{job_id}'.")
+    else:
+        target_invocables = all_invocables
+
+    # Clear existing findings for targeted functions so re-exploration is clean
+    for fn_name in [inv["name"] for inv in target_invocables]:
+        try:
+            _patch_finding(job_id, fn_name, {"status": "pending_refinement", "finding": "", "working_call": None})
+        except Exception:
+            pass
+
+    # Inject corrections + missing info into job status as high-priority hints
+    current = _get_job_status(job_id) or {}
+    existing_hints = current.get("hints", "")
+    new_hints_parts = [existing_hints] if existing_hints else []
+    if corrections:
+        new_hints_parts.append(f"CORRECTION: {corrections}")
+    if missing_desc:
+        new_hints_parts.append(f"MISSING FUNCTION: {missing_desc}")
+    combined_hints = " | ".join(new_hints_parts)
+    _persist_job_status(job_id, {
+        **current,
+        "hints": combined_hints,
+        "explore_phase": "queued",
+        "explore_progress": "0/0",
+        "explore_message": "Refinement queued…",
+        "updated_at": time.time(),
+    })
+
+    t = threading.Thread(
+        target=_explore_worker,
+        args=(job_id, target_invocables),
+        daemon=True,
+        name=f"refine-{job_id}",
+    )
+    t.start()
+
+    logger.info(
+        "[%s] Refinement worker spawned: %d target functions, corrections=%r, missing=%r",
+        job_id, len(target_invocables), corrections[:80] if corrections else "", missing_desc[:80] if missing_desc else "",
+    )
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "status": "refining",
+            "target_functions": [inv["name"] for inv in target_invocables],
+            "corrections_applied": bool(corrections),
+            "missing_added": bool(missing_desc),
+        },
         status_code=202,
     )
 

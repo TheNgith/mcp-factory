@@ -589,6 +589,7 @@ def _build_explore_system_message(
     findings: list,
     sentinels: dict[int, str] | None = None,
     vocab: dict | None = None,
+    use_cases: str = "",
 ) -> dict:
     """System message for the autonomous exploration agent."""
     fn_names = ", ".join(inv["name"] for inv in invocables)
@@ -621,7 +622,7 @@ def _build_explore_system_message(
             "an undocumented Windows DLL and document what each function does.\n\n"
             "AVAILABLE FUNCTIONS: " + fn_names + "\n\n"
             "PROTOCOL:\n"
-            "1. ALWAYS call the init function (Initialize, Init, CS_Initialize) as the VERY FIRST "
+            "1. ALWAYS call the init function (any function named Initialize, Init, Setup, Open, Connect, Startup, or similar) as the VERY FIRST "
             "call when exploring each function, even if it seems unrelated to init. This ensures "
             "consistent DLL state. Do NOT skip this step even if called before.\n"
             "2. Call each function with safe probe values:\n"
@@ -649,7 +650,7 @@ def _build_explore_system_message(
             "   b. record_finding   — persist what you discovered. The 'finding' field MUST be a "
             "complete non-empty sentence describing EXACTLY what you observed: the return value, "
             "output param values, or the error code seen. "
-            "Example: 'Returns 0 on success with balance in param_2; CUST-001 returned 25000.' "
+            "Example: 'Returns 0 on success with balance in param_2; probe returned 25000.' "
             "An empty string is NOT acceptable.\n"
             "   HARD CONSISTENCY for record_finding:\n"
             "   - If ANY probe returned 0 (or a valid semantic integer for GetVersion-style),\n"
@@ -664,10 +665,118 @@ def _build_explore_system_message(
             "- Keep probe values small and safe.\n"
             "- Be concise — after each function, proceed immediately to the next.\n"
             "- Do not ask for confirmation; work autonomously.\n"
+            + (f"\nUSE CASES (provided by component owner — use these to guide hypothesis and value interpretation):\n{use_cases}\n" if use_cases else "")
             + vocab_block
             + findings_block
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Behavioral specification generation (typed Python stub file)
+# ---------------------------------------------------------------------------
+
+_SPEC_SYSTEM = """\
+You are a senior Python API designer. Given reverse-engineering findings for a Windows DLL,
+produce a typed Python stub file that captures the BEHAVIORAL CONTRACT of the DLL.
+
+This is NOT a reimplementation — it is a documented specification that developers use to
+understand how to call the DLL via the MCP executor, what inputs it accepts, and what it returns.
+
+Rules:
+- One class per DLL named after the component (e.g. class NetworkConnectorDLL for a network_connector DLL)
+- One method per exported function with full type annotations
+- Docstrings MUST include:
+    * What the function does (1 sentence)
+    * Parameter descriptions with units and observed example values
+    * Return value with unit annotation (e.g. "int: balance in cents, e.g. 25000 = $250.00")
+    * Any prerequisite calls (e.g. "Requires initialize() first")
+    * Error conditions observed (e.g. "Returns 0xFFFFFFFB if customer not found")
+- Use Python type hints: str, int, float, bytes, Optional[str], etc.
+- Output buffers (auto-allocated by executor) become return values, not parameters
+- Mark write operations with a # WRITE comment on the method signature line
+- Mark the required-first function with # REQUIRED FIRST
+- Add a module-level docstring explaining the component's purpose and domain
+- Add a usage example at the bottom as an if __name__ == '__main__' block
+
+Output ONLY valid Python — no markdown fences, no explanation text.
+"""
+
+
+def _generate_behavioral_spec(
+    client,
+    model: str,
+    findings: list[dict],
+    invocables: list[dict],
+    component_name: str,
+    synthesis_md: str,
+) -> str:
+    """Generate a typed Python behavioral specification stub from enriched findings.
+
+    Produces a .py file capturing the full API contract: typed stubs, docstrings
+    with observed values and units, prerequisite annotations, and an example script.
+    Uploaded to blob as behavioral_spec.py.
+    """
+    # Build compact schema for the LLM — combine findings + enriched invocables
+    spec_input = []
+    findings_by_fn: dict[str, list] = {}
+    for f in findings:
+        findings_by_fn.setdefault(f.get("function", ""), []).append(f)
+
+    for inv in invocables:
+        fn_name = inv["name"]
+        fn_findings = findings_by_fn.get(fn_name, [])
+        best = next((f for f in fn_findings if f.get("status") == "success"), fn_findings[0] if fn_findings else {})
+        spec_input.append({
+            "name": fn_name,
+            "description": inv.get("description") or inv.get("doc") or "",
+            "criticality": inv.get("criticality", "unknown"),
+            "depends_on": inv.get("depends_on") or [],
+            "parameters": [
+                {
+                    "name": p.get("name"),
+                    "type": p.get("type"),
+                    "json_type": p.get("json_type"),
+                    "description": p.get("description", ""),
+                    "direction": p.get("direction", "in"),
+                }
+                for p in (inv.get("parameters") or [])
+                if isinstance(p, dict)
+            ],
+            "finding": best.get("finding", ""),
+            "working_call": best.get("working_call"),
+            "interpretation": best.get("interpretation") or {},
+            "status": best.get("status", "unknown"),
+        })
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _SPEC_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Component name: {component_name}\n\n"
+                        f"Synthesis summary:\n{synthesis_md[:3000]}\n\n"
+                        f"Function details:\n```json\n"
+                        f"{json.dumps(spec_input, indent=2, ensure_ascii=False)[:6000]}\n```\n\n"
+                        "Generate the Python behavioral specification file now."
+                    ),
+                },
+            ],
+            temperature=0.1,
+        )
+        content = resp.choices[0].message.content or ""
+        # Strip any accidental markdown fences
+        if content.startswith("```"):
+            content = "\n".join(content.split("\n")[1:])
+        if content.endswith("```"):
+            content = content[: content.rfind("```")]
+        return content.strip()
+    except Exception as exc:
+        logger.debug("_generate_behavioral_spec failed: %s", exc)
+        return ""
 
 
 def _synthesize(client, model: str, findings: list[dict]) -> str:
@@ -835,9 +944,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
         # Seed vocab from user-supplied hints so the LLM starts informed
         # even before Phase 0 extracts strings from the binary.
+        _use_cases_text = ""
         try:
             _job_meta = _get_job_status(job_id) or {}
             _user_hints = (_job_meta.get("hints") or "").strip()
+            _use_cases_text = (_job_meta.get("use_cases") or "").strip()
             if _user_hints:
                 import re as _re_h
                 # Extract ID-like patterns (e.g. CUST-001, ORD-20040301-0042)
@@ -922,8 +1033,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             if unlock_result.get("unlocked"):
                 write_unlock_block = (
                     "\nWRITE MODE ACTIVE: The write-unlock sequence has already been executed. "
-                    "Write functions (ProcessPayment, RedeemLoyaltyPoints, UnlockAccount etc.) "
-                    "should now succeed. Probe them with real customer IDs from STATIC ANALYSIS HINTS.\n"
+                    "Write functions (any function whose name implies state changes — Process, Update, Set, Create, Delete, Transfer, Submit, Send, Redeem, Unlock) "
+                    "should now succeed. Probe them with real ID values from STATIC ANALYSIS HINTS.\n"
                 )
                 logger.info("[%s] explore_worker: phase1 UNLOCKED: %s", job_id, unlock_result["notes"])
             else:
@@ -958,7 +1069,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
             # Build a focused conversation just for this function
             prior = _load_findings(job_id)
-            sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=vocab)
+            sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=vocab, use_cases=_use_cases_text)
             _is_write_fn = bool(_re.search(
                 r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", fn_name, _re.I
             ))
@@ -1096,7 +1207,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 f"Based on what you observed, call it now. "
                                 f"Rename each param_N to a semantic name (e.g. customer_id, balance, output_buffer). "
                                 f"For each parameter description, write what it does AND include an example value from your testing "
-                                f"(e.g. 'Customer ID string, e.g. CUST-001' or 'Output pointer — receives account balance, observed 25000'). "
+                                f"(e.g. 'Input ID string, e.g. the value you used in testing' or 'Output pointer — receives a result value, observed 25000'). "
                                 f"Set the function description to a clear one-sentence summary. "
                                 f"{_finding_summary}"
                             ),
@@ -1263,6 +1374,24 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         )
                     except Exception as _gap_e:
                         logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
+
+                    # Behavioral spec: typed Python stub file capturing the API contract.
+                    try:
+                        logger.info("[%s] explore_worker: generating behavioral spec…", job_id)
+                        _set_explore_status(job_id, explored, total, "Generating behavioral specification…")
+                        _component = (_get_job_status(job_id) or {}).get("component_name", "DLLComponent")
+                        _spec_py = _generate_behavioral_spec(
+                            client, model, _syn_findings, invocables, _component, _report
+                        )
+                        if _spec_py:
+                            _upload_to_blob(
+                                ARTIFACT_CONTAINER,
+                                f"{job_id}/behavioral_spec.py",
+                                _spec_py.encode("utf-8"),
+                            )
+                            logger.info("[%s] explore_worker: behavioral_spec.py saved to blob", job_id)
+                    except Exception as _spec_e:
+                        logger.debug("[%s] explore_worker: behavioral spec failed: %s", job_id, _spec_e)
         except Exception as _syn_e:
             logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
 
