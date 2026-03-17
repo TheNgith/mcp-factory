@@ -1,0 +1,13 @@
+# User Hints
+
+CORRECTION: CS_UnlockAccount: param_2 is the current account status string (e.g. 'LOCKED'), 
+not a second customer ID. The function signature is unlock_account(customer_id, current_status).
+
+CS_CalculateInterest: param_1 is principal in cents, param_2 is annual interest rate 
+in basis points (e.g. 500 = 5.00%), param_3 is period in months.
+
+CS_ProcessPayment: requires that the account is NOT locked before calling. Locked 
+accounts return write-denied. Call CS_UnlockAccount first if needed.
+
+CS_RedeemLoyaltyPoints: fails with account-locked because the test customer CUST-001 
+is in LOCKED state. Must call CS_UnlockAccount(CUST-001, LOCKED) first, then retry.

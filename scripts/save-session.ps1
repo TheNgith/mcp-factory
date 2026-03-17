@@ -184,6 +184,8 @@ if (Test-Path $gapsPath) {
 
 # ?? 13. SUMMARY.md ???????????????????????????????????????????????????????????
 $sm  = "# Session Summary`n`n"
+$sm += "> For pipeline architecture and how vocab.json/schema/findings fit together, see [../WORKFLOW.md](../WORKFLOW.md)`n`n"
+$sm += "> The exact system message the LLM received is in [model_context.txt](model_context.txt)`n`n"
 $sm += "**Date:** " + $datePart + "`n"
 $sm += "**Component:** " + $component + "`n"
 $sm += "**Job ID:** " + $JobId + "`n"
@@ -222,7 +224,54 @@ if (-not (Test-Path $transcriptPath)) {
     Write-Host "  Created chat-transcript.md" -ForegroundColor Yellow
 }
 
-# ?? 15. README.md index ??????????????????????????????????????????????????????
+# ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
+$templatePath = Join-Path $SessionsRoot "CONTOSO_CS_TEST_SUITE.md"
+$resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
+if (Test-Path $templatePath) {
+    $tr  = "# Test Results - " + $datePart + "`n`n"
+    $tr += "**Session:** " + $folderName + "`n"
+    $tr += "**Commit:** " + $commitHash + " - " + $commitMsg + "`n"
+    $tr += "**Job ID:** " + $JobId + "`n`n"
+    $tr += "See [../../CONTOSO_CS_TEST_SUITE.md](../../CONTOSO_CS_TEST_SUITE.md) for full prompts.`n`n---`n`n"
+    $tr += "## Scoring Table`n`n"
+    $tr += "| ID | Description | ID Format | Amount/Value Encoding | Error Decode | Init Order | Overall |`n"
+    $tr += "|----|-------------|-----------|----------------------|--------------|------------|---------|`n"
+    $tr += "| T01 | Version decode | - | | - | - | |`n"
+    $tr += "| T02 | Initialized boolean | - | | - | - | |`n"
+    $tr += "| T03 | System counts | - | - | - | - | |`n"
+    $tr += "| T04 | Auto-format CUST-007 | | - | - | - | |`n"
+    $tr += "| T05 | Auto-format CUST-042 | | - | - | - | |`n"
+    $tr += "| T06 | Order ID + refund cents | | | - | - | |`n"
+    $tr += "| T07 | Reject malformed ID | | - | - | - | |`n"
+    $tr += "| T08 | Payment cents | - | | - | - | |`n"
+    $tr += "| T09 | Refund cents | - | | - | - | |`n"
+    $tr += "| T10 | Balance div 100 | - | | - | - | |`n"
+    $tr += "| T11 | Points integer | - | | - | - | |`n"
+    $tr += "| T12 | Diagnose locked | | - | | | |`n"
+    $tr += "| T13 | Already-active unlock | - | - | - | | |`n"
+    $tr += "| T14 | Payment on locked | - | - | | | |`n"
+    $tr += "| T15 | 0xFFFFFFFB decode | - | - | | - | |`n"
+    $tr += "| T16 | 0xFFFFFFFC decode | - | - | | - | |`n"
+    $tr += "| T17 | Access violation | - | - | | - | |`n"
+    $tr += "| T18 | No-init payment | - | - | | | |`n"
+    $tr += "| T19 | Full profile fields | | | - | - | |`n"
+    $tr += "| T20 | Tier label | - | | - | - | |`n"
+    $tr += "| T21 | Contact fields | - | - | - | - | |`n"
+    $tr += "| T22 | Full happy path | | | - | | |`n"
+    $tr += "| T23 | End-to-end refund | | | - | | |`n"
+    $tr += "| T24 | Multi-customer session | | | | | |`n"
+    $tr += "| T25 | Locked in multi-step | - | - | | | |`n"
+    $tr += "| T26 | Zero amount | - | | - | - | |`n"
+    $tr += "| T27 | Over-redeem points | - | | | - | |`n"
+    $tr += "| T28 | LOCKED as ID confusion | | - | - | - | |`n"
+    $tr += "`n---`n`n## Notes`n`n> Fill in observations, surprises, and follow-up questions below`n`n-`n"
+    Set-Content -Path $resultsPath -Value $tr -Encoding UTF8
+    Write-Host "  Created TEST_RESULTS.md" -ForegroundColor Green
+} else {
+    Write-Host "  Skipped TEST_RESULTS.md (template not found at sessions/CONTOSO_CS_TEST_SUITE.md)" -ForegroundColor DarkYellow
+}
+
+# ?? 16. README.md index ??????????????????????????????????????????????????????
 $readmePath = Join-Path $SessionsRoot "README.md"
 if (Test-Path $readmePath) {
     $row  = "| " + $datePart + " | ``" + $commitHash + "`` | ``" + $JobId + "`` | " + $Note + " | " + $component + " - (fill in after testing) |"
@@ -234,7 +283,7 @@ if (Test-Path $readmePath) {
     }
 }
 
-# ?? 16. index.json ???????????????????????????????????????????????????????????
+# ?? 17. index.json ???????????????????????????????????????????????????????????
 $indexPath = Join-Path $SessionsRoot "index.json"
 $entry = [PSCustomObject]@{
     date           = $datePart
@@ -257,7 +306,7 @@ $existing += $entry
 $existing | ConvertTo-Json -Depth 5 | Set-Content $indexPath -Encoding UTF8
 Write-Host "  Updated index.json" -ForegroundColor Green
 
-# ?? 17. List files and finish ????????????????????????????????????????????????
+# ?? 18. List files and finish ????????????????????????????????????????????????
 $files = Get-ChildItem -Path $sessionDir -Recurse -File
 Write-Host ""
 Write-Host "  Files saved:" -ForegroundColor Cyan
@@ -268,7 +317,7 @@ Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  1. Fill in chat-transcript.md with your test prompts and results"
+Write-Host "  1. Run test prompts from sessions/CONTOSO_CS_TEST_SUITE.md and fill in TEST_RESULTS.md"
 Write-Host "  2. Update SUMMARY.md 'What to investigate next' section"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"

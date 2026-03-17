@@ -91,4 +91,5 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-17 | `0b11f66` | `a0fc70e8` | gap-answer-boxes | CS_LookupCustomer working (CUST-001, param_3=0). CS_ProcessPayment write-denied â€” CS_Initialize not called first. CS_UnlockAccount null-argument on LOCKED status when account is already ACTIVE. |
 | 2026-03-17 | `b8e0744` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
 | 2026-03-17 | `b8e0744` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
+| 2026-03-17 | `33f9114` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
 

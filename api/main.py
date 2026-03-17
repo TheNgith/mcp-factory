@@ -681,6 +681,24 @@ async def session_snapshot(job_id: str):
         }
         zf.writestr("session-meta.json", json.dumps(meta, indent=2))
 
+        # ── Model operating context (exact system message the LLM receives) ──
+        try:
+            from api.chat import _build_system_message
+            _inv_raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+            _inv_map = json.loads(_inv_raw)
+            # invocables_map is a dict keyed by name — flatten to list
+            _invocables = list(_inv_map.values()) if isinstance(_inv_map, dict) else _inv_map
+            _sys_msg = _build_system_message(_invocables, job_id)
+            _ctx_text = (
+                "# Model Operating Context\n"
+                "# This is the exact system message injected into every chat session for this job.\n"
+                "# Captured at snapshot time — regenerate a new snapshot after any vocab/enrichment change.\n\n"
+                + _sys_msg["content"]
+            )
+            zf.writestr("model_context.txt", _ctx_text)
+        except Exception:
+            pass  # non-fatal — snapshot still valid without it
+
     zbuf.seek(0)
     return StreamingResponse(
         iter([zbuf.read()]),

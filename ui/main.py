@@ -1155,8 +1155,23 @@ $('submit-gap-answers-btn').addEventListener('click', async () => {
           } else if (s.explore_phase === 'done') {
             clearInterval(_explorePoller);
             $('discover-bar-msg').textContent = `✓ Refinement complete — schema updated`;
-            $('gap-answers-msg').textContent = `✓ Done — schema updated with your answers.`;
             $('submit-gap-answers-btn').disabled = false;
+            const newGaps = s.explore_questions || [];
+            if (newGaps.length > 0) {
+              $('gap-answers-msg').textContent = `✓ Done — ${newGaps.length} new question(s) need your input.`;
+              renderGapQuestions(newGaps);
+            } else {
+              $('gap-answers-msg').textContent = `✓ Done — all gaps resolved.`;
+            }
+            // Refresh schema preview
+            try {
+              const sr = await fetch(`/api/download/${state.jobId}/mcp_schema.json`);
+              if (sr.ok) {
+                const ns = await sr.json();
+                state.tools = ns.tools ?? state.tools;
+                $('schema-preview').textContent = JSON.stringify(ns, null, 2);
+              }
+            } catch (_) {}
           }
         } catch (_) {}
       }, 2500);
@@ -1212,7 +1227,14 @@ $('refine-btn').addEventListener('click', async () => {
           $('discover-bar-msg').textContent = `✓ Refinement complete (${progress})`;
           btn.disabled = false;
           btn.textContent = '🔄 Run Refinement';
-          $('refine-msg').textContent = 'Done. Schema and spec have been updated.';
+          // Re-render updated gap questions
+          const newGaps = s.explore_questions || [];
+          if (newGaps.length > 0) {
+            $('refine-msg').textContent = `Done. Schema updated — ${newGaps.length} new question(s) surfaced.`;
+            renderGapQuestions(newGaps);
+          } else {
+            $('refine-msg').textContent = 'Done. Schema and spec have been updated.';
+          }
           // Refresh schema preview
           try {
             const sr = await fetch(`/api/download/${state.jobId}/mcp_schema.json`);
