@@ -541,6 +541,16 @@ _HTML = r"""<!DOCTYPE html>
         </button>
       </div>
 
+      <!-- Confidence gap questions surfaced after exploration -->
+      <div id="gap-questions-box" style="display:none;margin:12px 0;padding:12px 16px;
+        background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;font-size:.85rem">
+        <strong style="color:#92400e">💡 Clarification questions from discovery</strong>
+        <p style="margin:4px 0 8px;color:#78350f;font-size:.82rem">
+          The system was uncertain about these items. Answers can improve the schema — paste them into chat or re-run Discover with updated hints.
+        </p>
+        <ul id="gap-questions-list" style="margin:0;padding-left:18px;color:#451a03"></ul>
+      </div>
+
       <div class="json-preview" id="schema-preview"></div>
 
       <div class="alert alert-error" id="gen-error"></div>
@@ -973,6 +983,26 @@ $('discover-btn').addEventListener('click', async () => {
               $('schema-preview').textContent = JSON.stringify(newSchema, null, 2);
             }
           } catch(_e) { /* non-fatal */ }
+          // Surface confidence gap questions if any were generated
+          const gaps = s.explore_questions;
+          if (gaps && gaps.length > 0) {
+            const list = $('gap-questions-list');
+            list.innerHTML = '';
+            gaps.forEach(g => {
+              const li = document.createElement('li');
+              li.style.marginBottom = '4px';
+              const fn = g.function && g.function !== 'general' ? `<strong>${g.function}</strong>: ` : '';
+              li.innerHTML = `${fn}${g.question}`;
+              if (g.uncertainty) {
+                const sub = document.createElement('span');
+                sub.style.cssText = 'display:block;font-size:.78rem;color:#92400e;margin-top:1px';
+                sub.textContent = `Uncertain: ${g.uncertainty}`;
+                li.appendChild(sub);
+              }
+              list.appendChild(li);
+            });
+            $('gap-questions-box').style.display = 'block';
+          }
         } else if (phase === 'error') {
           clearInterval(_explorePoller);
           $('discover-bar-msg').textContent = `Discovery error: ${s.explore_error ?? 'unknown'}`;

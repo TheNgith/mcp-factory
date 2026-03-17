@@ -408,6 +408,121 @@ def _vocab_block(vocab: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Active Learning-style uncertainty scoring
+# ---------------------------------------------------------------------------
+
+def _uncertainty_score(inv: dict) -> int:
+    """Score a function by how ambiguous it looks before exploration.
+
+    Lower score = simpler = explore earlier to build vocabulary faster.
+    Higher score = more undefined types, more params = explore later when
+    the accumulated vocab context makes probing more effective.
+    This is the 'curriculum learning' flavour of active learning: easy first.
+    """
+    params = inv.get("parameters") or []
+    score = 0
+    for p in (params if isinstance(params, list) else []):
+        if not isinstance(p, dict):
+            continue
+        t = (p.get("type") or "").lower()
+        if "undefined" in t:
+            score += 2   # completely unknown type — high ambiguity
+        elif "*" in t:
+            score += 1   # pointer — direction unclear
+    score += len(params)  # more params = more to figure out
+    # Prefer simple no-param or single-param functions first
+    if not params:
+        score = 0
+    return score
+
+
+# ---------------------------------------------------------------------------
+# Confidence gap questions (self-assessment after exploration)
+# ---------------------------------------------------------------------------
+
+_GAP_SYSTEM = """\
+You are reviewing the results of an automated DLL reverse-engineering session.
+Your job is to identify what the system could NOT confidently determine and generate
+targeted questions a domain expert could answer to fill those gaps.
+
+A domain expert is someone who USES this system but may not have the source code —
+they know what the application does at a business level (e.g. "yes, amounts are in cents",
+"customer IDs always start with CUST-", "the status can also be PENDING").
+
+Output ONLY valid JSON (no markdown fences):
+{
+  "gaps": [
+    {
+      "function": "<function_name or 'general'>",
+      "uncertainty": "<what specifically is uncertain, in 1 sentence>",
+      "question": "<a clear, specific question the domain expert could answer>"
+    }
+  ]
+}
+
+Rules:
+- Maximum 5 gaps total — only the most impactful unknowns
+- Only ask about genuinely uncertain things (not obvious things like what Initialize does)
+- Prefer questions about: numeric value units, enum/status meanings, unknown ID formats,
+  error conditions not observed, functions that always failed
+- Questions must be answerable by a user familiar with the system but without source code
+- If everything is well-documented and confident, return {"gaps": []}
+"""
+
+
+def _generate_confidence_gaps(
+    client,
+    model: str,
+    findings: list[dict],
+    invocables: list[dict],
+) -> list[dict]:
+    """Ask the LLM to self-assess its findings and identify confidence gaps.
+
+    Returns a list of {function, uncertainty, question} dicts that the UI
+    can surface as optional clarification prompts for the user.
+    """
+    findings_summary = json.dumps(
+        [
+            {
+                "function": f.get("function"),
+                "status": f.get("status"),
+                "finding": (f.get("finding") or "")[:200],
+                "working_call": f.get("working_call"),
+                "interpretation": f.get("interpretation"),
+            }
+            for f in findings
+        ],
+        ensure_ascii=False,
+    )
+    failed = [inv["name"] for inv in invocables if not any(
+        f.get("function") == inv["name"] and f.get("status") == "success"
+        for f in findings
+    )]
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _GAP_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Exploration findings:\n```json\n{findings_summary[:5000]}\n```\n\n"
+                        f"Functions that never returned success: {failed or 'none'}\n\n"
+                        "Generate the gaps JSON now."
+                    ),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+        return data.get("gaps", [])
+    except Exception as exc:
+        logger.debug("_generate_confidence_gaps failed: %s", exc)
+        return []
+
+
 def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:
     """Phase 1: try to flip the DLL from read-only to write-ready.
     Tries CS_Initialize with mode integers, then any Begin/Enable/Auth-style
@@ -817,6 +932,18 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         except Exception as _we:
             logger.debug("[%s] explore_worker: phase1 write-unlock probe failed: %s", job_id, _we)
 
+        # Active Learning-style ordering: explore init functions first (unlock state),
+        # then sort remaining by uncertainty score ascending (simpler → complex).
+        # By the time the LLM reaches ambiguous multi-param functions, the vocab
+        # table is rich with cross-function conventions learned from simpler ones.
+        _INIT_RE = _re.compile(r"(init(ializ)?|startup|start|setup|open|login|logon|connect)", _re.I)
+        _init_invs  = [inv for inv in invocables if _INIT_RE.search(inv["name"])]
+        _other_invs = [inv for inv in invocables if not _INIT_RE.search(inv["name"])]
+        _other_invs.sort(key=_uncertainty_score)
+        invocables = _init_invs + _other_invs
+        logger.info("[%s] explore_worker: ordered %d init + %d others by uncertainty",
+                    job_id, len(_init_invs), len(_other_invs))
+
         for inv in invocables:
             fn_name = inv["name"]
 
@@ -1117,6 +1244,25 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         _backfill_schema_from_synthesis(client, model, _report, invocables, job_id)
                     except Exception as _bf_e:
                         logger.debug("[%s] explore_worker: backfill failed: %s", job_id, _bf_e)
+
+                    # Self-assessment: generate confidence gap questions for the user.
+                    # Asks the LLM what it was uncertain about so the UI can surface
+                    # targeted clarification prompts to domain experts.
+                    try:
+                        logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
+                        _set_explore_status(job_id, explored, total, "Generating clarification questions…")
+                        _gaps = _generate_confidence_gaps(client, model, _syn_findings, invocables)
+                        if _gaps:
+                            logger.info("[%s] explore_worker: %d confidence gaps generated", job_id, len(_gaps))
+                        # Always persist (even empty list) so UI knows the pass ran
+                        _gap_current = _get_job_status(job_id) or {}
+                        _persist_job_status(
+                            job_id,
+                            {**_gap_current, "explore_questions": _gaps},
+                            sync=True,
+                        )
+                    except Exception as _gap_e:
+                        logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
         except Exception as _syn_e:
             logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
 
