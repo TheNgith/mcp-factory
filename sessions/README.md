@@ -9,10 +9,15 @@ YYYY-MM-DD-{commit}-{slug}/
 
 ## How to save a session
 
-Run this from the repo root after each Discover / Refine / Chat cycle:
+Run this from the repo root after each Discover / Refine / Chat cycle.  
+**`-Note` is optional** — if you omit it, the script auto-derives `{component}-run{N}`:
 
 ```powershell
-.\scripts\save-session.ps1 -ApiUrl "https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io" -JobId "YOUR_JOB_ID" -Note "short-description"
+# Minimal — note is auto-derived (e.g. "contoso-cs-run1"):
+.\scripts\save-session.ps1 -ApiUrl "https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io" -JobId "YOUR_JOB_ID"
+
+# With a custom note:
+.\scripts\save-session.ps1 -ApiUrl "https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io" -JobId "YOUR_JOB_ID" -Note "payment-test"
 ```
 
 Then commit it:
@@ -24,11 +29,11 @@ git add sessions/ ; git commit -m "session: YOUR_JOB_ID short-description" ; git
 
 ## Parameters
 
-| Parameter | What to put | Example |
-|---|---|---|
-| `-ApiUrl` | The UI URL (no trailing slash) | `https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io` |
-| `-JobId` | The job ID shown in the UI after uploading a DLL | `a0fc70e8` |
-| `-Note` | One short kebab-case description of what you tested this run | `payment-flow`, `unlock-fix`, `initial-discover` |
+| Parameter | Required | What to put | Example |
+|---|---|---|---|
+| `-ApiUrl` | yes | The UI URL (no trailing slash) | `https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io` |
+| `-JobId` | yes | The job ID shown in the UI after uploading a DLL | `a0fc70e8` |
+| `-Note` | no | What you tested — auto-derived as `{component}-run{N}` if omitted | `payment-flow`, `unlock-fix` |
 
 The job ID is visible in the browser URL bar on Step 3, or in the status panel after analysis completes.
 
@@ -39,6 +44,8 @@ The job ID is visible in the browser URL bar on Step 3, or in the status panel a
 ```
 YYYY-MM-DD-{commit}-{note}/
 │
+├── SUMMARY.md                   ← AI quick-scan: commit, findings counts, working calls, gap questions
+├── code-changes.md              ← full git log + git diff of api/ ui/ scripts/ at snapshot time
 ├── session-meta.json            ← job_id, component, commit, finding/gap counts, timestamps
 ├── hints.txt                    ← verbatim hints + use_cases you provided
 ├── clarification-questions.md   ← gap questions, technical detail, and submitted answers
@@ -55,6 +62,10 @@ YYYY-MM-DD-{commit}-{note}/
     ├── behavioral_spec.py       ← typed Python stub with full docstrings
     └── invocables_map.json      ← complete enriched invocable definitions
 ```
+
+**For an AI starting a new session:** read `SUMMARY.md` first (one-file overview), then `code-changes.md` to understand what changed in code, then `chat-transcript.md` for what was actually tested.
+
+**Machine-readable index:** `sessions/index.json` — array of all sessions with finding counts, known IDs, gap counts, and folder paths. Scan this to find which session to look at without opening every folder.
 
 ---
 
