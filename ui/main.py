@@ -557,6 +557,13 @@ _HTML = r"""<!DOCTYPE html>
           The system was uncertain about these items. Answers can improve the schema — paste them into chat or re-run Discover with updated hints.
         </p>
         <ul id="gap-questions-list" style="margin:0;padding-left:18px;color:#451a03"></ul>
+        <div id="gap-answers-row" style="display:none;margin-top:10px;display:flex;gap:8px;align-items:center">
+          <button class="btn btn-secondary" id="submit-gap-answers-btn"
+            style="padding:6px 12px;font-size:.8rem;background:#b45309;color:#fff;border-color:#b45309">
+            💾 Submit Answers
+          </button>
+          <span id="gap-answers-msg" style="font-size:.8rem;color:#92400e"></span>
+        </div>
       </div>
 
       <!-- Iterative refinement panel -->
@@ -1022,27 +1029,15 @@ $('discover-btn').addEventListener('click', async () => {
           } catch(_e) { /* non-fatal */ }
           // Surface confidence gap questions if any were generated
           const gaps = s.explore_questions;
-          if (gaps && gaps.length > 0) {
-            const list = $('gap-questions-list');
-            list.innerHTML = '';
-            gaps.forEach(g => {
-              const li = document.createElement('li');
-              li.style.marginBottom = '8px';
-              li.innerHTML = g.question || g.uncertainty || '';
-              const detail = g.technical_detail || g.uncertainty;
-              if (detail) {
-                const sub = document.createElement('span');
-                sub.style.cssText = 'display:block;font-size:.76rem;color:#6b7280;margin-top:3px;font-family:monospace';
-                sub.textContent = `Technical detail: ${detail}`;
-                li.appendChild(sub);
-              }
-              list.appendChild(li);
-            });
-            $('gap-questions-box').style.display = 'block';
-          }
+          renderGapQuestions(gaps);
           // Show Python spec download button and refine panel
           $('download-spec-btn').style.display = 'inline-flex';
           $('refine-box').style.display = 'block';
+          // Re-render gap questions after refinement completes
+          try {
+            const sr2 = await fetch(`/api/jobs/${state.jobId}`);
+            if (sr2.ok) { const s2 = await sr2.json(); renderGapQuestions(s2.explore_questions); }
+          } catch(_e) {}
         } else if (phase === 'error') {
           clearInterval(_explorePoller);
           $('discover-bar-msg').textContent = `Discovery error: ${s.explore_error ?? 'unknown'}`;
@@ -1067,6 +1062,70 @@ $('download-doc-btn').addEventListener('click', () => {
 $('download-spec-btn').addEventListener('click', () => {
   if (!state.jobId) return;
   window.location.href = `/api/download/${state.jobId}/behavioral_spec.py`;
+});
+
+// ── Gap question helpers ──────────────────────────────────
+function renderGapQuestions(gaps) {
+  if (!gaps || gaps.length === 0) return;
+  const list = $('gap-questions-list');
+  list.innerHTML = '';
+  gaps.forEach((g, idx) => {
+    const li = document.createElement('li');
+    li.style.marginBottom = '10px';
+    li.innerHTML = `<span style="font-weight:500">${g.question || g.uncertainty || ''}</span>`;
+    const detail = g.technical_detail || g.uncertainty;
+    if (detail) {
+      const sub = document.createElement('span');
+      sub.style.cssText = 'display:block;font-size:.76rem;color:#6b7280;margin-top:2px;font-family:monospace';
+      sub.textContent = `Technical detail: ${detail}`;
+      li.appendChild(sub);
+    }
+    // Answer input
+    const ansWrap = document.createElement('div');
+    ansWrap.style.cssText = 'margin-top:5px;display:flex;gap:6px;align-items:center';
+    const ta = document.createElement('input');
+    ta.type = 'text';
+    ta.dataset.gapIdx = idx;
+    ta.dataset.gapFn = g.function || 'general';
+    ta.dataset.gapQ = g.question || g.uncertainty || '';
+    ta.placeholder = 'Type your answer here…';
+    ta.style.cssText = 'flex:1;padding:4px 7px;border:1px solid #f59e0b;border-radius:5px;font-size:.8rem;background:#fffdf0';
+    ansWrap.appendChild(ta);
+    li.appendChild(ansWrap);
+    list.appendChild(li);
+  });
+  $('gap-questions-box').style.display = 'block';
+  $('gap-answers-row').style.display = 'flex';
+}
+
+$('submit-gap-answers-btn').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  const inputs = $('gap-questions-list').querySelectorAll('input[data-gap-idx]');
+  const answers = [];
+  inputs.forEach(inp => {
+    if (inp.value.trim()) {
+      answers.push({ function: inp.dataset.gapFn, question: inp.dataset.gapQ, answer: inp.value.trim() });
+    }
+  });
+  if (!answers.length) {
+    $('gap-answers-msg').textContent = 'Enter at least one answer first.';
+    return;
+  }
+  $('submit-gap-answers-btn').disabled = true;
+  $('gap-answers-msg').textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/jobs/${state.jobId}/answer-gaps`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    $('gap-answers-msg').textContent = `✓ ${answers.length} answer(s) saved — re-run Discover or paste into chat.`;
+  } catch(e) {
+    $('gap-answers-msg').textContent = `Failed: ${e.message}`;
+  } finally {
+    $('submit-gap-answers-btn').disabled = false;
+  }
 });
 
 $('refine-btn').addEventListener('click', async () => {
@@ -1424,6 +1483,12 @@ async def proxy_explore(job_id: str, body: dict[str, Any]) -> JSONResponse:
 async def proxy_refine(job_id: str, body: dict[str, Any]) -> JSONResponse:
     """Proxy refinement trigger to the pipeline /api/jobs/{job_id}/refine."""
     return await _proxy_json(f"/api/jobs/{job_id}/refine", body)
+
+
+@app.post("/api/jobs/{job_id}/answer-gaps")
+async def proxy_answer_gaps(job_id: str, body: dict[str, Any]) -> JSONResponse:
+    """Proxy gap answers to the pipeline POST /api/jobs/{job_id}/answer-gaps."""
+    return await _proxy_json(f"/api/jobs/{job_id}/answer-gaps", body)
 
 
 @app.get("/api/download/{job_id}/{filename}")

@@ -542,6 +542,58 @@ async def refine_job(job_id: str, body: dict[str, Any] = None):
     )
 
 
+@app.post("/api/jobs/{job_id}/answer-gaps")
+async def answer_gaps(job_id: str, body: dict[str, Any] = None):
+    """Accept user answers to gap questions and merge them into vocab + hints.
+
+    Body: {"answers": [{"function": "CS_ProcessPayment", "question": "...", "answer": "..."}]}
+
+    Each answer is:
+    - Written into vocab.json under gap_answers so the chat LLM sees it in context
+    - Appended to status.json hints so the next explore/refine pass uses it
+    """
+    body = body or {}
+    answers: list[dict] = body.get("answers") or []
+    if not answers:
+        raise HTTPException(400, "No answers provided.")
+
+    # Merge into vocab.json
+    vocab: dict = {}
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json")
+        vocab = json.loads(raw)
+    except Exception:
+        pass
+
+    gap_answers = vocab.get("gap_answers") or {}
+    for a in answers:
+        fn = a.get("function") or "general"
+        ans_text = (a.get("answer") or "").strip()
+        if ans_text:
+            gap_answers[fn] = ans_text
+    vocab["gap_answers"] = gap_answers
+
+    try:
+        _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json", json.dumps(vocab).encode())
+    except Exception as e:
+        logger.warning("[%s] answer-gaps: failed to persist vocab: %s", job_id, e)
+
+    # Append answers as hint corrections so next re-explore uses them
+    current = _get_job_status(job_id) or {}
+    existing_hints = current.get("hints", "")
+    new_parts = [existing_hints] if existing_hints else []
+    for a in answers:
+        fn = a.get("function") or "general"
+        ans_text = (a.get("answer") or "").strip()
+        if ans_text:
+            new_parts.append(f"DOMAIN ANSWER ({fn}): {ans_text}")
+    combined = " | ".join(new_parts)
+    _persist_job_status(job_id, {**current, "hints": combined, "updated_at": time.time()})
+
+    logger.info("[%s] answer-gaps: stored %d answers", job_id, len([a for a in answers if a.get("answer", "").strip()]))
+    return JSONResponse({"job_id": job_id, "answers_stored": len(gap_answers)})
+
+
 @app.get("/api/jobs/{job_id}/report")
 async def get_report(job_id: str):
     """Generate a markdown documentation report for a job.
