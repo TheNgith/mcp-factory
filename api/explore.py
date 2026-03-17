@@ -173,6 +173,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 if "notes" not in vocab:
                     vocab["notes"] = f"User description: {_user_hints}"
                 logger.info("[%s] explore_worker: seeded vocab from user hints: %s", job_id, _user_hints[:80])
+            # Persist use_cases into vocab so the chat phase sees it even after
+            # vocab["notes"] may be overwritten by later vocabulary updates.
+            if _use_cases_text and "user_context" not in vocab:
+                vocab["user_context"] = _use_cases_text
+                logger.info("[%s] explore_worker: seeded vocab[user_context] from use_cases", job_id)
         except Exception as _he:
             logger.debug("[%s] explore_worker: hints seed failed: %s", job_id, _he)
 
@@ -623,6 +628,49 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         logger.debug("[%s] explore_worker: behavioral spec failed: %s", job_id, _spec_e)
         except Exception as _syn_e:
             logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
+
+        # Synthesize a one-sentence domain description from accumulated vocab.
+        # Stored as vocab["description"] so the chat phase can prepend it to the
+        # system message as domain framing before the mechanical rules.
+        # Only generated once — skipped if a previous session already built it.
+        if vocab and "description" not in vocab:
+            try:
+                _desc_seed = vocab.get("user_context") or vocab.get("notes") or ""
+                _vs = vocab.get("value_semantics") or {}
+                _vs_sample = "; ".join(f"{k}: {v}" for k, v in list(_vs.items())[:8])
+                _ids = ", ".join(vocab.get("id_formats") or [])
+                _desc_prompt = (
+                    "Based on the following accumulated knowledge about a DLL, write ONE sentence "
+                    "describing what this component does for a developer integrating it. "
+                    "Be specific — name the business domain, key entities, and operations. "
+                    "Do not mention 'DLL' or 'function'. Max 25 words.\n\n"
+                    + (f"User context: {_desc_seed}\n" if _desc_seed else "")
+                    + (f"Known ID formats: {_ids}\n" if _ids else "")
+                    + (f"Value semantics: {_vs_sample}\n" if _vs_sample else "")
+                )
+                _desc_resp = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": _desc_prompt}],
+                    temperature=0,
+                    max_tokens=60,
+                )
+                _desc_text = (_desc_resp.choices[0].message.content or "").strip().strip('"')
+                if _desc_text:
+                    vocab["description"] = _desc_text
+                    logger.info("[%s] explore_worker: synthesized description: %s", job_id, _desc_text)
+            except Exception as _desc_e:
+                logger.debug("[%s] explore_worker: description synthesis failed: %s", job_id, _desc_e)
+
+        # Persist final vocab with description + user_context
+        if vocab:
+            try:
+                _upload_to_blob(
+                    ARTIFACT_CONTAINER,
+                    f"{job_id}/vocab.json",
+                    json.dumps(vocab).encode(),
+                )
+            except Exception as _vfin_e:
+                logger.debug("[%s] explore_worker: final vocab persist failed: %s", job_id, _vfin_e)
 
         # Mark exploration done — update job status back to previous terminal state
         # or set a new "explore_done" sub-status so the UI knows it finished.

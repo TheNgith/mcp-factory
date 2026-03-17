@@ -157,6 +157,7 @@ def _sse(event: dict) -> str:
 def _build_system_message(invocables: list, job_id: str = "") -> dict:
     # Load vocab accumulated during exploration (id formats, conventions, etc.)
     vocab_block = ""
+    _domain_preamble = ""
     if job_id:
         try:
             from api.storage import _download_blob
@@ -165,7 +166,22 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             _vocab = _json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json"))
             if _vocab:
                 from api.explore import _vocab_block
-                vocab_block = "\n" + _vocab_block(_vocab) + "\n"
+                # Strip description/user_context before passing to _vocab_block —
+                # they're already hoisted into _domain_preamble above the rules.
+                _vocab_for_block = {k: v for k, v in _vocab.items()
+                                    if k not in ("description", "user_context")}
+                vocab_block = "\n" + _vocab_block(_vocab_for_block) + "\n"
+                # Extract domain framing to inject BEFORE the rules so the model
+                # reads business context first, then interprets rules through that lens.
+                _desc = (_vocab.get("description") or "").strip()
+                _uctx = (_vocab.get("user_context") or "").strip()
+                if _desc or _uctx:
+                    _preamble_lines = ["COMPONENT BEING CONTROLLED:"]
+                    if _desc:
+                        _preamble_lines.append(f"  {_desc}")
+                    if _uctx and _uctx != _desc:
+                        _preamble_lines.append(f"  Integration intent: {_uctx}")
+                    _domain_preamble = "\n".join(_preamble_lines) + "\n\n"
         except Exception:
             pass  # vocab not yet built or blob miss — fine
 
@@ -230,7 +246,8 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
     return {
         "role": "system",
         "content": (
-            "You are an AI agent with direct control over a Windows application via MCP tools.\n"
+            _domain_preamble
+            + "You are an AI agent with direct control over a Windows application via MCP tools.\n"
             "RULES:\n"
             "1. When asked to perform an action, call the appropriate tool(s) immediately. "
             "You may call multiple tools in a single response to perform sequences faster "

@@ -312,24 +312,73 @@ def _backfill_schema_from_synthesis(
 
 
 def _vocab_block(vocab: dict) -> str:
-    """Format the vocabulary table for injection into user prompts."""
+    """Format the vocabulary table for injection into the chat system message.
+
+    Priority order (highest → lowest, mirrors token-position importance):
+      1. description   — one-sentence domain framing (before anything else)
+      2. user_context  — verbatim use_cases from the integrating developer
+      3. id_formats    — wrong format = every call fails; always include first
+      4. error_codes   — needed to interpret every response correctly
+      5. value_semantics — confirmed/inferred parameter and return meanings
+      6. notes         — free-text cross-function observations
+      7. everything else — write_blocked_by, init_sequence, output_format, etc.
+
+    description and user_context are emitted as a preamble paragraph, not as
+    table rows, so the model reads domain framing as natural text before the
+    mechanical conventions list.
+    """
     if not vocab:
         return ""
-    lines = ["ACCUMULATED DLL KNOWLEDGE (apply these conventions immediately):"]
+
+    lines = []
+
+    # ── Preamble: domain framing (emitted before the KNOWLEDGE header) ──────
+    _description = vocab.get("description", "").strip()
+    _user_ctx    = vocab.get("user_context", "").strip()
+    if _description or _user_ctx:
+        lines.append("COMPONENT CONTEXT:")
+        if _description:
+            lines.append(f"  {_description}")
+        if _user_ctx and _user_ctx != _description:
+            lines.append(f"  Integration intent: {_user_ctx}")
+        lines.append("")
+
+    lines.append("ACCUMULATED DLL KNOWLEDGE (apply these conventions immediately):")
+
+    # ── Tier 1: id_formats — try-all instruction ─────────────────────────────
+    if "id_formats" in vocab and isinstance(vocab["id_formats"], list):
+        lines.append(
+            f"  id_formats (try ALL of these for each unknown string param, "
+            f"not just the most common one): {', '.join(str(x) for x in vocab['id_formats'])}"
+        )
+
+    # ── Tier 2: error_codes ──────────────────────────────────────────────────
+    if "error_codes" in vocab and isinstance(vocab["error_codes"], dict):
+        for hex_code, meaning in vocab["error_codes"].items():
+            lines.append(f"  error_codes[{hex_code}]: {meaning}")
+
+    # ── Tier 3: value_semantics ───────────────────────────────────────────────
+    if "value_semantics" in vocab and isinstance(vocab["value_semantics"], dict):
+        for sk, sv in vocab["value_semantics"].items():
+            lines.append(f"  value_semantics[{sk}]: {sv}")
+
+    # ── Tier 4: notes ─────────────────────────────────────────────────────────
+    if "notes" in vocab:
+        lines.append(f"  notes: {vocab['notes']}")
+
+    # ── Tier 5: everything else (skip preamble keys already emitted) ─────────
+    _emitted = {"description", "user_context", "id_formats", "error_codes", "value_semantics", "notes"}
     for k, v in vocab.items():
-        if k == "id_formats" and isinstance(v, list):
-            # Explicit try-all instruction — this is the most important convention
-            lines.append(
-                f"  id_formats (try ALL of these for each unknown string param, "
-                f"not just the most common one): {', '.join(str(x) for x in v)}"
-            )
-        elif isinstance(v, list):
+        if k in _emitted:
+            continue
+        if isinstance(v, list):
             lines.append(f"  {k}: {', '.join(str(x) for x in v)}")
         elif isinstance(v, dict):
             for sk, sv in v.items():
                 lines.append(f"  {k}[{sk}]: {sv}")
         else:
             lines.append(f"  {k}: {v}")
+
     return "\n".join(lines) + "\n"
 
 
