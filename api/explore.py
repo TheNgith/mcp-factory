@@ -370,7 +370,16 @@ def _backfill_schema_from_synthesis(
                     if isinstance(p, dict):
                         pname = p.get("name", "")
                         if pname in param_patches:
-                            p = {**p, "description": param_patches[pname]}
+                            desc = param_patches[pname]
+                            desc_lower = desc.lower()
+                            import re as _re_dir
+                            if _re_dir.search(r"\boutput\b.*\bbuffer\b|\bbuffer\b.*\boutput\b|\bauto.allocated\b", desc_lower):
+                                new_dir = "out"
+                            elif _re_dir.search(r"\binput\b|\bprovide[sd]?\b|\bpass\b|\bspecif", desc_lower):
+                                new_dir = "in"
+                            else:
+                                new_dir = p.get("direction", "in")
+                            p = {**p, "description": desc, "direction": new_dir}
                     updated_params.append(p)
                 update["parameters"] = updated_params
 

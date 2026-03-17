@@ -224,7 +224,11 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
 
     patch keys:
       - "function_description": str  → replaces inv["description"]
-      - "<param_name>": {"name": str, "description": str}  → renames param + sets desc
+      - "<param_name>": {"name": str, "description": str}  → renames param + sets desc;
+        also infers direction ("in"/"out") from description text
+      - "parameters": list  → replaces the full parameters list wholesale (backfill path)
+      - "criticality": str  → sets criticality label
+      - "depends_on": list  → sets dependency list
 
     Returns a human-readable confirmation string.
     """
@@ -254,7 +258,31 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
                 param["name"] = new_name
                 renames.append(f"{old_name} → {new_name}")
             if "description" in p_patch:
-                param["description"] = p_patch["description"]
+                desc = p_patch["description"]
+                param["description"] = desc
+                # Infer direction from the description the LLM wrote, so that
+                # generate.py correctly includes/excludes params from `required`.
+                # Ghidra marks byte* as "out" by default but const char* inputs
+                # are also byte* — the LLM's description is the ground truth.
+                desc_lower = desc.lower()
+                if _re.search(r"\boutput\b.*\bbuffer\b|\bbuffer\b.*\boutput\b|\bout\b.*\bpointer\b|\bauto.allocated\b", desc_lower):
+                    param["direction"] = "out"
+                elif _re.search(r"\binput\b|\bprovide[sd]?\b|\bpass\b|\bspecif", desc_lower):
+                    param["direction"] = "in"
+
+    # Accept a pre-built parameters list (e.g. from backfill) — replaces the
+    # current list wholesale, direction already set by the caller.
+    if "parameters" in patch and isinstance(patch["parameters"], list):
+        inv["parameters"] = patch["parameters"]
+
+    # Scalar fields from backfill/refinement
+    if "criticality" in patch:
+        inv["criticality"] = patch["criticality"]
+    if "depends_on" in patch:
+        inv["depends_on"] = patch["depends_on"]
+    if "description" in patch:
+        inv["description"] = patch["description"]
+        inv["doc"] = patch["description"]
 
     # Write back to in-memory map
     with _JOB_MAP_LOCK:
