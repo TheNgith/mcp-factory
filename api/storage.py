@@ -281,8 +281,19 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
     if "depends_on" in patch:
         inv["depends_on"] = patch["depends_on"]
     if "description" in patch:
-        inv["description"] = patch["description"]
-        inv["doc"] = patch["description"]
+        new_desc = patch["description"]
+        existing_desc = (inv.get("description") or inv.get("doc") or "").strip()
+        # Guard: only overwrite if the existing description is blank or is a raw
+        # Ghidra type-signature (e.g. "undefined8 CS_Foo(byte * param_1, ...)").
+        # This prevents backfill from downgrading a human-readable enriched description
+        # back to a Ghidra annotation when the synthesis doc has incomplete coverage.
+        _is_ghidra_sig = bool(_re.match(
+            r"^(undefined\d*|void|int\d*|uint\d*|char|byte|BOOL|HRESULT|HANDLE|DWORD|LONG)\b",
+            existing_desc, _re.I,
+        ))
+        if not existing_desc or _is_ghidra_sig:
+            inv["description"] = new_desc
+            inv["doc"] = new_desc
 
     # Write back to in-memory map
     with _JOB_MAP_LOCK:
