@@ -543,6 +543,15 @@ if ($jsonOut -and $jsonOut.TrimStart()[0] -ne '[') { $jsonOut = "[$jsonOut]" }
 $jsonOut | Set-Content $indexPath -Encoding UTF8
 Write-Host "  Updated index.json" -ForegroundColor Green
 
+# ── 18. Refresh DASHBOARD.md ─────────────────────────────────────────────────
+$comparePath = Join-Path $SessionsRoot "compare.ps1"
+if (Test-Path $comparePath) {
+    Write-Host ""
+    Write-Host "─────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    & $comparePath -SessionsRoot (Resolve-Path $SessionsRoot).Path -Count 10
+    Write-Host "─────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+}
+
 # ?? 18. List files and finish ????????????????????????????????????????????????
 $files = Get-ChildItem -Path $sessionDir -Recurse -File
 Write-Host ""
