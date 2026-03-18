@@ -1,4 +1,4 @@
-# compare.ps1 — Phase 7-A: Cross-session regression detector
+﻿# compare.ps1 — Phase 7-A: Cross-session regression detector
 #
 # Reads sessions/index.json and produces a side-by-side comparison table
 # covering the last N sessions (default: all available, capped at 10).
@@ -30,7 +30,7 @@ $parsed  = ConvertFrom-Json $rawJson
 $allSessions = if ($parsed -is [System.Array]) { @($parsed) } elseif ($null -ne $parsed) { @($parsed) } else { @() }
 
 if ($allSessions.Count -eq 0) {
-    Write-Host "index.json is empty — run save-session.ps1 first." -ForegroundColor Yellow
+    Write-Host "index.json is empty - run save-session.ps1 first." -ForegroundColor Yellow
     exit 0
 }
 
@@ -47,7 +47,7 @@ if ($selected.Count -eq 0) {
 }
 
 Write-Host ""
-Write-Host "=== MCP Factory — Session Comparison ===" -ForegroundColor Cyan
+Write-Host "=== MCP Factory - Session Comparison ===" -ForegroundColor Cyan
 Write-Host "  Comparing $($selected.Count) session(s)" -ForegroundColor DarkCyan
 Write-Host ""
 
@@ -136,7 +136,7 @@ $dashPath = Join-Path $SessionsRoot "DASHBOARD.md"
 $md       = [System.Collections.Generic.List[string]]::new()
 $ts       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-$md.Add("# MCP Factory — Session Dashboard")
+$md.Add("# MCP Factory - Session Dashboard")
 $md.Add("")
 $md.Add("> Auto-generated $ts · ``compare.ps1``  ")
 $md.Add("> Re-run ``.\sessions\compare.ps1`` or capture a new session to refresh.")
@@ -220,8 +220,8 @@ if ($selected.Count -ge 2) {
     $ll = if ($last.folder.Length  -gt 19) { "…" + $last.folder.Substring($last.folder.Length  - 16) } else { $last.folder }
     $md.Add("## Trends")
     $md.Add("")
-    $md.Add("| Metric | $fl | $ll | Δ |")
-    $md.Add("|--------|------|------|---|")
+    $md.Add("| Metric | $fl | $ll | Change |")
+    $md.Add("|--------|------|------|--------|")
     # Vocab completeness
     $v1 = if ($null -ne $first.vocab_completeness) { [double]$first.vocab_completeness } else { $null }
     $v2 = if ($null -ne $last.vocab_completeness)  { [double]$last.vocab_completeness  } else { $null }
@@ -254,3 +254,4 @@ Write-Host "  Saved sessions/DASHBOARD.md" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green
+
