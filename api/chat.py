@@ -158,6 +158,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
     # Load vocab accumulated during exploration (id formats, conventions, etc.)
     vocab_block = ""
     _domain_preamble = ""
+    _id_formats: list = []
     if job_id:
         try:
             from api.storage import _download_blob
@@ -171,6 +172,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
                 _vocab_for_block = {k: v for k, v in _vocab.items()
                                     if k not in ("description", "user_context")}
                 vocab_block = "\n" + _vocab_block(_vocab_for_block) + "\n"
+                _id_formats = list(_vocab.get("id_formats") or [])
                 # Extract domain framing to inject BEFORE the rules so the model
                 # reads business context first, then interprets rules through that lens.
                 _desc = (_vocab.get("description") or "").strip()
@@ -184,6 +186,25 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
                     _domain_preamble = "\n".join(_preamble_lines) + "\n\n"
         except Exception:
             pass  # vocab not yet built or blob miss — fine
+
+    # Build DLL-specific enforcement rules from vocab.
+    _id_format_rule = ""
+    if _id_formats:
+        _fmts = ", ".join(str(f) for f in _id_formats)
+        _id_format_rule = (
+            "ID FORMAT RULE:\n"
+            f"   Valid ID patterns for this component: {_fmts}. "
+            "Before passing any string argument to a DLL function, verify it matches one of these. "
+            "If the value does not match (e.g. 'ABC', 'LOCKED', 'test', or a bare number), "
+            "do NOT call the function — tell the user the value is invalid and show the correct formats.\n"
+        )
+    _error_code_rule = (
+        "ERROR CODE RULE:\n"
+        "   Before interpreting ANY non-zero integer return value — whether from a live call or a "
+        "user question like 'what does 0xFFFFFFFC mean?' — ALWAYS consult error_codes in vocab first. "
+        "NEVER describe a return value as 'access violation' or guess its meaning without first "
+        "looking it up. If it is listed in error_codes, state that exact meaning.\n"
+    )
 
     # Load any findings from previous sessions for this job.
     prior = _load_findings(job_id) if job_id else []
@@ -259,7 +280,9 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "3. Never launch an application that is already open — call the launch tool only once per session.\n"
             "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
-            "OUTPUT BUFFER RULE (critical for DLL functions):\n"
+            + _id_format_rule
+            + _error_code_rule
+            + "OUTPUT BUFFER RULE (critical for DLL functions):\n"
             "   Params typed as undefined*, undefined4*, undefined8*, uint*, or int* that are output "
             "buffers must NEVER be included in tool call arguments. Omit them entirely; the executor "
             "auto-allocates the buffer and returns their value as 'param_N=<value>' in the result. "
@@ -426,6 +449,20 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
             except Exception as _se:
                 logger.warning("[%s] stream_chat: semantic retrieval failed: %s", job_id, _se)
                 _active_tools = _keyword_filter_tools(_last_user_message, tools, _AI_SEARCH_TOP_K)
+
+        # Load vocab error_codes once so the executor can annotate DLL-specific
+        # return codes beyond the five hardcoded sentinels (e.g. a DLL with its
+        # own error table distinct from the contoso_cs defaults).
+        _vocab_sentinels: dict | None = None
+        if job_id:
+            try:
+                from api.storage import _download_blob as _dvb
+                from api.config import ARTIFACT_CONTAINER as _ac
+                import json as _jv
+                _vraw = _jv.loads(_dvb(_ac, f"{job_id}/vocab.json"))
+                _vocab_sentinels = _vraw.get("error_codes") if _vraw else None
+            except Exception:
+                pass
 
         for _round in range(MAX_TOOL_ROUNDS):
             # ── Per-round semantic re-selection ────────────────────────────
@@ -630,7 +667,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     _tool_t0 = time.perf_counter()
                     _tool_trace: dict | None = None
                     _tool_future = loop.run_in_executor(
-                        None, lambda i=inv, a=fn_args: _execute_tool_traced(i, a)
+                        None, lambda i=inv, a=fn_args: _execute_tool_traced(i, a, _vocab_sentinels)
                     )
                     while True:
                         try:

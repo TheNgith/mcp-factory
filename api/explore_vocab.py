@@ -67,7 +67,9 @@ def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dic
         if start != -1 and end != -1:
             updates = json.loads(text[start : end + 1])
             # Merge: lists are deduplicated-extended, dicts are deep-merged, scalars overwritten
+            import datetime as _dt
             for k, v in updates.items():
+                _is_new = k not in vocab
                 if isinstance(v, list) and isinstance(vocab.get(k), list):
                     existing = set(vocab[k])
                     vocab[k] = vocab[k] + [x for x in v if x not in existing]
@@ -75,6 +77,10 @@ def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dic
                     vocab[k].update(v)
                 elif v:
                     vocab[k] = v
+                # Record when a key first appeared so SUMMARY.md can show vocab age.
+                if _is_new and v:
+                    ts = vocab.setdefault("_timestamps", {})
+                    ts[k] = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         pass
     return vocab
@@ -367,7 +373,7 @@ def _vocab_block(vocab: dict) -> str:
         lines.append(f"  notes: {vocab['notes']}")
 
     # ── Tier 5: everything else (skip preamble keys already emitted) ─────────
-    _emitted = {"description", "user_context", "id_formats", "error_codes", "value_semantics", "notes"}
+    _emitted = {"description", "user_context", "id_formats", "error_codes", "value_semantics", "notes", "_timestamps"}
     for k, v in vocab.items():
         if k in _emitted:
             continue

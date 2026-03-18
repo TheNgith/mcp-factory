@@ -76,7 +76,7 @@ def _resolve_dll_path(raw: str) -> str:
     return raw  # let ctypes emit the real error
 
 
-def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
+def _execute_dll(inv: dict, execution: dict, args: dict, extra_sentinels: dict | None = None) -> tuple[str, dict]:
     if not IS_WINDOWS:
         return (
             "DLL execution is only supported on Windows.",
@@ -162,7 +162,7 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
                 )
                 is_out = is_ptr and not is_const and _val_blank
 
-                if is_out and ptype_base in _OUT_BUF_BASES:
+                if is_out and (ptype_base in _OUT_BUF_BASES or ptype_base == "char"):
                     # undefined* — plain char* output buffer.
                     # Look ahead: the next uint param is the buffer-size arg; always
                     # supply ≥4096 so the DLL doesn't refuse or overflow on size=0.
@@ -189,8 +189,9 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
                     c_args.append(sbuf)
                     out_str_bufs.append((pname, sbuf))
                 elif is_out and (ptype_base in _OUT_SCALAR_BASES or
-                                 ptype_base in ("byte", "char", "uchar")):
+                                 ptype_base in ("byte", "uchar")):
                     # Scalar output slot (undefined4 *, uint *, etc.)
+                    # Note: char* is NOT here — it routes to create_string_buffer above.
                     s_ctype = _SCALAR_PTR_MAP.get(ptype_base, ctypes.c_ulong)
                     scalar  = s_ctype(0)
                     c_args.append(ctypes.byref(scalar))
@@ -225,8 +226,10 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
         result = fn(*c_args)
         _dt_ms = (time.perf_counter() - _t0_call) * 1000.0
 
-        # Annotate well-known Windows error sentinels in the output so the LLM
-        # does not have to memorise numeric values.
+        # Build sentinel lookup: hardcoded defaults merged with DLL-specific vocab
+        # error_codes so any DLL's custom return codes get annotated, not just the
+        # five contoso_cs values.  setdefault keeps hardcoded meanings if vocab
+        # repeats the same key with a different phrasing.
         _SENTINEL_NOTES: dict[int, str] = {
             0xFFFFFFFF: "sentinel: not found/invalid",
             0xFFFFFFFE: "sentinel: null argument",
@@ -234,10 +237,21 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
             0xFFFFFFFC: "sentinel: account locked",
             0xFFFFFFFB: "sentinel: write denied",
         }
+        if extra_sentinels:
+            for _sk, _sv in extra_sentinels.items():
+                try:
+                    _skey = int(_sk, 16) if isinstance(_sk, str) else int(_sk)
+                    _SENTINEL_NOTES.setdefault(_skey, str(_sv))
+                except (ValueError, TypeError):
+                    pass
         _r32 = result & 0xFFFFFFFF
         _note = _SENTINEL_NOTES.get(_r32, "")
+        # When ctypes uses a signed restype (c_int, c_long) and the DLL returns
+        # e.g. 0xFFFFFFFC, Python reports -4.  Show the hex form so the model
+        # can match against hex vocab entries like error_codes["0xFFFFFFFC"].
+        _hex_form = f" (= 0x{_r32:08X})" if result < 0 else ""
         output_parts: list[str] = [
-            f"Returned: {result}" + (f" ({_note})" if _note else "")
+            f"Returned: {result}" + _hex_form + (f", {_note}" if _note else "")
         ]
         for buf_name, sbuf in out_str_bufs:
             txt = sbuf.value
@@ -633,11 +647,15 @@ def _execute_tool(inv: dict, args: dict) -> str:
     return result
 
 
-def _execute_tool_traced(inv: dict, args: dict) -> dict:
+def _execute_tool_traced(inv: dict, args: dict, extra_sentinels: dict | None = None) -> dict:
     """Like _execute_tool but captures the per-backend execution trace.
 
     Returns {"result_str": str, "trace": dict | None}.  Synthetic tools
     (record_finding, enrich_invocable) always set trace to None.
+
+    extra_sentinels: optional dict mapping hex-string or int keys to meanings,
+    merged with the hardcoded sentinel table so DLL-specific error codes get
+    annotated in every tool result string the model sees.
     """
     name      = inv.get("name", "")
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
@@ -654,7 +672,7 @@ def _execute_tool_traced(inv: dict, args: dict) -> dict:
         result, trace = _call_execute_bridge(inv, args)
         return {"result_str": result or "Bridge returned an empty result.", "trace": trace}
     if method == "dll_import":
-        result, trace = _execute_dll(inv, execution, args)
+        result, trace = _execute_dll(inv, execution, args, extra_sentinels)
         return {"result_str": result, "trace": trace}
     if method == "gui_action":
         result, trace = _execute_gui(execution, name, args)
