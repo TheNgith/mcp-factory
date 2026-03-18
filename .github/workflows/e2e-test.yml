@@ -1,0 +1,155 @@
+# .github/workflows/e2e-test.yml
+#
+# End-to-end regression test: runs after every push to main that touches api/ or sessions/.
+# Uploads contoso_cs.dll, runs discovery, submits answers, runs 28 prompts, scores.
+#
+# Required GitHub Secrets (Settings -> Secrets -> Actions):
+#   PIPELINE_API_URL   -- https://mcp-factory-ui.icycoast-8ddfa278.eastus.azurecontainerapps.io
+#   PIPELINE_API_KEY   -- your X-API-Key value (from Key Vault or env)
+#
+# DLL delivery: contoso_cs.dll is stored as a GitHub Release asset (no size limit).
+#   One-time setup:
+#     1. Go to https://github.com/evanking12/mcp-factory/releases/new
+#     2. Tag: test-binaries  |  Title: Test Binaries  |  check "Set as pre-release"
+#     3. Attach contoso_cs.dll and publish
+#   To update the DLL later: edit the release and re-upload the file.
+#   GITHUB_TOKEN (automatic) is used to download -- no extra secrets needed.
+#
+# The bridge VM must be running and reachable for DLL execution to work.
+# If the bridge is down, Generate will still succeed but Discover will fail on DLL calls.
+
+name: E2E Regression Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - 'sessions/CONTOSO_CS_ANSWERS.json'
+      - 'sessions/CONTOSO_CS_TEST_SUITE.md'
+  workflow_dispatch:
+    inputs:
+      skip_discover:
+        description: 'Skip discovery (use existing job_id)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      existing_job_id:
+        description: 'Existing job ID to reuse (only used when skip_discover=true)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to commit session snapshot back to repo
+  id-token: write
+
+jobs:
+  e2e:
+    name: E2E DLL Test
+    runs-on: windows-latest   # PowerShell 5.1 + Windows needed to run ci-run.ps1
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for git log in save-session.ps1
+
+      # ── 2. Download contoso_cs.dll from GitHub Release ───────────────────────
+      - name: Download DLL from release
+        if: ${{ github.event.inputs.existing_job_id == '' }}
+        shell: pwsh
+        run: |
+          gh release download test-binaries --pattern "contoso_cs.dll" --dir "$env:RUNNER_TEMP" --clobber
+          $size = (Get-Item "$env:RUNNER_TEMP\contoso_cs.dll").Length
+          Write-Host "Downloaded contoso_cs.dll ($([int]($size/1KB)) KB)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 3. Run full E2E pipeline ──────────────────────────────────────────────
+      - name: Run E2E pipeline
+        shell: pwsh
+        run: |
+          $dllPath = "$env:RUNNER_TEMP\contoso_cs.dll"
+          $skipUpload   = '${{ github.event.inputs.existing_job_id }}' -ne ''
+          $existingJob  = '${{ github.event.inputs.existing_job_id }}'
+          $skipDiscover = '${{ github.event.inputs.skip_discover }}' -eq 'true'
+
+          $args = @(
+            "-ApiUrl",   $env:PIPELINE_API_URL,
+            "-ApiKey",   $env:PIPELINE_API_KEY,
+            "-FailOnRegress"
+          )
+
+          if ($skipUpload -and $existingJob) {
+            $args += @("-SkipUpload", "-JobId", $existingJob)
+          } elseif (Test-Path $dllPath) {
+            $args += @("-DllPath", $dllPath)
+          } else {
+            Write-Host "No DLL and no existing job -- aborting" -ForegroundColor Red
+            exit 1
+          }
+
+          if ($skipDiscover) { $args += "-SkipDiscover" }
+
+          # SkipSave in CI -- we commit the session folder ourselves below
+          $args += "-SkipSave"
+
+          & .\sessions\ci-run.ps1 @args
+          exit $LASTEXITCODE
+        env:
+          PIPELINE_API_URL: ${{ secrets.PIPELINE_API_URL }}
+          PIPELINE_API_KEY: ${{ secrets.PIPELINE_API_KEY }}
+
+      # ── 4. Save session snapshot (runs even if step 3 failed) ────────────────
+      - name: Save session snapshot
+        if: always()
+        shell: pwsh
+        run: |
+          # Find the most recent _runs/{job_id} folder
+          $runs = Get-ChildItem sessions\_runs -Directory -ErrorAction SilentlyContinue |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -First 1
+          if (-not $runs) { Write-Host "No run folder found"; exit 0 }
+
+          $jobId = $runs.Name
+          $transcriptPath = Join-Path $runs.FullName "chat_transcript.txt"
+
+          if (Test-Path $transcriptPath) {
+            & .\scripts\save-session.ps1 `
+              -ApiUrl  $env:PIPELINE_API_URL `
+              -JobId   $jobId `
+              -TranscriptPath $transcriptPath
+          } else {
+            Write-Host "No transcript found in $($runs.FullName)"
+          }
+        env:
+          PIPELINE_API_URL: ${{ secrets.PIPELINE_API_URL }}
+          PIPELINE_API_KEY: ${{ secrets.PIPELINE_API_KEY }}
+
+      # ── 5. Commit session + TEST_RESULTS back to repo ────────────────────────
+      - name: Commit session data
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sessions/
+          $status = git status --porcelain
+          if ($status) {
+            git commit -m "ci: auto-session snapshot $(Get-Date -Format 'yyyy-MM-dd HH:mm') [skip ci]"
+            git push
+            Write-Host "Session data committed and pushed"
+          } else {
+            Write-Host "Nothing new to commit"
+          }
+
+      # ── 6. Upload TEST_RESULTS.md as artifact ────────────────────────────────
+      - name: Upload test results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: sessions/_runs/**/TEST_RESULTS.md
+          if-no-files-found: warn
