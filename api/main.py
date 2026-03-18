@@ -191,6 +191,7 @@ async def analyze_path(body: dict[str, Any]):
         "message": f"Queued analysis for {target.name}",
         "hints": hints,
         "use_cases": use_cases,
+        "component_name": target.stem,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -251,6 +252,7 @@ async def analyze(
         "message": f"Queued analysis for {original_name}",
         "hints": hints,
         "use_cases": use_cases,
+        "component_name": Path(file.filename).stem,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -674,7 +676,19 @@ async def session_snapshot(job_id: str):
         except Exception:
             zf.writestr("chat_transcript.txt",
                         "(No transcript recorded yet. Start a chat session to generate one.)")
+        # ── Executor trace (structured per-call diagnostics) ───────────
+        try:
+            zf.writestr("executor_trace.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/executor_trace.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
 
+        # ── Raw diagnosis records (one per chat message) ───────────────
+        try:
+            zf.writestr("diagnosis_raw.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/diagnosis_raw.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
         # ── Session metadata ───────────────────────────────────────────────────
         meta = {
             "job_id":        job_id,

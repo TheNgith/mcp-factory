@@ -30,8 +30,8 @@ from typing import Any, AsyncGenerator
 from fastapi import HTTPException
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_CHAT_MODEL
-from api.executor import _execute_tool
-from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable
+from api.executor import _execute_tool, _execute_tool_traced
+from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable, _append_diagnosis_raw, _append_executor_trace
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
@@ -551,9 +551,30 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 if job_id and _last_user_message and _final_text:
                     try:
                         from api.storage import _append_transcript as _at
+                        _tl_snap = list(_tool_log)
                         loop.run_in_executor(
                             None,
-                            lambda u=_last_user_message, a=_final_text, tl=list(_tool_log): _at(job_id, u, a, tl),
+                            lambda u=_last_user_message, a=_final_text, tl=_tl_snap: _at(job_id, u, a, tl),
+                        )
+                        # Persist structured executor traces
+                        _trace_entries = [e["trace"] for e in _tl_snap if e.get("trace")]
+                        if _trace_entries:
+                            loop.run_in_executor(
+                                None,
+                                lambda te=_trace_entries: _append_executor_trace(job_id, te),
+                            )
+                        # Build and persist a per-message diagnosis record
+                        _diag_record = {
+                            "user_message":  (_last_user_message or "")[:200],
+                            "tools_called":  [e["call"] for e in _tl_snap],
+                            "sentinel_hits": sum(1 for e in _tl_snap if "4294967295" in str(e.get("result", ""))),
+                            "dll_errors":    sum(1 for e in _tl_snap if "DLL call error" in str(e.get("result", ""))),
+                            "round_count":   _round + 1,
+                            "recorded_at":   time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        }
+                        loop.run_in_executor(
+                            None,
+                            lambda d=_diag_record: _append_diagnosis_raw(job_id, d),
                         )
                     except Exception:
                         pass
@@ -596,7 +617,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     fn_args = {}
 
                 yield _sse({"type": "tool_call", "name": fn_name, "args": fn_args})
-                _tool_log.append({"call": fn_name, "args": fn_args, "result": None})
+                _tool_log.append({"call": fn_name, "args": fn_args, "result": None, "trace": None})
 
                 inv = inv_map.get(fn_name)
                 if inv is None and job_id:
@@ -607,18 +628,22 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     # run in executor so the SSE response stays live.
                     _TOOL_HARD_TIMEOUT = 30  # seconds; DLL/COM/GUI calls can hang
                     _tool_t0 = time.perf_counter()
+                    _tool_trace: dict | None = None
                     _tool_future = loop.run_in_executor(
-                        None, lambda i=inv, a=fn_args: _execute_tool(i, a)
+                        None, lambda i=inv, a=fn_args: _execute_tool_traced(i, a)
                     )
                     while True:
                         try:
-                            tool_result = await asyncio.wait_for(
+                            _traced = await asyncio.wait_for(
                                 asyncio.shield(_tool_future), timeout=5.0
                             )
+                            tool_result = _traced["result_str"]
+                            _tool_trace = _traced.get("trace")
                             break
                         except asyncio.TimeoutError:
                             if time.perf_counter() - _tool_t0 > _TOOL_HARD_TIMEOUT:
                                 tool_result = f"Tool '{fn_name}' timed out after {_TOOL_HARD_TIMEOUT}s — the call may have hung (COM/DLL deadlock or blocking dialog)."
+                                _tool_trace = {"backend": "timeout", "latency_ms": _TOOL_HARD_TIMEOUT * 1000}
                                 break
                             yield _sse({
                                 "type": "status",
@@ -640,6 +665,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
                 if _tool_log:
                     _tool_log[-1]["result"] = tool_result
+                    _tool_log[-1]["trace"] = _tool_trace
                 logger.info(
                     "[stream_chat/%d] tool=%s latency=%.1f ms result=%s",
                     _round,

@@ -112,6 +112,82 @@ Move-Item $tempDir $sessionDir
 Write-Host "  Folder : $sessionDir"
 Write-Host ""
 
+# ── 4-A. delta.md ────────────────────────────────────────────
+# Compare new session against the most recent previous one
+$prevSession = Get-ChildItem $SessionsRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $sessionDir } |
+    Sort-Object Name -Descending | Select-Object -First 1
+
+if ($prevSession) {
+    $prevFindings = @()
+    $prevFindPath = Join-Path $prevSession.FullName "artifacts\findings.json"
+    if (Test-Path $prevFindPath) {
+        try { $prevFindings = @(Get-Content $prevFindPath -Raw | ConvertFrom-Json) } catch { }
+    }
+    $prevVocab = $null
+    $prevVocabPath = Join-Path $prevSession.FullName "artifacts\vocab.json"
+    if (Test-Path $prevVocabPath) {
+        try { $prevVocab = Get-Content $prevVocabPath -Raw | ConvertFrom-Json } catch { }
+    }
+
+    # Build prev function->status map
+    $prevFnStatus = @{}
+    foreach ($f in $prevFindings) { if ($f.function) { $prevFnStatus[$f.function] = $f.status } }
+
+    $dm  = "# Delta: $($prevSession.Name) -> $folderName`n`n"
+    $dm += "**Previous session:** $($prevSession.Name)`n"
+    $dm += "**New session:** $folderName`n`n---`n`n"
+
+    # Findings changes
+    $gainedFns = @(); $lostFns = @(); $unchangedFns = @()
+    $prevFindDir = Join-Path $sessionDir "artifacts\findings.json"
+    $newFindings = @()
+    if (Test-Path $prevFindDir) { try { $newFindings = @(Get-Content $prevFindDir -Raw | ConvertFrom-Json) } catch { } }
+    $newFnStatus = @{}
+    foreach ($f in $newFindings) { if ($f.function) { $newFnStatus[$f.function] = $f.status } }
+
+    foreach ($fn in @($newFnStatus.Keys)) {
+        if ($newFnStatus[$fn] -eq "success") {
+            if (-not $prevFnStatus.ContainsKey($fn) -or $prevFnStatus[$fn] -ne "success") {
+                $gainedFns += $fn
+            } else { $unchangedFns += $fn }
+        }
+    }
+    foreach ($fn in @($prevFnStatus.Keys)) {
+        if ($prevFnStatus[$fn] -eq "success" -and (-not $newFnStatus.ContainsKey($fn) -or $newFnStatus[$fn] -ne "success")) {
+            $lostFns += $fn
+        }
+    }
+
+    $dm += "## Findings delta`n`n"
+    $dm += "| Change | Functions |`n|---|---|`n"
+    $dm += "| Newly working (✅) | " + (if ($gainedFns.Count) { $gainedFns -join ", " } else { "(none)" }) + " |`n"
+    $dm += "| Regressed (❌) | " + (if ($lostFns.Count) { $lostFns -join ", " } else { "(none)" }) + " |`n"
+    $dm += "| Unchanged (✅) | " + $unchangedFns.Count + " function(s) |`n`n"
+
+    # Vocab changes
+    $dm += "## Vocab delta`n`n"
+    if ($null -ne $prevVocab) {
+        $prevIds = @($prevVocab.id_formats) -join ", "
+        $newIds  = if ($vocab) { @($vocab.id_formats) -join ", " } else { "(not yet parsed)" }
+        $prevEc  = if ($prevVocab.error_codes) { @($prevVocab.error_codes.PSObject.Properties | Select-Object -ExpandProperty Name) } else { @() }
+        $newEc   = if ($null -ne $vocab -and $vocab.error_codes) { @($vocab.error_codes.PSObject.Properties | Select-Object -ExpandProperty Name) } else { @() }
+        $addedEc = $newEc | Where-Object { $_ -notin $prevEc }
+        $removedEc = $prevEc | Where-Object { $_ -notin $newEc }
+        $dm += "| Field | Previous | New |`n|---|---|---|`n"
+        $dm += "| id_formats | $prevIds | $newIds |`n"
+        $dm += "| error_codes added | | " + (if ($addedEc) { $addedEc -join ", " } else { "(none)" }) + " |`n"
+        $dm += "| error_codes removed | " + (if ($removedEc) { $removedEc -join ", " } else { "(none)" }) + " | |`n"
+    } else {
+        $dm += "(no previous vocab to compare)`n"
+    }
+
+    Set-Content -Path (Join-Path $sessionDir "delta.md") -Value $dm -Encoding UTF8
+    Write-Host "  Wrote delta.md (prev=$($prevSession.Name))" -ForegroundColor Green
+} else {
+    Write-Host "  Skipped delta.md (no previous session)" -ForegroundColor DarkYellow
+}
+
 # ?? 8. Stamp commit into session-meta.json ???????????????????????????????????
 $metaPath = Join-Path $sessionDir "session-meta.json"
 if (Test-Path $metaPath) {
@@ -138,6 +214,7 @@ Write-Host "  Wrote code-changes.md" -ForegroundColor Green
 # ?? 10. Parse findings.json ??????????????????????????????????????????????????
 $successCount = 0; $partialCount = 0; $failedCount = 0; $totalFindings = 0
 $workingBlock = "(none recorded)"
+$functionStatus = @{}   # fn_name -> latest status (Phase 5-A)
 $findPath = Join-Path $sessionDir "artifacts\findings.json"
 if (Test-Path $findPath) {
     try {
@@ -150,6 +227,7 @@ if (Test-Path $findPath) {
                 if ($st -eq "success") { $successCount++ }
                 elseif ($st -eq "partial") { $partialCount++ }
                 elseif ($st -eq "failed")  { $failedCount++ }
+                if ($f.function) { $functionStatus[$f.function] = $st }
             }
             $wlines = @()
             foreach ($f in $arr) {
@@ -166,15 +244,71 @@ if (Test-Path $findPath) {
 # ?? 11. Parse vocab.json ?????????????????????????????????????????????????????
 $knownIds = "(none recorded)"
 $vocabPath = Join-Path $sessionDir "artifacts\vocab.json"
+$vocab = $null   # kept in scope for vocab_coverage and SUMMARY
 if (Test-Path $vocabPath) {
     try {
         $vocab = Get-Content $vocabPath -Raw | ConvertFrom-Json
-        $ids = $vocab.known_ids
-        if ($ids) {
-            $names = @($ids.PSObject.Properties | Select-Object -ExpandProperty Name)
-            if ($names.Count -gt 0) { $knownIds = $names -join ", " }
+        # id_formats is a root-level array: ["CUST-NNN", "LOCKED", "ORD-YYYYMMDD-NNNN"]
+        $ids = $vocab.id_formats
+        if ($ids) { $knownIds = (@($ids) | Where-Object { $_ }) -join ", " }
+    } catch { }
+}
+# Phase 5-C: vocab completeness = fraction of params with a human semantic name
+$vocabCompleteness = $null
+$invMapPath = Join-Path $sessionDir "artifacts\invocables_map.json"
+if (Test-Path $invMapPath) {
+    try {
+        $invMap = Get-Content $invMapPath -Raw | ConvertFrom-Json
+        $totalParams = 0; $namedParams = 0
+        foreach ($prop in $invMap.PSObject.Properties) {
+            foreach ($p in @($prop.Value.parameters)) {
+                $totalParams++
+                if ($p.name -and $p.name -notmatch '^param_\d+$') { $namedParams++ }
+            }
+        }
+        if ($totalParams -gt 0) {
+            $vocabCompleteness = [Math]::Round($namedParams / $totalParams, 2)
         }
     } catch { }
+}
+
+# ── 11.5. vocab_coverage.json (Phase 2-A) ──────────────────────────────────
+# Check which vocab entries from vocab.json actually appear in model_context.txt
+$vocabCoverageScore = $null
+$contextPath = Join-Path $sessionDir "model_context.txt"
+if ($null -ne $vocab -and (Test-Path $contextPath)) {
+    try {
+        $contextText = Get-Content $contextPath -Raw
+        $ecTotal = 0; $ecInjected = 0; $ecMissing = @()
+        if ($vocab.error_codes) {
+            foreach ($key in $vocab.error_codes.PSObject.Properties.Name) {
+                $ecTotal++
+                if ($contextText -match [regex]::Escape($key)) { $ecInjected++ }
+                else { $ecMissing += $key }
+            }
+        }
+        $idInjected = $false
+        if ($vocab.id_formats) {
+            $idSample = @($vocab.id_formats)[0]
+            if ($idSample) { $idInjected = $contextText -match [regex]::Escape($idSample) }
+        }
+        $vsKeys = @()
+        if ($vocab.value_semantics) { $vsKeys = @($vocab.value_semantics.PSObject.Properties.Name) }
+        $vocabCoverageScore = if ($ecTotal -gt 0) { [Math]::Round($ecInjected / $ecTotal, 2) } else { 1.0 }
+        $vc = [PSCustomObject]@{
+            error_codes_total    = $ecTotal
+            error_codes_injected = $ecInjected
+            error_codes_missing  = $ecMissing
+            id_formats_injected  = $idInjected
+            value_semantics_keys = $vsKeys
+            coverage_score       = $vocabCoverageScore
+        }
+        $vc | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $sessionDir "vocab_coverage.json") -Encoding UTF8
+        $cvColor = if ($vocabCoverageScore -lt 1.0) { "Yellow" } else { "Green" }
+        Write-Host "  Wrote vocab_coverage.json (coverage=$vocabCoverageScore)" -ForegroundColor $cvColor
+    } catch {
+        Write-Host "  vocab_coverage.json skipped" -ForegroundColor DarkYellow
+    }
 }
 
 # ?? 12. Parse clarification-questions.md ????????????????????????????????????
@@ -205,6 +339,8 @@ $sm += "| Successful calls | " + $successCount + " |`n"
 $sm += "| Partial | " + $partialCount + " |`n"
 $sm += "| Failed | " + $failedCount + " |`n"
 $sm += "| Gap questions open | " + $gapCount + " |`n"
+$sm += "| Vocab coverage (error codes) | " + (if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
+$sm += "| Vocab completeness (named params) | " + (if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
 $sm += "| Known IDs in vocab | " + $knownIds + " |`n`n---`n`n"
 $sm += "## Working calls confirmed`n`n" + $workingBlock + "`n`n---`n`n"
 $sm += "## Gap questions open`n`n" + $gapBlock + "`n`n---`n`n"
@@ -241,9 +377,64 @@ if (-not (Test-Path $destTranscript)) {
     Write-Host "  chat_transcript.txt present in snapshot" -ForegroundColor Green
 }
 
+# ── 14.5. transcript metrics (Phase 5-B) ──────────────────────────────
+$transcriptMetrics = [PSCustomObject]@{ tool_calls = 0; sentinel_hits = 0; dll_errors = 0 }
+if (Test-Path $destTranscript) {
+    try {
+        $txLines = Get-Content $destTranscript
+        $transcriptMetrics = [PSCustomObject]@{
+            tool_calls    = (@($txLines | Where-Object { $_ -match '^🔧 ' })).Count
+            sentinel_hits = (@($txLines | Where-Object { $_ -match 'Returned: 429496729[345]' })).Count
+            dll_errors    = (@($txLines | Where-Object { $_ -match 'DLL call error' })).Count
+        }
+    } catch { }
+}
+
+# ── 14.75. DIAGNOSIS.json (Phase 3-C) ──────────────────────────────────
+$diagPath = Join-Path $sessionDir "diagnosis_raw.json"
+if (Test-Path $diagPath) {
+    try {
+        $diagRaw = @(Get-Content $diagPath -Raw | ConvertFrom-Json)
+        $categories = @{}
+        $totalSentinels = 0; $totalDllErrors = 0; $totalRounds = 0
+        foreach ($d in $diagRaw) {
+            $totalSentinels += [int]($d.sentinel_hits)
+            $totalDllErrors += [int]($d.dll_errors)
+            $totalRounds    += [int]($d.round_count)
+            if ($d.dll_errors -gt 0) {
+                $cat = "dll_error"
+                $categories[$cat] = [int]($categories[$cat]) + $d.dll_errors
+            }
+            if ($d.sentinel_hits -gt 0) {
+                $cat = "sentinel_0xffff"
+                $categories[$cat] = [int]($categories[$cat]) + $d.sentinel_hits
+            }
+        }
+        $diagOut = [PSCustomObject]@{
+            total_messages  = $diagRaw.Count
+            total_rounds    = $totalRounds
+            total_sentinels = $totalSentinels
+            total_dll_errors = $totalDllErrors
+            failure_categories = $categories
+            verdict = if ($totalSentinels -eq 0 -and $totalDllErrors -eq 0) { "clean" }
+                      elseif ($totalSentinels -gt 5 -or $totalDllErrors -gt 3) { "blocked" }
+                      else { "partial" }
+        }
+        $diagOut | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $sessionDir "DIAGNOSIS.json") -Encoding UTF8
+        Write-Host "  Wrote DIAGNOSIS.json (verdict=$($diagOut.verdict))" -ForegroundColor $(if ($diagOut.verdict -eq 'clean') { 'Green' } elseif ($diagOut.verdict -eq 'blocked') { 'Red' } else { 'Yellow' })
+    } catch {
+        Write-Host "  DIAGNOSIS.json skipped" -ForegroundColor DarkYellow
+    }
+}
+
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
 $templatePath = Join-Path $SessionsRoot "CONTOSO_CS_TEST_SUITE.md"
 $resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
+# Phase 8-A: load diagnosis_raw for pre-filling context in TEST_RESULTS
+$diagRawForTests = @()
+if ($diagPath -and (Test-Path $diagPath)) {
+    try { $diagRawForTests = @(Get-Content $diagPath -Raw | ConvertFrom-Json) } catch { }
+}
 if (Test-Path $templatePath) {
     $tr  = "# Test Results - " + $datePart + "`n`n"
     $tr += "**Session:** " + $folderName + "`n"
@@ -282,6 +473,21 @@ if (Test-Path $templatePath) {
     $tr += "| T27 | Over-redeem points | - | | | - | |`n"
     $tr += "| T28 | LOCKED as ID confusion | | - | - | - | |`n"
     $tr += "`n---`n`n## Notes`n`n> Fill in observations, surprises, and follow-up questions below`n`n-`n"
+    # Phase 8-A: if diagnosis_raw has entries, append a quick-ref summary at the bottom
+    if ($diagRawForTests.Count -gt 0) {
+        $tr += "`n---`n`n## Auto-populated context (from diagnosis_raw.json)`n`n"
+        $tr += "| Turn | Tools called | Sentinels | DLL errors |`n|---|---|---|---|`n"
+        $allToolCalls = [System.Collections.Generic.List[string]]@()
+        foreach ($d in $diagRawForTests) {
+            $tools = if ($d.tools_called) { (@($d.tools_called) -join ", ") } else { "(none)" }
+            $tr += "| $($d.recorded_at) | $tools | $($d.sentinel_hits) | $($d.dll_errors) |`n"
+            foreach ($t in @($d.tools_called)) { if ($t) { $allToolCalls.Add($t) } }
+        }
+        if ($allToolCalls.Count -gt 0) {
+            $uniqueTools = ($allToolCalls | Sort-Object -Unique) -join ", "
+            $tr += "`n**All tools exercised:** $uniqueTools`n"
+        }
+    }
     Set-Content -Path $resultsPath -Value $tr -Encoding UTF8
     Write-Host "  Created TEST_RESULTS.md" -ForegroundColor Green
 } else {
@@ -303,24 +509,38 @@ if (Test-Path $readmePath) {
 # ?? 17. index.json ???????????????????????????????????????????????????????????
 $indexPath = Join-Path $SessionsRoot "index.json"
 $entry = [PSCustomObject]@{
-    date           = $datePart
-    commit         = $commitHash
-    commit_msg     = $commitMsg
-    job_id         = $JobId
-    component      = $component
-    note           = $Note
-    folder         = $folderName
-    finding_counts = [PSCustomObject]@{ success=$successCount; partial=$partialCount; failed=$failedCount; total=$totalFindings }
-    gap_count      = $gapCount
-    known_ids      = $knownIds
-    saved_at       = (Get-Date -Format "o")
+    date               = $datePart
+    commit             = $commitHash
+    commit_msg         = $commitMsg
+    job_id             = $JobId
+    component          = $component
+    note               = $Note
+    folder             = $folderName
+    finding_counts     = [PSCustomObject]@{ success=$successCount; partial=$partialCount; failed=$failedCount; total=$totalFindings }
+    gap_count          = $gapCount
+    known_ids          = $knownIds
+    vocab_completeness = $vocabCompleteness
+    vocab_coverage     = $vocabCoverageScore
+    transcript_metrics = $transcriptMetrics
+    function_status    = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
+    saved_at           = (Get-Date -Format "o")
 }
+# Phase 0-C: robust read — PS5.1 ConvertFrom-Json unwraps 1-element arrays,
+# so we detect the resulting bare object and re-wrap it.
 $existing = @()
 if (Test-Path $indexPath) {
-    try { $existing = @(Get-Content $indexPath -Raw | ConvertFrom-Json) } catch { }
+    try {
+        $rawJson = Get-Content $indexPath -Raw
+        $parsed  = ConvertFrom-Json $rawJson
+        if ($parsed -is [System.Array]) { $existing = $parsed }
+        elseif ($null -ne $parsed)      { $existing = @($parsed) }
+    } catch { $existing = @() }
 }
 $existing += $entry
-$existing | ConvertTo-Json -Depth 5 | Set-Content $indexPath -Encoding UTF8
+# Always emit a JSON array, even for a single entry (works around PS5 serialisation quirk).
+$jsonOut = $existing | ConvertTo-Json -Depth 5
+if ($jsonOut -and $jsonOut.TrimStart()[0] -ne '[') { $jsonOut = "[$jsonOut]" }
+$jsonOut | Set-Content $indexPath -Encoding UTF8
 Write-Host "  Updated index.json" -ForegroundColor Green
 
 # ?? 18. List files and finish ????????????????????????????????????????????????

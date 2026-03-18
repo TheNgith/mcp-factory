@@ -99,6 +99,49 @@ def _append_transcript(job_id: str, user_text: str, assistant_text: str,
         logger.warning("[%s] _append_transcript failed: %s", job_id, exc)
 
 
+def _append_diagnosis_raw(job_id: str, record: dict) -> None:
+    """Append one diagnosis record to {job_id}/diagnosis_raw.json in blob."""
+    try:
+        blob_name = f"{job_id}/diagnosis_raw.json"
+        try:
+            existing = json.loads(
+                _download_blob(ARTIFACT_CONTAINER, blob_name).decode("utf-8", errors="replace")
+            )
+            if not isinstance(existing, list):
+                existing = []
+        except Exception:
+            existing = []
+        existing.append(record)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER, blob_name,
+            json.dumps(existing, indent=2, default=str).encode("utf-8"),
+        )
+    except Exception as exc:
+        logger.warning("[%s] _append_diagnosis_raw failed: %s", job_id, exc)
+
+
+def _append_executor_trace(job_id: str, entries: list) -> None:
+    """Append tool-call trace entries to {job_id}/executor_trace.json in blob."""
+    if not entries:
+        return
+    try:
+        blob_name = f"{job_id}/executor_trace.json"
+        try:
+            existing = json.loads(
+                _download_blob(ARTIFACT_CONTAINER, blob_name).decode("utf-8", errors="replace")
+            )
+            if not isinstance(existing, list):
+                existing = []
+        except Exception:
+            existing = []
+        existing.extend(entries)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER, blob_name,
+            json.dumps(existing, indent=2, default=str).encode("utf-8"),
+        )
+    except Exception as exc:
+        logger.warning("[%s] _append_executor_trace failed: %s", job_id, exc)
+
 
 def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bool:
     """Write job status to in-memory cache and persist to Blob.
@@ -197,12 +240,34 @@ _JOB_FINDINGS_LOCK = threading.Lock()
 
 
 def _save_finding(job_id: str, entry: dict) -> None:
-    """Append a single finding dict to in-memory cache and blob."""
+    """Append a single finding dict to in-memory cache and blob.
+
+    Also tracks per-function attempt/success counts and derives a
+    confidence label ("high" / "medium" / "low") from the history.
+    """
     import datetime
     entry.setdefault("recorded_at", datetime.datetime.utcnow().isoformat() + "Z")
     with _JOB_FINDINGS_LOCK:
         _JOB_FINDINGS.setdefault(job_id, []).append(entry)
         findings = list(_JOB_FINDINGS[job_id])
+
+    # Compute confidence over all entries for this function
+    fn_name = entry.get("function", "")
+    fn_entries = [f for f in findings if f.get("function") == fn_name]
+    attempts = len(fn_entries)
+    successes = sum(1 for f in fn_entries if f.get("status") == "success")
+    ratio = successes / attempts if attempts else 0.0
+    confidence = "high" if ratio >= 0.75 else ("medium" if ratio >= 0.40 else "low")
+    # Back-fill the confidence fields into all entries for this function
+    with _JOB_FINDINGS_LOCK:
+        all_f = _JOB_FINDINGS.get(job_id, [])
+        for f in all_f:
+            if f.get("function") == fn_name:
+                f["attempts"] = attempts
+                f["successes"] = successes
+                f["confidence"] = confidence
+        findings = list(all_f)
+
     try:
         _upload_to_blob(
             ARTIFACT_CONTAINER,

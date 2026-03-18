@@ -76,9 +76,12 @@ def _resolve_dll_path(raw: str) -> str:
     return raw  # let ctypes emit the real error
 
 
-def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
+def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict]:
     if not IS_WINDOWS:
-        return "DLL execution is only supported on Windows."
+        return (
+            "DLL execution is only supported on Windows.",
+            {"backend": "dll", "skipped": "non-windows"},
+        )
     dll_path  = _resolve_dll_path(execution.get("dll_path", ""))
     func_name = execution.get("function_name", "")
 
@@ -218,7 +221,9 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
                 elif isinstance(v, str):
                     c_args.append(ctypes.c_char_p(v.encode()))
 
+        _t0_call = time.perf_counter()
         result = fn(*c_args)
+        _dt_ms = (time.perf_counter() - _t0_call) * 1000.0
 
         # Annotate well-known Windows error sentinels in the output so the LLM
         # does not have to memorise numeric values.
@@ -242,19 +247,45 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
                 output_parts.append(f"{buf_name}={txt!r}")
         for sc_name, scalar in out_scalars:
             output_parts.append(f"{sc_name}={scalar.value}")
-        return "\n".join(output_parts)
+        _trace: dict = {
+            "backend":       "dll",
+            "dll_path":      dll_path,
+            "function_name": func_name,
+            "return_type":   ret_str,
+            "c_args_count":  len(c_args),
+            "out_str_bufs":  [n for n, _ in out_str_bufs],
+            "out_scalars":   [n for n, _ in out_scalars],
+            "raw_result":    result,
+            "latency_ms":    round(_dt_ms, 2),
+            "exception":     None,
+        }
+        return "\n".join(output_parts), _trace
     except Exception as exc:
-        return f"DLL call error: {exc}"
+        import re as _re
+        _addr_m = _re.search(r"0x[0-9a-fA-F]+", str(exc))
+        _trace = {
+            "backend":        "dll",
+            "dll_path":       dll_path,
+            "function_name":  func_name,
+            "exception":      str(exc),
+            "exception_class": type(exc).__name__,
+            "exception_addr": _addr_m.group() if _addr_m else None,
+            "latency_ms":     None,
+        }
+        return f"DLL call error: {exc}", _trace
 
 
-def _execute_cli(execution: dict, name: str, args: dict) -> str:
+def _execute_cli(execution: dict, name: str, args: dict) -> tuple[str, dict]:
     target = (
         execution.get("executable_path")
         or execution.get("target_path")
         or execution.get("dll_path", "")
     )
     if not target:
-        return f"CLI error: no executable path configured for '{name}'"
+        return (
+            f"CLI error: no executable path configured for '{name}'",
+            {"backend": "cli", "exception": "no executable path"},
+        )
 
     exe_stem = Path(target).stem.lower()
     if exe_stem == name.lower():
@@ -267,18 +298,23 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
                 )
             else:
                 subprocess.Popen([target])
-            return (
+            _msg = (
                 f"{Path(target).name} has been launched successfully. "
                 "The application is now open. "
                 "DO NOT call this launch tool again — it is already running. "
                 "Proceed directly to using the other tools to interact with it."
             )
+            return _msg, {"backend": "cli", "action": "launch", "target": target, "exception": None}
         except Exception as exc:
-            return f"CLI error: {exc}"
+            return (
+                f"CLI error: {exc}",
+                {"backend": "cli", "action": "launch", "target": target, "exception": str(exc)},
+            )
 
     cmd = [target, name] + [str(v) for v in args.values()]
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
     try:
+        _t0 = time.perf_counter()
         r = subprocess.run(
             cmd,
             capture_output=True,
@@ -286,36 +322,66 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
             timeout=10,
             creationflags=creation_flags,
         )
-        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+        _dt_ms = (time.perf_counter() - _t0) * 1000.0
+        _trace: dict = {
+            "backend":        "cli",
+            "cmd":            cmd,
+            "exit_code":      r.returncode,
+            "stdout_len":     len(r.stdout or ""),
+            "stderr_excerpt": (r.stderr or "")[:200] or None,
+            "latency_ms":     round(_dt_ms, 2),
+            "timeout_hit":    False,
+            "exception":      None,
+        }
+        return r.stdout or r.stderr or f"exit_code={r.returncode}", _trace
+    except subprocess.TimeoutExpired:
+        _trace = {"backend": "cli", "cmd": cmd, "exit_code": None, "stdout_len": 0,
+                  "stderr_excerpt": None, "latency_ms": None, "timeout_hit": True,
+                  "exception": "TimeoutExpired"}
+        return "CLI error: timed out after 10 s", _trace
     except Exception as exc:
-        return f"CLI error: {exc}"
+        _trace = {"backend": "cli", "cmd": cmd, "exit_code": None, "stdout_len": 0,
+                  "stderr_excerpt": None, "latency_ms": None, "timeout_hit": False,
+                  "exception": str(exc)}
+        return f"CLI error: {exc}", _trace
 
 
-def _execute_gui(execution: dict, name: str, args: dict) -> str:
+def _execute_gui(execution: dict, name: str, args: dict) -> tuple[str, dict]:
     if not IS_WINDOWS:
-        return "GUI actions are only supported on Windows."
+        return (
+            "GUI actions are only supported on Windows.",
+            {"backend": "gui", "skipped": "non-windows"},
+        )
     try:
         from pywinauto.application import Application  # type: ignore
     except ImportError:
-        return "pywinauto is not installed; GUI actions unavailable."
+        return (
+            "pywinauto is not installed; GUI actions unavailable.",
+            {"backend": "gui", "exception": "ImportError: pywinauto"},
+        )
 
     exe_path    = execution.get("exe_path", "")
     action_type = execution.get("action_type", "menu_click")
 
-    # Minimal GUI dispatch — delegates to the generated server's full
-    # implementation when running locally on Windows; here we handle the
-    # most common actions for the cloud demo path.
     if action_type == "close_app":
         try:
             app = Application(backend="uia").connect(path=exe_path, timeout=3)
             app.kill()
-            return "App closed."
+            return (
+                "App closed.",
+                {"backend": "gui", "exe_path": exe_path, "action_type": action_type, "exception": None},
+            )
         except Exception as exc:
-            return f"GUI close error: {exc}"
+            return (
+                f"GUI close error: {exc}",
+                {"backend": "gui", "exe_path": exe_path, "action_type": action_type,
+                 "exception": str(exc), "exception_class": type(exc).__name__},
+            )
 
     return (
         f"GUI action '{action_type}' requested for '{exe_path}'. "
-        "Full GUI automation requires Windows with pywinauto installed."
+        "Full GUI automation requires Windows with pywinauto installed.",
+        {"backend": "gui", "exe_path": exe_path, "action_type": action_type, "exception": None},
     )
 
 
@@ -462,16 +528,15 @@ def _check_bridge_alive() -> bool:
     return _bridge_reachable
 
 
-def _call_execute_bridge(inv: dict, args: dict) -> str | None:
+def _call_execute_bridge(inv: dict, args: dict) -> tuple[str | None, dict]:
     """Forward a tool-call to the Windows VM bridge /execute endpoint.
 
-    Returns the result string on success, or None only when the bridge is not
-    configured.  On a transport/HTTP failure, returns an error string so the
-    caller never silently falls through to Linux execution (which would
-    produce misleading 'No such file or directory' errors for Windows paths).
+    Returns (result_str, trace) on success, or (None, {}) when the bridge is
+    not configured.  On a transport/HTTP failure, returns an error string so
+    the caller never silently falls through to Linux execution.
     """
     if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
-        return None
+        return None, {}
     global _bridge_client
     try:
         client = _get_bridge_client()
@@ -489,18 +554,30 @@ def _call_execute_bridge(inv: dict, args: dict) -> str | None:
             dt_ms,
         )
         result = resp.json().get("result", "")
-        # Server-side probe batching: when the call returns the Windows error
-        # sentinel 0xFFFFFFFF, automatically retry with alternative encodings
-        # so the LLM receives one summary instead of issuing N serial rounds.
+        _probe_triggered = False
         if _ERROR_SENTINEL in str(result):
             result = _probe_bridge(client, inv, args, result)
-        return result
+            _probe_triggered = True
+        _trace = {
+            "backend":         "bridge",
+            "http_status":     resp.status_code,
+            "latency_ms":      round(dt_ms, 2),
+            "probe_triggered": _probe_triggered,
+            "exception":       None,
+        }
+        return result, _trace
     except Exception as exc:
         # Reset the pooled client so the next call gets a fresh connection
         # instead of retrying a dead keepalive socket.
         _bridge_client = None
         logger.warning("[bridge] /execute failed for tool=%s: %s", inv.get("name", "<unknown>"), exc)
-        return f"Bridge /execute error: {exc} — the Windows VM bridge is temporarily unreachable. Try again."
+        _trace = {
+            "backend":         "bridge",
+            "exception":       str(exc),
+            "exception_class": type(exc).__name__,
+        }
+        err = f"Bridge /execute error: {exc}"
+        return err + " \u2014 the Windows VM bridge is temporarily unreachable. Try again.", _trace
 
 
 def _execute_tool(inv: dict, args: dict) -> str:
@@ -544,9 +621,43 @@ def _execute_tool(inv: dict, args: dict) -> str:
     # Windows VM.  Forward to the bridge whenever it is configured; only fall
     # back to local execution when the bridge is absent (e.g., dev on Windows).
     if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
-        return _call_execute_bridge(inv, args) or "Bridge returned an empty result."
+        result, _ = _call_execute_bridge(inv, args)
+        return result or "Bridge returned an empty result."
     if method == "dll_import":
-        return _execute_dll(inv, execution, args)
+        result, _ = _execute_dll(inv, execution, args)
+        return result
     if method == "gui_action":
-        return _execute_gui(execution, name, args)
-    return _execute_cli(execution, name, args)
+        result, _ = _execute_gui(execution, name, args)
+        return result
+    result, _ = _execute_cli(execution, name, args)
+    return result
+
+
+def _execute_tool_traced(inv: dict, args: dict) -> dict:
+    """Like _execute_tool but captures the per-backend execution trace.
+
+    Returns {"result_str": str, "trace": dict | None}.  Synthetic tools
+    (record_finding, enrich_invocable) always set trace to None.
+    """
+    name      = inv.get("name", "")
+    execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
+    method    = execution.get("method", "")
+
+    # Synthetic tools — delegate to _execute_tool, no trace
+    if (
+        method in ("findings", "enrich")
+        or name in ("record_finding", "enrich_invocable")
+    ):
+        return {"result_str": _execute_tool(inv, args), "trace": None}
+
+    if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
+        result, trace = _call_execute_bridge(inv, args)
+        return {"result_str": result or "Bridge returned an empty result.", "trace": trace}
+    if method == "dll_import":
+        result, trace = _execute_dll(inv, execution, args)
+        return {"result_str": result, "trace": trace}
+    if method == "gui_action":
+        result, trace = _execute_gui(execution, name, args)
+        return {"result_str": result, "trace": trace}
+    result, trace = _execute_cli(execution, name, args)
+    return {"result_str": result, "trace": trace}
