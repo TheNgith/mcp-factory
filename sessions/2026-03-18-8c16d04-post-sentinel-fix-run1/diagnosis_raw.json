@@ -1,0 +1,79 @@
+[
+  {
+    "user_message": "**T01**\n> What version of the contoso CRM system is running?\n\n**T02**\n> Is the CRM system currently initialized?\n\n**T03**\n> How many customers and orders are currently tracked?",
+    "tools_called": [
+      "CS_GetVersion",
+      "CS_GetDiagnostics"
+    ],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 2,
+    "recorded_at": "2026-03-18T05:42:45Z"
+  },
+  {
+    "user_message": "Look up customer 7.\n\n**T05**\n> Get the account details for customer 42.\n\n**T06**\n> Process a refund for order ORD-20040301-0042 for customer CUST-001, refund amount $18.50.\n\n**T07**\n> Look up customer",
+    "tools_called": [
+      "CS_ProcessRefund"
+    ],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 2,
+    "recorded_at": "2026-03-18T05:43:57Z"
+  },
+  {
+    "user_message": "**T08**\n> Process a $25.00 payment for CUST-042.\n\n**T09**\n> Issue a $150.99 refund to CUST-007 for order ORD-20260315-0117.\n\n**T10**\n> What is the current balance for CUST-010? Display it in dollars.\n",
+    "tools_called": [],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 1,
+    "recorded_at": "2026-03-18T05:44:12Z"
+  },
+  {
+    "user_message": "**T12**\n> Customer CUST-003 says they can't log in. Diagnose and fix the problem.\n\n**T13**\n> Unlock the account for CUST-010 even though they're already active.\n\n**T14**\n> Process a $30 payment for CU",
+    "tools_called": [],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 1,
+    "recorded_at": "2026-03-18T05:45:00Z"
+  },
+  {
+    "user_message": "**T15**\n> I called CS_ProcessPayment and got back 4294967291. What does that mean and how do I fix it?\n\n**T16**\n> CS_UnlockAccount returned 4294967292. What happened?\n\n**T17**\n> CS_ProcessRefund retur",
+    "tools_called": [],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 1,
+    "recorded_at": "2026-03-18T05:45:10Z"
+  },
+  {
+    "user_message": "**T19**\n> Show me the full profile for customer CUST-001.\n\n**T20**\n> What loyalty tier is CUST-015 on?\n\n**T21**\n> What email and phone number do we have on file for CUST-022?",
+    "tools_called": [
+      "CS_LookupCustomer",
+      "CS_LookupCustomer",
+      "CS_LookupCustomer"
+    ],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 2,
+    "recorded_at": "2026-03-18T05:46:19Z"
+  },
+  {
+    "user_message": "**T22**\n> Customer CUST-042 wants to redeem 500 loyalty points and then process a payment of $25.00. Initialize the system first, check their status, redeem the points, then process the payment.\n\n**T2",
+    "tools_called": [
+      "CS_Initialize",
+      "CS_LookupCustomer",
+      "CS_LookupCustomer"
+    ],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 2,
+    "recorded_at": "2026-03-18T05:47:35Z"
+  },
+  {
+    "user_message": "**T26**\n> Process a $0.00 payment for CUST-001.\n\n**T27**\n> Customer CUST-042 has 300 points. Redeem 500 points for them.\n\n**T28**\n> Look up LOCKED.",
+    "tools_called": [],
+    "sentinel_hits": 0,
+    "dll_errors": 0,
+    "round_count": 1,
+    "recorded_at": "2026-03-18T05:48:12Z"
+  }
+]

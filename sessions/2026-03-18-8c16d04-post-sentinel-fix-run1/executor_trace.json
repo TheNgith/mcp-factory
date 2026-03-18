@@ -1,0 +1,65 @@
+[
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 17.58,
+    "probe_triggered": false,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 47.94,
+    "probe_triggered": false,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 21.31,
+    "probe_triggered": false,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 20.79,
+    "probe_triggered": false,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 51.15,
+    "probe_triggered": true,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 59.29,
+    "probe_triggered": true,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 13.85,
+    "probe_triggered": false,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 48.24,
+    "probe_triggered": true,
+    "exception": null
+  },
+  {
+    "backend": "bridge",
+    "http_status": 200,
+    "latency_ms": 59.24,
+    "probe_triggered": true,
+    "exception": null
+  }
+]

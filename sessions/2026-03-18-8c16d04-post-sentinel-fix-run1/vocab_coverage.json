@@ -1,0 +1,33 @@
+﻿{
+    "error_codes_total":  2,
+    "error_codes_injected":  2,
+    "error_codes_missing":  [
+
+                            ],
+    "id_formats_injected":  true,
+    "value_semantics_keys":  [
+                                 "Returned",
+                                 "version",
+                                 "customers",
+                                 "orders",
+                                 "calls",
+                                 "initialized",
+                                 "param_2",
+                                 "param_4",
+                                 "order",
+                                 "customer",
+                                 "items",
+                                 "subtotal",
+                                 "discount",
+                                 "total",
+                                 "status",
+                                 "id",
+                                 "name",
+                                 "email",
+                                 "phone",
+                                 "balance",
+                                 "points",
+                                 "tier"
+                             ],
+    "coverage_score":  1
+}

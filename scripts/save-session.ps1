@@ -1,4 +1,4 @@
-# save-session.ps1
+﻿# save-session.ps1
 # Capture a point-in-time snapshot of a discovery job into sessions/.
 #
 # Usage:
@@ -161,8 +161,8 @@ if ($prevSession) {
 
     $dm += "## Findings delta`n`n"
     $dm += "| Change | Functions |`n|---|---|`n"
-    $dm += "| Newly working (✅) | " + (if ($gainedFns.Count) { $gainedFns -join ", " } else { "(none)" }) + " |`n"
-    $dm += "| Regressed (❌) | " + (if ($lostFns.Count) { $lostFns -join ", " } else { "(none)" }) + " |`n"
+    $dm += "| Newly working (OK) | " + $(if ($gainedFns.Count) { $gainedFns -join ", " } else { "(none)" }) + " |`n"
+    $dm += "| Regressed (FAIL) | " + $(if ($lostFns.Count) { $lostFns -join ", " } else { "(none)" }) + " |`n"
     $dm += "| Unchanged (✅) | " + $unchangedFns.Count + " function(s) |`n`n"
 
     # Vocab changes
@@ -176,8 +176,8 @@ if ($prevSession) {
         $removedEc = $prevEc | Where-Object { $_ -notin $newEc }
         $dm += "| Field | Previous | New |`n|---|---|---|`n"
         $dm += "| id_formats | $prevIds | $newIds |`n"
-        $dm += "| error_codes added | | " + (if ($addedEc) { $addedEc -join ", " } else { "(none)" }) + " |`n"
-        $dm += "| error_codes removed | " + (if ($removedEc) { $removedEc -join ", " } else { "(none)" }) + " | |`n"
+        $dm += "| error_codes added | | " + $(if ($addedEc) { $addedEc -join ", " } else { "(none)" }) + " |`n"
+        $dm += "| error_codes removed | " + $(if ($removedEc) { $removedEc -join ", " } else { "(none)" }) + " | |`n"
     } else {
         $dm += "(no previous vocab to compare)`n"
     }
@@ -339,8 +339,8 @@ $sm += "| Successful calls | " + $successCount + " |`n"
 $sm += "| Partial | " + $partialCount + " |`n"
 $sm += "| Failed | " + $failedCount + " |`n"
 $sm += "| Gap questions open | " + $gapCount + " |`n"
-$sm += "| Vocab coverage (error codes) | " + (if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
-$sm += "| Vocab completeness (named params) | " + (if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
+$sm += "| Vocab coverage (error codes) | " + $(if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
+$sm += "| Vocab completeness (named params) | " + $(if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
 $sm += "| Known IDs in vocab | " + $knownIds + " |`n`n---`n`n"
 $sm += "## Working calls confirmed`n`n" + $workingBlock + "`n`n---`n`n"
 $sm += "## Gap questions open`n`n" + $gapBlock + "`n`n---`n`n"
@@ -567,3 +567,4 @@ Write-Host "  1. Run test prompts from sessions/CONTOSO_CS_TEST_SUITE.md and fil
 Write-Host "  2. Update SUMMARY.md 'What to investigate next' section"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"
+

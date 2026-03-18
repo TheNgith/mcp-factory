@@ -57,5 +57,85 @@
         "gap_count":  5,
         "known_ids":  "(none recorded)",
         "saved_at":  "2026-03-17T18:50:35.9847537-04:00"
+    },
+    {
+        "date":  "2026-03-18",
+        "commit":  "8c16d04",
+        "commit_msg":  "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
+        "job_id":  "cac5f644",
+        "component":  "unknown",
+        "note":  "post-sentinel-fix-run1",
+        "folder":  "2026-03-18-8c16d04-post-sentinel-fix-run1",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  21
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, ORD-YYYYMMDD-XXXX",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_metrics":  {
+                                   "tool_calls":  9,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  {
+                                "CS_UnlockAccount":  null,
+                                "CS_ProcessPayment":  "pending_refinement",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  null,
+                                "entry":  null,
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-18T01:49:25.9823127-04:00"
+    },
+    {
+        "date":  "2026-03-18",
+        "commit":  "8c16d04",
+        "commit_msg":  "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
+        "job_id":  "cac5f644",
+        "component":  "unknown",
+        "note":  "post-sentinel-fix-run1",
+        "folder":  "2026-03-18-8c16d04-post-sentinel-fix-run1-2",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  21
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, ORD-YYYYMMDD-XXXX",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  {
+                                "CS_UnlockAccount":  null,
+                                "CS_ProcessPayment":  "pending_refinement",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  null,
+                                "entry":  null,
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-18T01:50:27.6839465-04:00"
     }
 ]

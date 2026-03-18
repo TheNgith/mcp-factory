@@ -1,0 +1,309 @@
+{
+  "job_id": "cac5f644",
+  "mcp_version": "1.0",
+  "component": "contoso_cs",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_CalculateInterest",
+        "description": "Calculates interest based on principal, rate, and period. Returns 0 on success with the calculated interest in param_4.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "integer",
+              "description": "Integer input parameter (e.g. 0,)"
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Integer input parameter (e.g. 0,)"
+            },
+            "param_3": {
+              "type": "integer",
+              "description": "Integer input parameter (e.g. 0)"
+            },
+            "param_4": {
+              "type": "string",
+              "description": "Output buffer \u2014 receives result data (omit from call; auto-allocated)"
+            }
+          },
+          "required": [
+            "param_1",
+            "param_2",
+            "param_3"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_GetAccountBalance",
+        "description": "Retrieves the account balance for a given customer ID or email address.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "string",
+              "description": "Pointer to an integer where the account balance in cents will be stored. Example value: 12345 for $123.45."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_GetDiagnostics",
+        "description": "Retrieves diagnostic information about the DLL, including version, customer count, order count, and call statistics.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Pointer to a buffer where diagnostic information will be stored. Example output includes system status and error codes."
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Integer input parameter"
+            }
+          },
+          "required": [
+            "param_2"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_GetLoyaltyPoints",
+        "description": "Retrieves the loyalty points associated with a customer ID. Returns 0 on success with the loyalty points in param_2.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "string",
+              "description": "Pointer to an integer where the loyalty points balance will be stored. Example value: 500 for 500 points."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_GetOrderStatus",
+        "description": "Retrieves detailed information about an order, including customer ID, item count, subtotal, discount, total, and status.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Order ID as a string (e.g., 'ORD-YYYYMMDD-XXXX')."
+            },
+            "param_2": {
+              "type": "string",
+              "description": "Pointer to a buffer where the order status will be stored. Example value: 'DELIVERED'."
+            },
+            "param_3": {
+              "type": "integer",
+              "description": "Buffer size in bytes for the output data."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_GetVersion",
+        "description": "Retrieves the version of the DLL as a packed UINT. Decode as (val>>16)&0xFF . (val>>8)&0xFF . val&0xFF.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_Initialize",
+        "description": "Initializes the DLL and sets up its internal state for subsequent function calls.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_LookupCustomer",
+        "description": "Retrieves detailed customer information based on a customer ID, including name, email, phone, balance, points, tier, and status.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "string",
+              "description": "Pointer to a buffer where customer details will be stored. Example fields include name, email, phone, balance, points, tier, and status."
+            },
+            "param_3": {
+              "type": "integer",
+              "description": "Buffer size in bytes for the output data."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_ProcessPayment",
+        "description": "Processes payments for a given customer ID and amount. Returns 0 on success, indicating payment processing succeeded.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Payment amount in cents (e.g., 10000 for $100.00)."
+            }
+          },
+          "required": [
+            "param_2"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_ProcessRefund",
+        "description": "Processes a refund for a given customer or order ID, with the refund amount specified in cents.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Refund amount in cents as an integer (e.g., 100 for $1.00)."
+            },
+            "param_3": {
+              "type": "string",
+              "description": "Order ID associated with the refund as a string (e.g., 'ORD-YYYYMMDD-XXXX')."
+            },
+            "param_4": {
+              "type": "integer",
+              "description": "Pointer to an integer where the refund confirmation code will be stored. Example value: 12345."
+            }
+          },
+          "required": [
+            "param_2",
+            "param_3"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_RedeemLoyaltyPoints",
+        "description": "Attempts to redeem loyalty points for a given customer ID, but fails with write access denied or account locked errors.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Number of loyalty points to redeem (e.g., 500)."
+            },
+            "param_3": {
+              "type": "integer",
+              "description": "Pointer to an integer where the remaining points balance will be stored after redemption."
+            }
+          },
+          "required": [
+            "param_2"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CS_UnlockAccount",
+        "description": "Attempts to unlock a customer account based on the provided customer ID and account status.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "Customer ID as a string (e.g., 'CUST-001')."
+            },
+            "param_2": {
+              "type": "string",
+              "description": "Account status as a string (e.g., 'LOCKED')."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "entry",
+        "description": "This function returns 0 on success when called with param_2=0 after initialization. Its exact purpose is unclear, but it requires the DLL to be initialized first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param_1": {
+              "type": "string",
+              "description": "DLL instance handle (Windows DllMain param)"
+            },
+            "param_2": {
+              "type": "integer",
+              "description": "Integer input parameter (e.g. 0)"
+            },
+            "param_3": {
+              "type": "string",
+              "description": "Output buffer \u2014 receives result data (omit from call; auto-allocated)"
+            }
+          },
+          "required": [
+            "param_2"
+          ]
+        }
+      }
+    }
+  ]
+}
