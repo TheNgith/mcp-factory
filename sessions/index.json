@@ -1,214 +1,296 @@
-[
-  {
-    "date": "2026-03-17",
-    "commit": "b8e0744",
-    "commit_msg": "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
-    "job_id": "a0fc70e8",
-    "component": "unknown",
-    "note": "unknown-run2",
-    "folder": "2026-03-17-b8e0744-unknown-run2",
-    "finding_counts": {
-      "success": 0,
-      "partial": 0,
-      "failed": 0,
-      "total": 0
+﻿[
+    {
+        "date":  "2026-03-17",
+        "commit":  "33f9114",
+        "commit_msg":  "feat: gap answers auto-trigger refinement, move schema download to Generate section",
+        "job_id":  "a0fc70e8",
+        "component":  "unknown",
+        "note":  "unknown-run2",
+        "folder":  "2026-03-17-33f9114-unknown-run2",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  16
+                           },
+        "gap_count":  5,
+        "known_ids":  "(none recorded)",
+        "saved_at":  "2026-03-17T22:50:35.9847537+00:00"
     },
-    "gap_count": 0,
-    "known_ids": "(none recorded)",
-    "saved_at": "2026-03-17T21:08:36.1809403+00:00"
-  },
-  {
-    "date": "2026-03-17",
-    "commit": "b8e0744",
-    "commit_msg": "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
-    "job_id": "a0fc70e8",
-    "component": "unknown",
-    "note": "unknown-run2",
-    "folder": "2026-03-17-b8e0744-unknown-run2",
-    "finding_counts": {
-      "success": 9,
-      "partial": 0,
-      "failed": 0,
-      "total": 16
+    {
+        "date":  "2026-03-17",
+        "commit":  "b8e0744",
+        "commit_msg":  "fix: use single quotes to avoid smart-quote encoding in save-session.ps1",
+        "job_id":  "a0fc70e8",
+        "component":  "unknown",
+        "note":  "unknown-run2",
+        "folder":  "2026-03-17-b8e0744-unknown-run2",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "saved_at":  "2026-03-17T21:08:36.1809403+00:00"
     },
-    "gap_count": 5,
-    "known_ids": "(none recorded)",
-    "saved_at": "2026-03-17T21:09:10.3383861+00:00"
-  },
-  {
-    "date": "2026-03-17",
-    "commit": "33f9114",
-    "commit_msg": "feat: gap answers auto-trigger refinement, move schema download to Generate section",
-    "job_id": "a0fc70e8",
-    "component": "unknown",
-    "note": "unknown-run2",
-    "folder": "2026-03-17-33f9114-unknown-run2",
-    "finding_counts": {
-      "success": 9,
-      "partial": 0,
-      "failed": 0,
-      "total": 16
+    {
+        "date":  "2026-03-18",
+        "commit":  "8c16d04",
+        "commit_msg":  "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
+        "job_id":  "cac5f644",
+        "component":  "unknown",
+        "note":  "post-sentinel-fix-run1",
+        "folder":  "2026-03-18-8c16d04-post-sentinel-fix-run1",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  21
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, ORD-YYYYMMDD-XXXX",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_metrics":  {
+                                   "tool_calls":  9,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  {
+                                "CS_UnlockAccount":  null,
+                                "CS_ProcessPayment":  "pending_refinement",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  null,
+                                "entry":  null,
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-18T05:49:25.9823127+00:00"
     },
-    "gap_count": 5,
-    "known_ids": "(none recorded)",
-    "saved_at": "2026-03-17T22:50:35.9847537+00:00"
-  },
-  {
-    "date": "2026-03-18",
-    "commit": "8c16d04",
-    "commit_msg": "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
-    "job_id": "cac5f644",
-    "component": "unknown",
-    "note": "post-sentinel-fix-run1",
-    "folder": "2026-03-18-8c16d04-post-sentinel-fix-run1",
-    "finding_counts": {
-      "success": 9,
-      "partial": 0,
-      "failed": 0,
-      "total": 21
+    {
+        "date":  "2026-03-18",
+        "commit":  "8c16d04",
+        "commit_msg":  "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
+        "job_id":  "cac5f644",
+        "component":  "unknown",
+        "note":  "post-sentinel-fix-run1",
+        "folder":  "2026-03-18-8c16d04-post-sentinel-fix-run1-2",
+        "finding_counts":  {
+                               "success":  9,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  21
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, ORD-YYYYMMDD-XXXX",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  {
+                                "CS_UnlockAccount":  null,
+                                "CS_ProcessPayment":  "pending_refinement",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  null,
+                                "entry":  null,
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-18T05:50:27.6839465+00:00"
     },
-    "gap_count": 5,
-    "known_ids": "CUST-NNN, ORD-YYYYMMDD-XXXX",
-    "vocab_completeness": 0,
-    "vocab_coverage": 1,
-    "transcript_metrics": {
-      "tool_calls": 9,
-      "sentinel_hits": 0,
-      "dll_errors": 0
+    {
+        "date":  "2026-03-19",
+        "commit":  "3c7338c",
+        "commit_msg":  "fix: all 7 session data quality issues",
+        "job_id":  "2026-03-18-8c16d04-post-sentinel-fix-run1",
+        "component":  "unknown",
+        "note":  "unknown-run3",
+        "folder":  "2026-03-19-3c7338c-unknown-run3",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "vocab_completeness":  null,
+        "vocab_coverage":  null,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  null,
+        "saved_at":  "2026-03-19T19:22:37.1539241+00:00"
     },
-    "function_status": {
-      "CS_UnlockAccount": null,
-      "CS_ProcessPayment": "pending_refinement",
-      "CS_GetDiagnostics": "success",
-      "CS_GetVersion": "success",
-      "CS_CalculateInterest": "success",
-      "CS_GetOrderStatus": "success",
-      "CS_GetLoyaltyPoints": "success",
-      "CS_LookupCustomer": "success",
-      "CS_ProcessRefund": "success",
-      "CS_GetAccountBalance": "success",
-      "CS_RedeemLoyaltyPoints": null,
-      "entry": null,
-      "CS_Initialize": "success"
+    {
+        "date":  "2026-03-19",
+        "commit":  "558ceb0",
+        "commit_msg":  "refactor: move contoso_cs fixtures into sessions/contoso_cs/, update all path refs",
+        "job_id":  "2026-03-18-8c16d04-post-sentinel-fix-run1",
+        "component":  "unknown",
+        "note":  "unknown-run2",
+        "folder":  "2026-03-19-558ceb0-unknown-run2",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "vocab_completeness":  null,
+        "vocab_coverage":  null,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  null,
+        "saved_at":  "2026-03-19T04:46:50.5813763+00:00"
     },
-    "saved_at": "2026-03-18T05:49:25.9823127+00:00"
-  },
-  {
-    "date": "2026-03-18",
-    "commit": "8c16d04",
-    "commit_msg": "fix: compare.ps1 encoding (UTF-8 BOM) + replace em-dash/delta breaks PS5.1 syntax",
-    "job_id": "cac5f644",
-    "component": "unknown",
-    "note": "post-sentinel-fix-run1",
-    "folder": "2026-03-18-8c16d04-post-sentinel-fix-run1-2",
-    "finding_counts": {
-      "success": 9,
-      "partial": 0,
-      "failed": 0,
-      "total": 21
+    {
+        "date":  "2026-03-19",
+        "commit":  "d8ecdfd",
+        "commit_msg":  "feat: gap answer mini-sessions, dual question format, component fix, gitignore sessions",
+        "job_id":  "2026-03-18-8c16d04-post-sentinel-fix-run1",
+        "component":  "unknown",
+        "note":  "unknown-run3",
+        "folder":  "2026-03-19-d8ecdfd-unknown-run3",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "vocab_completeness":  null,
+        "vocab_coverage":  null,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "function_status":  null,
+        "saved_at":  "2026-03-19T19:12:04.5684201+00:00"
     },
-    "gap_count": 5,
-    "known_ids": "CUST-NNN, ORD-YYYYMMDD-XXXX",
-    "vocab_completeness": 0,
-    "vocab_coverage": 1,
-    "transcript_metrics": {
-      "tool_calls": 0,
-      "sentinel_hits": 0,
-      "dll_errors": 0
-    },
-    "function_status": {
-      "CS_UnlockAccount": null,
-      "CS_ProcessPayment": "pending_refinement",
-      "CS_GetDiagnostics": "success",
-      "CS_GetVersion": "success",
-      "CS_CalculateInterest": "success",
-      "CS_GetOrderStatus": "success",
-      "CS_GetLoyaltyPoints": "success",
-      "CS_LookupCustomer": "success",
-      "CS_ProcessRefund": "success",
-      "CS_GetAccountBalance": "success",
-      "CS_RedeemLoyaltyPoints": null,
-      "entry": null,
-      "CS_Initialize": "success"
-    },
-    "saved_at": "2026-03-18T05:50:27.6839465+00:00"
-  },
-  {
-    "date": "2026-03-19",
-    "commit": "558ceb0",
-    "commit_msg": "refactor: move contoso_cs fixtures into sessions/contoso_cs/, update all path refs",
-    "job_id": "2026-03-18-8c16d04-post-sentinel-fix-run1",
-    "component": "unknown",
-    "note": "unknown-run2",
-    "folder": "2026-03-19-558ceb0-unknown-run2",
-    "finding_counts": {
-      "success": 0,
-      "partial": 0,
-      "failed": 0,
-      "total": 0
-    },
-    "gap_count": 0,
-    "known_ids": "(none recorded)",
-    "vocab_completeness": null,
-    "vocab_coverage": null,
-    "transcript_metrics": {
-      "tool_calls": 0,
-      "sentinel_hits": 0,
-      "dll_errors": 0
-    },
-    "function_status": null,
-    "saved_at": "2026-03-19T04:46:50.5813763+00:00"
-  },
-  {
-    "date": "2026-03-19",
-    "commit": "d8ecdfd",
-    "commit_msg": "feat: gap answer mini-sessions, dual question format, component fix, gitignore sessions",
-    "job_id": "2026-03-18-8c16d04-post-sentinel-fix-run1",
-    "component": "unknown",
-    "note": "unknown-run3",
-    "folder": "2026-03-19-d8ecdfd-unknown-run3",
-    "finding_counts": {
-      "success": 0,
-      "partial": 0,
-      "failed": 0,
-      "total": 0
-    },
-    "gap_count": 0,
-    "known_ids": "(none recorded)",
-    "vocab_completeness": null,
-    "vocab_coverage": null,
-    "transcript_metrics": {
-      "tool_calls": 0,
-      "sentinel_hits": 0,
-      "dll_errors": 0
-    },
-    "function_status": null,
-    "saved_at": "2026-03-19T19:12:04.5684201+00:00"
-  },
-  {
-    "date": "2026-03-19",
-    "commit": "3c7338c",
-    "commit_msg": "fix: all 7 session data quality issues",
-    "job_id": "2026-03-18-8c16d04-post-sentinel-fix-run1",
-    "component": "unknown",
-    "note": "unknown-run3",
-    "folder": "2026-03-19-3c7338c-unknown-run3",
-    "finding_counts": {
-      "success": 0,
-      "partial": 0,
-      "failed": 0,
-      "total": 0
-    },
-    "gap_count": 0,
-    "known_ids": "(none recorded)",
-    "vocab_completeness": null,
-    "vocab_coverage": null,
-    "transcript_metrics": {
-      "tool_calls": 0,
-      "sentinel_hits": 0,
-      "dll_errors": 0
-    },
-    "function_status": null,
-    "saved_at": "2026-03-19T19:22:37.1539241+00:00"
-  }
+    {
+        "date":  "2026-03-19",
+        "commit":  "d564334",
+        "commit_msg":  "feat: stable current-gaps.md + answer-gaps.prompt.md for dynamic gap Q\u0026A workflow",
+        "job_id":  "206a77f8",
+        "component":  "contoso_cs",
+        "note":  "contoso-baseline",
+        "folder":  "206a77f8_manual_insert",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  59,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  46
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  38,
+                                                         "avg":  4.5,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "Returned: 4294967294",
+                                                         "4294967294",
+                                                         "Returned: 4294967295",
+                                                         "4294967295"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  30,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetDiagnostics.param_1",
+                                                              "CS_GetDiagnostics.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "CS_UnlockAccount.param_1",
+                                                              "CS_UnlockAccount.param_2",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "Operation failed or not found",
+                                                      "0xFFFFFFFE":  "Invalid input or access denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  null,
+        "saved_at":  "2026-03-19T18:29:44.5077239-04:00"
+    }
 ]

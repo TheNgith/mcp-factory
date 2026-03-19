@@ -437,7 +437,7 @@ $probePath    = Join-Path $sessionDir "explore_probe_log.json"
 $probeSummary = $null
 if (Test-Path $probePath) {
     try {
-        $probe = @(Get-Content $probePath -Raw | ConvertFrom-Json)
+        $probe = [array](Get-Content $probePath -Raw | ConvertFrom-Json)
         $probeTotal   = $probe.Count
         $probeByPhase = @{}
         $probeFns     = [System.Collections.Generic.HashSet[string]]@()
@@ -684,7 +684,7 @@ if ($null -ne $staticVerification) {
 $resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
 # Phase 8-A: diagnosis_raw pre-parsed in step 12.7 — reuse directly
 $diagRawForTests = $diagRaw
-if (Test-Path $templatePath) {
+if ($true) {
     $tr  = "# Test Results - " + $datePart + "`n`n"
     $tr += "**Session:** " + $folderName + "`n"
     $tr += "**Commit:** " + $commitHash + " - " + $commitMsg + "`n"
@@ -850,7 +850,7 @@ if ($gapCount -gt 0) {
     Write-Host "   scripts\answer-gaps.prompt.md  -> ask Copilot -> fill answers below" -ForegroundColor DarkGray
     Write-Host "   curl -X POST $($ApiUrl.TrimEnd('/'))/api/jobs/$JobId/answer-gaps \\" -ForegroundColor DarkGray
     Write-Host "     -H 'Content-Type: application/json' \\" -ForegroundColor DarkGray
-    Write-Host "     -d '{`"answers`":[{`"function`":` "<FN>`",`"answer`":`"<YOUR ANSWER>`"}]}'" -ForegroundColor DarkGray
+    Write-Host '     -d {"answers":[{"function":"FN","answer":"YOUR ANSWER"}]}' -ForegroundColor DarkGray
     Write-Host "─────────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
 }
 
