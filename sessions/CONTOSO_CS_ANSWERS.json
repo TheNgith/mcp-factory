@@ -1,0 +1,48 @@
+{
+  "_comment": "Pre-written domain answers for contoso_cs.dll discovery runs.",
+  "_usage": "Submit via: Invoke-RestMethod -Method POST -Uri '$API_URL/api/jobs/$JOB_ID/answer-gaps' -ContentType 'application/json' -Body (Get-Content sessions/CONTOSO_CS_ANSWERS.json -Raw)",
+  "_note": "These answers bypass the clarification-questions UI step and pre-seed vocab.json with domain knowledge.",
+
+  "answers": [
+    {
+      "function": "general",
+      "question": "General domain knowledge for contoso_cs",
+      "answer": "contoso_cs is a Windows CRM DLL. Customer IDs use the format CUST-XXX (e.g. CUST-001, CUST-042). All monetary amounts are in cents as integer (e.g. $25.00 = 2500, $150.99 = 15099). Order IDs use the format ORD-YYYYMMDD-NNNN. CS_Initialize must be called before most operations. Loyalty points are plain integers."
+    },
+    {
+      "function": "CS_ProcessPayment",
+      "question": "What are the prerequisites and parameter semantics for CS_ProcessPayment?",
+      "answer": "param_1 = customer_id string in CUST-XXX format. param_2 = amount in cents (integer). Requires an active (non-locked) account. Returns 0 on success. Returns 0xFFFFFFFB (4294967291) = write access denied (account does not exist or permissions issue). Returns 0xFFFFFFFC (4294967292) = account is locked. Returns 0xFFFFFFFE (4294967294) = invalid input (null/empty customer_id or negative amount)."
+    },
+    {
+      "function": "CS_UnlockAccount",
+      "question": "What conditions must be true to call CS_UnlockAccount successfully?",
+      "answer": "param_1 = customer_id in CUST-XXX format. The account must currently be in locked status. Returns 0 on success. Returns 0xFFFFFFFE (4294967294) = account is not locked or customer does not exist. Calling on an already-active account will fail with 0xFFFFFFFE."
+    },
+    {
+      "function": "CS_RedeemLoyaltyPoints",
+      "question": "What restrictions apply to CS_RedeemLoyaltyPoints?",
+      "answer": "param_1 = customer_id in CUST-XXX format. param_2 = integer points to redeem. Account must be active (non-locked). Customer must have at least param_2 points available. Returns 0xFFFFFFFC (4294967292) if account is locked. Returns 0xFFFFFFFB (4294967291) if insufficient points or write access denied."
+    },
+    {
+      "function": "CS_LookupCustomer",
+      "question": "What does CS_LookupCustomer return and what format is the customer ID?",
+      "answer": "param_1 = customer_id string in CUST-XXX format (zero-padded 3-digit number). Returns structured customer record with id, name, status, tier, balance_cents, loyalty_points. If a raw integer is given (e.g. 7), it must be formatted as CUST-007 before calling."
+    },
+    {
+      "function": "CS_GetAccountBalance",
+      "question": "What unit is the balance returned in?",
+      "answer": "Balance is returned in cents as an integer. Divide by 100 to get dollar amount. Example: return value 1500 = $15.00."
+    },
+    {
+      "function": "CS_GetVersion",
+      "question": "What format does CS_GetVersion return the version in?",
+      "answer": "Returns an unsigned 32-bit integer encoding major.minor.patch as (major << 16) | (minor << 8) | patch. Example: 131841 = 0x020301 = version 2.3.1."
+    },
+    {
+      "function": "CS_GetDiagnostics",
+      "question": "What does CS_GetDiagnostics return?",
+      "answer": "Returns a pipe-delimited string via output buffer: version=X.Y.Z|customers=N|orders=N|calls=N|initialized=yes/no. param_1 = output buffer pointer, param_2 = buffer size."
+    }
+  ]
+}

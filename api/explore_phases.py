@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 import re as _re
 from collections import defaultdict
 
@@ -15,8 +16,11 @@ from api.executor import _execute_tool
 
 logger = logging.getLogger("mcp_factory.api")
 
-_MAX_EXPLORE_ROUNDS_PER_FUNCTION = 3   # 3 rounds catches >95% of cases; 6 was wasteful
-_MAX_FUNCTIONS_PER_SESSION = 50  # safety cap
+# Tunable via env for development speed vs. quality tradeoff:
+#   EXPLORE_MAX_ROUNDS=1   → ~3x faster, shallower enrichment (good for dev)
+#   EXPLORE_MAX_FUNCTIONS=10 → cap number of functions probed
+_MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "3"))
+_MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
 
 _SENTINEL_DEFAULTS: dict[int, str] = {
     0xFFFFFFFF: "not found / invalid input",

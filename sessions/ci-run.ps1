@@ -46,7 +46,7 @@ if (-not $DllPath -and $env:MCP_FACTORY_DLL_PATH) { $DllPath = $env:MCP_FACTORY_
 
 $base    = $ApiUrl.TrimEnd('/')
 $headers = @{ "Accept" = "application/json" }
-if ($ApiKey) { $headers["X-API-Key"] = $ApiKey }
+if ($ApiKey) { $headers["X-Pipeline-Key"] = $ApiKey }
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
@@ -105,14 +105,45 @@ if ($SkipUpload -and $JobId) {
     $fileBytes = [System.IO.File]::ReadAllBytes($DllPath)
     $fileName  = Split-Path $DllPath -Leaf
 
-    # Build multipart form manually (Invoke-RestMethod handles this with -Form)
-    $formParams = @{ file = Get-Item $DllPath }
-    if ($Hints)    { $formParams["hints"]     = $Hints }
-    if ($UseCases) { $formParams["use_cases"] = $UseCases }
+    # Build multipart/form-data manually (PS 5.1 doesn't support -Form)
+    $boundary  = [System.Guid]::NewGuid().ToString("N")
+    $crlf      = "`r`n"
+    $bodyParts = [System.Collections.Generic.List[byte[]]]::new()
+
+    # -- file field --
+    $partHeader = "--$boundary$crlf" +
+                  "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"$crlf" +
+                  "Content-Type: application/octet-stream$crlf$crlf"
+    $bodyParts.Add([System.Text.Encoding]::UTF8.GetBytes($partHeader))
+    $bodyParts.Add($fileBytes)
+    $bodyParts.Add([System.Text.Encoding]::UTF8.GetBytes($crlf))
+
+    # -- optional text fields --
+    foreach ($pair in @(@("hints",$Hints),@("use_cases",$UseCases))) {
+        if ($pair[1]) {
+            $tf = "--$boundary$crlf" +
+                  "Content-Disposition: form-data; name=`"$($pair[0])`"$crlf$crlf" +
+                  "$($pair[1])$crlf"
+            $bodyParts.Add([System.Text.Encoding]::UTF8.GetBytes($tf))
+        }
+    }
+    $bodyParts.Add([System.Text.Encoding]::UTF8.GetBytes("--$boundary--$crlf"))
+
+    # Merge all byte arrays
+    $totalLen  = ($bodyParts | Measure-Object -Property Length -Sum).Sum
+    $bodyBytes = New-Object byte[] $totalLen
+    $offset    = 0
+    foreach ($part in $bodyParts) {
+        [System.Buffer]::BlockCopy($part, 0, $bodyBytes, $offset, $part.Length)
+        $offset += $part.Length
+    }
+
+    $uploadHeaders = $headers.Clone()
+    $uploadHeaders["Content-Type"] = "multipart/form-data; boundary=$boundary"
 
     try {
         $resp = Invoke-RestMethod -Uri "$base/api/analyze" -Method POST `
-            -Headers $headers -Form $formParams -UseBasicParsing
+            -Headers $uploadHeaders -Body $bodyBytes -UseBasicParsing
         $JobId = $resp.job_id
         Write-OK "Uploaded $fileName -> job_id: $JobId"
     } catch {
@@ -125,6 +156,31 @@ if ($SkipUpload -and $JobId) {
     if (-not $result) { Write-Fail "Generate timed out." }
     if ($result.status -eq "error") { Write-Fail "Generate error: $($result.error)" }
     Write-OK "Generate complete. status=$($result.status)"
+}
+
+# =============================================================================
+# Register invocables via /api/generate (required before explore can run)
+# =============================================================================
+if (-not $SkipDiscover) {
+    Write-Host "  Registering invocables via /api/generate..." -ForegroundColor DarkGray
+    try {
+        $jobState   = Invoke-RestMethod -Uri "$base/api/jobs/$JobId" -Headers $headers -UseBasicParsing
+        $invocables = @($jobState.result.invocables)
+        if ($invocables.Count -eq 0) {
+            Write-Fail "No invocables found in job '$JobId'. Confirm the DLL was analyzed successfully."
+        }
+        $genBody = @{
+            job_id         = $JobId
+            component_name = "contoso-cs"
+            selected       = $invocables
+        } | ConvertTo-Json -Depth 10
+        $genResp  = Invoke-RestMethod -Uri "$base/api/generate" -Method POST `
+            -Headers $headers -ContentType "application/json" -Body $genBody -UseBasicParsing
+        $toolCount = if ($genResp.mcp_schema -and $genResp.mcp_schema.tools) { $genResp.mcp_schema.tools.Count } else { "?" }
+        Write-OK "Registered $($invocables.Count) invocables -> $toolCount MCP tools"
+    } catch {
+        Write-Fail "Register invocables failed: $($_.Exception.Message)"
+    }
 }
 
 # =============================================================================
@@ -194,8 +250,9 @@ if ($SkipTests) {
     $outDir = Join-Path $SessionsRoot "_runs\$JobId"
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-    & $runScript -ApiUrl $base -JobId $JobId -OutDir $outDir `
-        $(if ($ApiKey) { @("-ApiKey", $ApiKey) } else { @() })
+    $testArgs = @{ ApiUrl = $base; JobId = $JobId; OutDir = $outDir }
+    if ($ApiKey) { $testArgs['ApiKey'] = $ApiKey }
+    & $runScript @testArgs
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "    WARN: run-tests.ps1 exited with $LASTEXITCODE (some tests may have failed)" -ForegroundColor Yellow

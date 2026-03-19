@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 import re as _re
+import threading as _threading
 import time
+from concurrent.futures import ThreadPoolExecutor as _TPE
 from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
@@ -274,21 +277,32 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         logger.info("[%s] explore_worker: ordered %d init + %d others by uncertainty",
                     job_id, len(_init_invs), len(_other_invs))
 
-        for inv in invocables:
+        # ── Per-function exploration (parallel when EXPLORE_CONCURRENCY > 1) ────────
+        _CONCURRENCY = int(_os.getenv("EXPLORE_CONCURRENCY", "1"))
+        _lock = _threading.Lock()
+        _state = {"explored": explored}
+
+        def _explore_one(inv: dict) -> None:
             fn_name = inv["name"]
 
-            # Skip functions already documented in a previous session
-            if fn_name in already_explored:
-                explored += 1
-                _set_explore_status(job_id, explored, total, f"Skipped {fn_name} (already documented)")
-                continue
+            # Skip functions already documented in a previous session (thread-safe)
+            _skip = False
+            with _lock:
+                if fn_name in already_explored:
+                    _state["explored"] += 1
+                    _skip = True
+                else:
+                    _vocab_snap = dict(vocab)
+            if _skip:
+                _set_explore_status(job_id, _state["explored"], total, f"Skipped {fn_name} (already documented)")
+                return
 
-            _set_explore_status(job_id, explored, total, f"Exploring {fn_name}…")
-            logger.info("[%s] explore_worker: starting %s (%d/%d)", job_id, fn_name, explored + 1, total)
+            _set_explore_status(job_id, _state["explored"], total, f"Exploring {fn_name}…")
+            logger.info("[%s] explore_worker: starting %s (%d/%d)", job_id, fn_name, _state["explored"] + 1, total)
 
             # Build a focused conversation just for this function
             prior = _load_findings(job_id)
-            sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=vocab, use_cases=_use_cases_text)
+            sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=_vocab_snap, use_cases=_use_cases_text)
             _is_write_fn = bool(_re.search(
                 r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", fn_name, _re.I
             ))
@@ -450,11 +464,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 except Exception as _ee:
                     logger.debug("[%s] forced enrich failed for %s: %s", job_id, fn_name, _ee)
 
-            explored += 1
-            already_explored.add(fn_name)
-            _set_explore_status(job_id, explored, total, f"Completed {fn_name}")
-
-            # Consistency enforcement (port of run_local.py _discover_loop logic)
+            with _lock:
+                _state["explored"] += 1
+                already_explored.add(fn_name)
+            _set_explore_status(job_id, _state["explored"], total, f"Completed {fn_name}")
             if _observed_successes:
                 # Ground-truth override: we observed return=0 directly → force success
                 try:
@@ -499,14 +512,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             if _best_raw_result:
                 try:
                     _hyp = _generate_hypothesis(
-                        client, model, fn_name, _best_raw_result, vocab, _load_findings(job_id)
+                        client, model, fn_name, _best_raw_result, _vocab_snap, _load_findings(job_id)
                     )
                     if _hyp.get("interpretations"):
                         _patch_finding(job_id, fn_name, {"interpretation": _hyp["interpretations"]})
-                        # Merge into vocab so downstream functions benefit immediately
-                        if "value_semantics" not in vocab:
-                            vocab["value_semantics"] = {}
-                        vocab["value_semantics"].update(_hyp["interpretations"])
+                        # Merge into local vocab snapshot so the update is persisted
+                        if "value_semantics" not in _vocab_snap:
+                            _vocab_snap["value_semantics"] = {}
+                        _vocab_snap["value_semantics"].update(_hyp["interpretations"])
                         logger.info("[%s] hypothesis for %s: %s", job_id, fn_name, _hyp["interpretations"])
                     # Run cross-validation if proposed and the target has already been explored
                     _cv = _hyp.get("cross_validation")
@@ -536,18 +549,42 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 )
                 if last:
                     try:
-                        vocab = _update_vocabulary(client, model, vocab, last)
+                        # Mutates _vocab_snap in-place; merge learned facts into shared vocab
+                        _update_vocabulary(client, model, _vocab_snap, last)
+                        with _lock:
+                            for _mk, _mv in _vocab_snap.items():
+                                if _mk.startswith("_"):
+                                    continue
+                                if isinstance(_mv, list) and isinstance(vocab.get(_mk), list):
+                                    _existing = set(map(str, vocab[_mk]))
+                                    vocab[_mk] = vocab[_mk] + [x for x in _mv if str(x) not in _existing]
+                                elif isinstance(_mv, dict) and isinstance(vocab.get(_mk), dict):
+                                    vocab[_mk].update(_mv)
+                                elif _mv and _mk not in vocab:
+                                    vocab[_mk] = _mv
                         # Persist updated vocab to blob so next session starts informed
                         try:
                             _upload_to_blob(
                                 ARTIFACT_CONTAINER,
                                 f"{job_id}/vocab.json",
-                                json.dumps(vocab).encode(),
+                                json.dumps(_vocab_snap).encode(),
                             )
                         except Exception as _vpe:
                             logger.debug("[%s] vocab persist failed: %s", job_id, _vpe)
                     except Exception as _ve:
                         logger.debug("[%s] vocab update failed for %s: %s", job_id, fn_name, _ve)
+
+        # Run exploration: parallel if EXPLORE_CONCURRENCY > 1, else sequential
+        if _CONCURRENCY > 1:
+            logger.info("[%s] explore_worker: running %d functions with concurrency=%d",
+                        job_id, len(invocables), _CONCURRENCY)
+            with _TPE(max_workers=_CONCURRENCY) as _pool:
+                list(_pool.map(_explore_one, invocables))
+        else:
+            for inv in invocables:
+                _explore_one(inv)
+
+        explored = _state["explored"]
 
         # Synthesis: generate API reference Markdown document from all findings
         try:
