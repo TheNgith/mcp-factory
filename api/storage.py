@@ -64,8 +64,13 @@ def _download_blob(container: str, blob_name: str) -> bytes:
 
 
 def _append_transcript(job_id: str, user_text: str, assistant_text: str,
-                       tool_log: list | None = None) -> None:
-    """Append a user/assistant exchange to {job_id}/chat_transcript.txt in blob.
+                       tool_log: list | None = None,
+                       transcript_blob: str = "chat_transcript.txt") -> None:
+    """Append a user/assistant exchange to {job_id}/{transcript_blob} in blob.
+
+    transcript_blob defaults to 'chat_transcript.txt' for normal chat sessions.
+    Pass 'mini_session_transcript.txt' for autonomous pipeline mini-sessions so
+    they don't clutter the user-facing chat transcript.
 
     If tool_log is provided (list of {"call", "args", "result"} dicts) it is
     formatted between the user turn and the assistant turn so the full agentic
@@ -75,7 +80,7 @@ def _append_transcript(job_id: str, user_text: str, assistant_text: str,
     stream_chat per job_id at a time).  Non-fatal on any error.
     """
     try:
-        blob_name = f"{job_id}/chat_transcript.txt"
+        blob_name = f"{job_id}/{transcript_blob}"
         if tool_log:
             lines = []
             for entry in tool_log:

@@ -1171,7 +1171,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     if _turn.get("role") == "assistant" and _turn.get("content"):
                         _mini_final = _turn["content"]
                         break
-                _append_transcript(job_id, _mini_user_msg, _mini_final, _mini_tool_log)
+                _append_transcript(job_id, _mini_user_msg, _mini_final, _mini_tool_log,
+                                   transcript_blob="mini_session_transcript.txt")
                 if _mini_traces:
                     _append_executor_trace(job_id, _mini_traces)
             except Exception as _tr_e:

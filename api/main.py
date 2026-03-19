@@ -719,6 +719,12 @@ async def session_snapshot(job_id: str):
         except Exception:
             zf.writestr("chat_transcript.txt",
                         "(No transcript recorded yet. Start a chat session to generate one.)")
+        # ── Mini-session transcript (gap answer re-probing, pipeline-internal) ─
+        try:
+            zf.writestr("mini_session_transcript.txt",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/mini_session_transcript.txt"))
+        except Exception:
+            pass  # only present when gap answers were submitted and mini-sessions ran
         # ── Executor trace (structured per-call diagnostics) ───────────
         try:
             zf.writestr("executor_trace.json",
