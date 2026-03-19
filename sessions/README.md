@@ -221,4 +221,5 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-18 | unknown | `f4cad83c` | baseline (no bridge, no hints) | 23/28 (82%) |
 | 2026-03-18 | unknown | `0c5a7b47` | schema-less + SkipDiscover | 12/28 (43%) |
 | 2026-03-19 | `558ceb0` | `2026-03-18-8c16d04-post-sentinel-fix-run1` | unknown-run2 | unknown - (fill in after testing) |
+| 2026-03-19 | `d8ecdfd` | `2026-03-18-8c16d04-post-sentinel-fix-run1` | unknown-run3 | unknown - (fill in after testing) |
 
