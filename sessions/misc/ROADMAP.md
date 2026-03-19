@@ -677,4 +677,112 @@ After G2 + G4 + G5:
 
 Result: exploration rounds drop, error rate drops, parameter confidence scores go up on the first pass. The multi-round sentinel calibration loop and write-unlock probing become verification steps rather than the primary discovery mechanism.
 
+---
+
+### G7 — Binary string evidence promoted to first-class vocab (~1 hr)
+
+**File:** `api/explore.py`, Phase 0 string extraction block
+
+**The inversion problem:** Currently, user-supplied hints seed the structured `vocab` dict (which is priority-ordered and re-injected every round). Binary-extracted strings go into `_static_hints_block` — a plain text appendage injected once. The LLM implicitly treats structured vocab entries as higher confidence than prompt appendages, but binary evidence is ground truth — it's literally in the file. User hints are advisory (user might be wrong or stale).
+
+**Change:** After Phase 0 extracts `_ids`, `_emails`, `_status` from the binary, write them into the vocab dict instead of only into the text block:
+
+```python
+# Binary strings are ground truth — promote to vocab, not just text hints
+if _ids and "id_formats" not in vocab:
+    vocab["id_formats"] = _ids[:20]   # same field user hints seed
+if _status and "value_semantics" not in vocab:
+    vocab["value_semantics"] = {"status_values": _status}
+```
+
+User hints only fill these fields if the binary provided nothing (`setdefault` semantics). The text block is kept as a secondary "probe candidate" list for the LLM to draw from during tool calls.
+
+**Effect:** Binary-derived ID formats, status tokens, and format strings are surfaced in the structured vocab block (priority-ordered, re-injected every round) rather than in a once-only text appendage. The LLM consults them the same way it consults user-confirmed id_formats — not as suggestions but as known facts.
+
+---
+
+### G8 — PE Version Info resource extraction (~30 min, zero new dependencies)
+
+**File:** `api/explore.py`, Phase 0, or `src/discovery/main.py` discovery phase
+
+**What it is:** The `VS_VERSION_INFO` resource embedded in most Windows DLLs, parseable by `pefile` (already a dependency). Contains: `CompanyName`, `ProductName`, `FileDescription`, `OriginalFilename`, `ProductVersion`, `LegalCopyright`.
+
+**Change:** After reading the PE binary in Phase 0, parse the version info resource:
+
+```python
+if hasattr(pe, 'VS_VERSIONINFO'):
+    for vi in pe.VS_VERSIONINFO:
+        for st in vi.StringTable:
+            for k, v in st.entries.items():
+                # k/v are bytes → decode
+                version_info[k.decode()] = v.decode()
+```
+
+Inject `FileDescription` and `ProductName` into `vocab["description"]` if not already set by the user. Append `CompanyName`, `ProductVersion` to the static hints block.
+
+**Effect on black-box DLLs:** A completely stripped DLL with no export names, no headers, no PDB — but which was compiled by a real company — almost always has version info. `FileDescription = "Customer Relationship Management Helper Library"` tells the LLM the domain before a single probe call. This is the highest signal-to-effort item in the entire roadmap: 30 minutes of plumbing, zero LLM cost, immediate domain context for any real-world DLL.
+
+---
+
+### G9 — Capstone sentinel harvesting (~2 hrs, `pip install capstone`)
+
+**File:** `api/explore.py`, Phase 0 or new `_harvest_sentinels_from_binary()` helper replacing part of `_calibrate_sentinels`
+
+**What it does:** Disassemble each exported function using Capstone (a lightweight x86/x64 disassembler — no Ghidra, no Java, no bridge VM). Walk every instruction and collect 32-bit immediate values in the `0xFFFFF000`–`0xFFFFFFFF` range that appear in:
+- `MOV EAX, <constant>` — direct return value assignment
+- `CMP EAX, <constant>` — return value comparison (caller-side error check)
+- `TEST EAX, <constant>` — bitfield error mask
+
+These are your sentinel / error codes, extracted directly from binary arithmetic with zero probing.
+
+**Change:** Replace or augment `_calibrate_sentinels` (Phase 0.5):
+
+```python
+# Before: ask gpt-4o-mini to guess likely error codes from function names
+# After: read them directly from the binary
+sentinels = _harvest_sentinels_capstone(dll_bytes, exported_fn_rvas)
+# gpt-4o-mini step only runs if capstone harvest returns < 3 candidates
+```
+
+**Effect:** For any DLL with standard Win32 HRESULT-style error returns (which is essentially all of them), the sentinel table is populated before exploration starts — not calibrated through probe failures. The probe-to-failure loop that currently teaches the LLM what `0xFFFFFFFB` means becomes a confirmation step. For truly exotic DLLs with no standard error patterns, the existing calibration fallback still runs.
+
+**For contoso_cs.dll specifically:** `0xFFFFFFFB` and `0xFFFFFFFC` appear as `MOV EAX, 0xFFFFFFFB` / `MOV EAX, 0xFFFFFFFC` inside CS_ProcessPayment and CS_LookupCustomer. Capstone reads them in milliseconds with zero LLM cost.
+
+---
+
+### Updated effort summary (all G items)
+
+| Item | Effort | Deps | Priority | Key unlock |
+|------|--------|------|----------|------------|
+| G2 — Ghidra decompiler param enrichment | ~1 day | Ghidra (present) | **HIGH** | Param names/types pre-loaded; exploration → verification |
+| G4 — IAT capability injection | ~2 hrs | pefile (present) | **HIGH** | Read/write classification definitive |
+| G5 — Full decompiled C text per function | ~3 hrs | Ghidra (present) | **HIGH** | Error code conditions literal in source |
+| G7 — Binary strings → first-class vocab | ~1 hr | none | **HIGH** | Ground-truth evidence treated as facts, not suggestions |
+| G8 — PE Version Info extraction | ~30 min | pefile (present) | **HIGH** | Domain context from the binary itself; critical for black-box DLLs |
+| G9 — Capstone sentinel harvesting | ~2 hrs | `capstone` (new, tiny) | **HIGH** | Sentinel table from binary arithmetic; eliminates probe-to-failure loop |
+| G1 — Hints-aware string ranking | ~2 hrs | none | Medium | Better probe candidates |
+| G3 — PE `.rdata` XRef string filter | ~half day | pefile (present) | Low | Cleaner string extraction |
+| G6 — FLOSS obfuscated string extraction | ~1 day | `flare-floss` (new) | Low (stretch) | Stack-assembled/XOR strings in real-world DLLs |
+
+**G7 + G8 + G9 are the cheapest high-value items in the entire roadmap.** Combined ~3.5 hrs, all pure Python, all zero LLM cost. They complete the "read before you probe" foundation that G2/G4/G5 start.
+
+**What the static analysis overhaul looks like end-to-end:**
+
+```
+Before: Upload DLL → export names only → 20 blind probe rounds → slowly discover everything
+
+After:
+  Discovery phase (Ghidra):        param names, types, decompiled C bodies, XREFs
+  Phase 0 (pefile + capstone):     PE version info (domain), IAT capabilities (read/write),
+                                   binary strings → vocab (probe candidates as facts),
+                                   sentinel constants harvested from disassembly
+  Phase 0.5 (sentinel calibration): confirms capstone harvest, fills gaps if any
+  Main explore loop:               verifies known facts, probes edge cases and invariants
+```
+
+The probe loop never disappears — it's still required for semantic invariants, boundary conditions, and per-record state that no static tool can read. But it starts from a position of near-complete structural knowledge rather than complete ignorance.
+
+**Static analysis ceiling for true black-box (ordinal-only, no strings, no version info, no debug info):**
+Export names: `#1`, `#2`, `#3` only. Capstone still harvests sentinel constants. IAT still reveals capabilities. Decompiler still recovers param count and types. PE Version Info empty. The LLM then enters probing with type signatures and capability context — still a massive improvement over today's name-only baseline.
+
 > **Note on 0-A:** Root cause was `api/worker.py` not `api/main.py`. `main.py` wrote `component_name` correctly at job creation, but `_analyze_worker` overwrote the entire status dict on every progress update, stripping it out. Fix: import `_get_job_status`, snapshot `_init` at the start of the worker, spread `{**_init, ...}` into all four `_persist_job_status` calls. Final-payload call re-reads current status after explore completes to also preserve `explore_phase`/`explore_questions`.
