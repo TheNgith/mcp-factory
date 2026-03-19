@@ -172,8 +172,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
         # Persist calibrated error codes from sentinels into vocab so
         # vocab_coverage.json can score against real DLL-specific codes.
+        # Merge (not setdefault) so re-runs and newly discovered codes are
+        # always incorporated, not silently dropped when error_codes exists.
         if sentinels is not _SENTINEL_DEFAULTS:
-            vocab.setdefault("error_codes", {f"0x{k:08X}": v for k, v in sentinels.items()})
+            vocab.setdefault("error_codes", {})
+            vocab["error_codes"].update({f"0x{k:08X}": v for k, v in sentinels.items()})
 
         # Seed vocab from user-supplied hints so the LLM starts informed
         # even before Phase 0 extracts strings from the binary.

@@ -79,6 +79,9 @@ def _append_transcript(job_id: str, user_text: str, assistant_text: str,
         if tool_log:
             lines = []
             for entry in tool_log:
+                # Emit the model's reasoning text before the first call of each round
+                if entry.get("reasoning"):
+                    lines.append(f"[REASONING]\n{entry['reasoning']}\n")
                 args_str = json.dumps(entry.get("args") or {}, separators=(",", ":"))
                 result = entry.get("result") or ""
                 lines.append(f"🔧 {entry['call']}({args_str})\n   ↳ {result}")

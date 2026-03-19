@@ -69,6 +69,12 @@ def _update_vocabulary(client, model: str, vocab: dict, enrichment: dict) -> dic
             # Merge: lists are deduplicated-extended, dicts are deep-merged, scalars overwritten
             import datetime as _dt
             for k, v in updates.items():
+                # Protect the user-authored description: if vocab["notes"] was set
+                # from user hints (starts with "User description:"), don't let the
+                # LLM overwrite it with function-specific observations.
+                if k == "notes" and isinstance(vocab.get("notes"), str) \
+                        and vocab["notes"].startswith("User description:"):
+                    continue
                 _is_new = k not in vocab
                 if isinstance(v, list) and isinstance(vocab.get(k), list):
                     existing = set(vocab[k])

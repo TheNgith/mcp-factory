@@ -61,8 +61,9 @@ _RECORD_FINDING_TOOL = {
                 "param_name":    {"type": "string", "description": "The parameter this finding relates to, e.g. param_1"},
                 "finding":       {"type": "string", "description": "Plain English description: what works, what fails, and why"},
                 "working_call":  {"type": "object", "description": "The exact args dict that produced a non-error return, if any"},
+                "status":        {"type": "string", "enum": ["success", "partial", "error"], "description": "'success' if a non-error return was observed; 'error' if every probe hit a sentinel; 'partial' if mixed"},
             },
-            "required": ["function_name", "finding"],
+            "required": ["function_name", "finding", "status"],
         },
     },
 }
@@ -702,6 +703,8 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
             })
 
             # ── Execute each tool call, streaming result events immediately ─
+            _round_reasoning = (msg.content or "").strip()
+            _first_in_round = True
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
                 try:
@@ -710,7 +713,13 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     fn_args = {}
 
                 yield _sse({"type": "tool_call", "name": fn_name, "args": fn_args})
-                _tool_log.append({"call": fn_name, "args": fn_args, "result": None, "trace": None})
+                # Attach the assistant's reasoning text to the first tool call in
+                # each round so the transcript captures why the model made the call.
+                _tool_log.append({
+                    "call": fn_name, "args": fn_args, "result": None, "trace": None,
+                    "reasoning": _round_reasoning if _first_in_round else None,
+                })
+                _first_in_round = False
 
                 inv = inv_map.get(fn_name)
                 if inv is None and job_id:

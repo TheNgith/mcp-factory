@@ -612,6 +612,7 @@ def _execute_tool(inv: dict, args: dict) -> str:
             "param":       args.get("param_name", ""),
             "finding":     args.get("finding", ""),
             "working_call": args.get("working_call"),
+            "status":      args.get("status", ""),
         }
         _save_finding(job_id, {k: v for k, v in entry.items() if v is not None})
         fn = entry["function"] or "unknown"

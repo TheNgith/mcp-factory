@@ -440,87 +440,28 @@ if (Test-Path $diagPath) {
 $modelContextSizeKB = $null
 if (Test-Path $contextPath) { $modelContextSizeKB = [Math]::Round((Get-Item $contextPath).Length / 1024, 1) }
 
-# ?? 13. SUMMARY.md ???????????????????????????????????????????????????????????
-$sm  = "# Session Summary`n`n"
-$sm += "> For pipeline architecture and how vocab.json/schema/findings fit together, see [../WORKFLOW.md](../WORKFLOW.md)`n`n"
-$sm += "> The exact system message the LLM received is in [model_context.txt](model_context.txt)`n`n"
-$sm += "**Date:** " + $datePart + "`n"
-$sm += "**Component:** " + $component + "`n"
-$sm += "**Job ID:** " + $JobId + "`n"
-$sm += "**Commit:** " + $commitHash + " - " + $commitMsg + "`n"
-$sm += "**Note:** " + $Note + "`n`n---`n`n"
-$sm += "## What changed in this commit`n`n"
-$sm += "See [code-changes.md](code-changes.md) for the full diff.`n`n"
-$sm += "``````" + "`n" + $diffStat + "`n``````" + "`n`n---`n`n"
-$sm += "## Discovery state`n`n"
-$sm += "| Metric | Value |`n|---|---|`n"
-$sm += "| Total findings | " + $totalFindings + " |`n"
-$sm += "| Successful calls | " + $successCount + " |`n"
-$sm += "| Partial | " + $partialCount + " |`n"
-$sm += "| Failed | " + $failedCount + " |`n"
-$sm += "| Gap questions open | " + $gapCount + " |`n"
-$sm += "| Vocab coverage (error codes) | " + $(if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
-$sm += "| Vocab completeness (named params) | " + $(if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
-$sm += "| Known IDs in vocab | " + $knownIds + " |`n"
-$sm += "| Model context size | " + $(if ($null -ne $modelContextSizeKB) { "$modelContextSizeKB KB" } else { "(n/a)" }) + " |`n"
-$sm += "| Static analysis verdict | " + $staticVerdictStr + " |`n"
-$sm += "| Executor error rate | " + $(if ($null -ne $execTraceSummary) {
-    "$($execTraceSummary.error_rate) ($($execTraceSummary.failed)/$($execTraceSummary.total_calls) calls)" } else { "(n/a)" }) + " |`n"
-$sm += "| DIAGNOSIS verdict | " + $(if ($null -ne $diagOut) { $diagOut.verdict } else { "(n/a)" }) + " |`n`n---`n`n"
-# Per-function status table
-if ($functionStatus.Count -gt 0) {
-    $sm += "## Function Status`n`n"
-    $sm += "| Function | Status |`n|---|---|`n"
-    foreach ($fn in ($functionStatus.Keys | Sort-Object)) {
-        $st   = $functionStatus[$fn]
-        $icon = switch ($st) { "success" { "✅" } "partial" { "⚠️" } "failed" { "❌" } default { "?" } }
-        $sm  += "| $fn | $icon $st |`n"
-    }
-    if ($null -ne $execTraceSummary -and $execTraceSummary.function_failures.Count -gt 0) {
-        $sm += "`n**Executor failures:** " + ($execTraceSummary.function_failures -join "; ") + "`n"
-    }
-    $sm += "`n---`n`n"
-}
-$sm += "## Static Analysis Verification`n`n"
-if ($null -ne $staticVerification) {
-    $sentinelInfo = if ($staticVerification.sentinel_count -gt 0) {
-        $staticVerification.sentinel_count.ToString() + " constants harvested via Capstone (G-9)"
-    } else { "none found" }
-    $iatInfo = if ($staticVerification.iat_categories.Count -gt 0) {
-        "capabilities: " + ($staticVerification.iat_categories -join ", ")
-    } else { "no special capabilities detected" }
-    $sm += "| Metric | Value |`n|---|---|`n"
-    $sm += "| Sentinel source | " + $staticVerification.source + " |`n"
-    $sm += "| Sentinels harvested | " + $sentinelInfo + " |`n"
-    $sm += "| IDs in binary | " + $staticVerification.id_count + " |`n"
-    $sm += "| IAT profile | " + $iatInfo + " |`n"
-    $sm += "| Verdict | **" + $staticVerification.verdict + "** |`n"
-    if (@($staticVerification.sentinel_misses).Count -gt 0) {
-        $sm += "`n> ⚠ Sentinel misses (in binary, not in vocab): " + ($staticVerification.sentinel_misses -join ", ") + "`n"
-    }
-    if (@($staticVerification.id_misses).Count -gt 0) {
-        $sm += "`n> IDs extracted from binary but not exercised in any finding: " +
-               ($staticVerification.id_misses -join ", ") + "`n"
-    }
-    foreach ($note in @($staticVerification.notes)) {
-        $sm += "`n> $note`n"
-    }
-} else {
-    $sm += "> static_analysis.json not found — Phase 0 static enrichment may not have run for this session.`n"
-}
-$sm += "`n---`n`n"
-$sm += "## Working calls confirmed`n`n" + $workingBlock + "`n`n---`n`n"
-$sm += "## Gap questions open`n`n" + $gapBlock + "`n`n---`n`n"
-if ($null -ne $vocab -and $vocab.gap_answers) {
-    $sm += "## Domain answers (gap_answers)`n`n"
-    foreach ($ga in $vocab.gap_answers.PSObject.Properties) {
-        $sm += "- **$($ga.Name):** $($ga.Value)`n"
-    }
-    $sm += "`n---`n`n"
-}
-$sm += "## What to investigate next`n`n> Fill this in after testing`n`n-`n"
-Set-Content -Path (Join-Path $sessionDir "SUMMARY.md") -Value $sm -Encoding UTF8
-Write-Host "  Wrote SUMMARY.md" -ForegroundColor Green
+# ── 13. SUMMARY.md — DEPRECATED ──────────────────────────────────────────────
+# SUMMARY.md is a derived read-only artifact synthesised from the raw JSONs.
+# It was removed from active maintenance because:
+#   - it re-derived the same data already visible in findings.json, vocab.json,
+#     executor_trace.json, diagnosis_raw.json, and chat_transcript.txt
+#   - every new pipeline stage required a matching SUMMARY.md update — high
+#     maintenance cost for zero diagnostic value over the raw files
+#   - the pre-computation order bug (steps 12.5-12.8) proved it is easy to
+#     silently produce wrong summaries, which is worse than no summary
+#
+# Diagnose sessions directly from the raw artifacts:
+#   findings.json          — what the executor proved worked / failed
+#   vocab.json             — accumulated semantic knowledge
+#   executor_trace.json    — per-call backend trace (fn, args_keys, result_excerpt)
+#   diagnosis_raw.json     — tools_called per chat, sentinel hit count
+#   chat_transcript.txt    — full user/assistant/tool exchange with reasoning
+#   model_context.txt      — exact system prompt the LLM received
+#   static_analysis.json   — binary-derived vocab seeds (G-4/G-7/G-8/G-9)
+#
+# To resurrect SUMMARY.md generation, un-comment the block below.
+#
+# <SUMMARY.md generation removed — see git history for last working version>
 
 # ?? 14. chat_transcript.txt — pull from API ????????????????????????????????????
 $destTranscript = Join-Path $sessionDir "chat_transcript.txt"
@@ -730,7 +671,7 @@ Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Run test prompts from sessions/contoso_cs/TEST_SUITE.md and fill in TEST_RESULTS.md"
-Write-Host "  2. Update SUMMARY.md 'What to investigate next' section"
+Write-Host "  2. Diagnose from raw artifacts: findings.json, vocab.json, executor_trace.json, chat_transcript.txt"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"
 
