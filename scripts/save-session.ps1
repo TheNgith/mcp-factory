@@ -413,6 +413,29 @@ if (Test-Path $execTracePath) {
     } catch { Write-Host "  executor_trace.json skipped" -ForegroundColor DarkYellow }
 }
 
+# ── 12.65. Pre-parse explore_probe_log.json (discover phase probe coverage) ─────
+$probePath    = Join-Path $sessionDir "explore_probe_log.json"
+$probeSummary = $null
+if (Test-Path $probePath) {
+    try {
+        $probe = @(Get-Content $probePath -Raw | ConvertFrom-Json)
+        $probeTotal   = $probe.Count
+        $probeByPhase = @{}
+        $probeFns     = [System.Collections.Generic.HashSet[string]]@()
+        foreach ($entry in $probe) {
+            $ph = if ($entry.phase) { $entry.phase } else { "unknown" }
+            $probeByPhase[$ph] = [int]($probeByPhase[$ph]) + 1
+            if ($entry.function) { [void]$probeFns.Add($entry.function) }
+        }
+        $probeSummary = [PSCustomObject]@{
+            total_probes      = $probeTotal
+            functions_probed  = $probeFns.Count
+            by_phase          = [PSCustomObject]$probeByPhase
+        }
+        Write-Host ("  explore_probe_log.json: $probeTotal probes across $($probeFns.Count) functions") -ForegroundColor Green
+    } catch { Write-Host "  explore_probe_log.json skipped" -ForegroundColor DarkYellow }
+}
+
 # ── 12.7. Pre-parse diagnosis_raw.json (required before SUMMARY.md + DIAGNOSIS.json) ──
 $diagPath = Join-Path $sessionDir "diagnosis_raw.json"
 $diagRaw  = @(); $diagOut = $null
@@ -454,6 +477,7 @@ if (Test-Path $contextPath) { $modelContextSizeKB = [Math]::Round((Get-Item $con
 #   findings.json          — what the executor proved worked / failed
 #   vocab.json             — accumulated semantic knowledge
 #   executor_trace.json    — per-call backend trace (fn, args_keys, result_excerpt)
+#   explore_probe_log.json  — every probe in discover/calibrate/verify/cross-validate phases
 #   diagnosis_raw.json     — tools_called per chat, sentinel hit count
 #   chat_transcript.txt    — full user/assistant/tool exchange with reasoning
 #   model_context.txt      — exact system prompt the LLM received
@@ -621,6 +645,7 @@ $entry = [PSCustomObject]@{
     vocab_completeness = $vocabCompleteness
     vocab_coverage     = $vocabCoverageScore
     transcript_metrics = $transcriptMetrics
+    probe_summary      = $probeSummary
     function_status    = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
     saved_at           = (Get-Date -Format "o")
 }
@@ -671,7 +696,7 @@ Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Run test prompts from sessions/contoso_cs/TEST_SUITE.md and fill in TEST_RESULTS.md"
-Write-Host "  2. Diagnose from raw artifacts: findings.json, vocab.json, executor_trace.json, chat_transcript.txt"
+Write-Host "  2. Diagnose from raw artifacts: findings.json, vocab.json, executor_trace.json, explore_probe_log.json, chat_transcript.txt"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"
 
