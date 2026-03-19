@@ -21,7 +21,7 @@ param(
     [string]  $ApiKey      = "",
     [string[]]$Tests       = @(),         # e.g. @("T04","T07") -- empty = all 28
     [int]     $TimeoutSec  = 180,         # per-prompt API timeout
-    [int]     $Concurrency = 7,           # parallel requests (RunspacePool)
+    [int]     $Concurrency = 3,           # parallel requests (RunspacePool)
     [switch]  $ScoreAfter,               # run score-session.ps1 when done
     [string]  $SessionsRoot = $PSScriptRoot
 )
@@ -102,11 +102,27 @@ $workerScript = {
     $toolLines     = @()
     $errorMsg      = ""
 
-    try {
-        $resp = Invoke-WebRequest -Uri "$baseUrl/api/chat" -Method POST `
-            -Headers $headers -Body $bodyJson -ContentType "application/json" `
-            -TimeoutSec $TimeoutSec -UseBasicParsing
-
+    $maxAttempts = 3
+    $attempt     = 0
+    $resp        = $null
+    while ($attempt -lt $maxAttempts -and -not $resp) {
+        $attempt++
+        try {
+            $resp = Invoke-WebRequest -Uri "$baseUrl/api/chat" -Method POST `
+                -Headers $headers -Body $bodyJson -ContentType "application/json" `
+                -TimeoutSec $TimeoutSec -UseBasicParsing
+        } catch {
+            $statusCode = $_.Exception.Response.StatusCode.value__
+            if ($statusCode -eq 429 -and $attempt -lt $maxAttempts) {
+                $waitSec = [math]::Pow(2, $attempt) * 5   # 10s, 20s
+                Start-Sleep -Seconds $waitSec
+            } else {
+                $errorMsg = $_.Exception.Message
+                break
+            }
+        }
+    }
+    if ($resp) {
         $sb = [System.Text.StringBuilder]::new()
         foreach ($line in ($resp.Content -split "`n")) {
             $line = $line.Trim()
@@ -126,8 +142,6 @@ $workerScript = {
             }
         }
         $assistantText = $sb.ToString().Trim()
-    } catch {
-        $errorMsg = $_.Exception.Message
     }
 
     [PSCustomObject]@{
