@@ -26,7 +26,7 @@ from api.executor import _execute_tool, _execute_tool_traced
 from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log
 from api.telemetry import _openai_client
 from api.explore_phases import (
-    _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
+    _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
     _calibrate_sentinels, _probe_write_unlock, _infer_param_desc,
 )
 from api.explore_vocab import (
@@ -374,8 +374,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _best_raw_result: str = ""  # best successful result captured for hypothesis generation
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
             _fn_probe_log: list[dict] = []  # accumulate probe entries for explore_probe_log.json
+            _fn_tool_call_count = 0  # hard cap on tool calls per function
+            _finding_recorded = False  # track whether LLM called record_finding
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
+                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                    logger.info("[%s] explore_worker: %s hit tool-call cap (%d), moving on",
+                                job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                    break
                 try:
                     from typing import cast, Any as _Any
                     response = client.chat.completions.create(
@@ -444,9 +450,13 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     else:
                         tool_result = f"Tool '{tc_name}' not found."
 
-                    # Track whether enrich_invocable was called this function
+                    _fn_tool_call_count += 1
+
+                    # Track whether enrich_invocable / record_finding was called this function
                     if tc_name == "enrich_invocable":
                         _enrich_called = True
+                    elif tc_name == "record_finding":
+                        _finding_recorded = True
 
                     # Ground-truth tracking: record direct observations of return=0
                     if tc_name == fn_name:
@@ -477,6 +487,38 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         "tool_call_id": tc.id,
                         "content": tool_result,
                     })
+
+                    # Break out of tool-call processing if we hit the per-function cap
+                    if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                        break
+
+            # ── Force record_finding if the LLM never called it ──────────────
+            if not _finding_recorded and not _observed_successes:
+                # Collect sentinel codes seen across all probes for this function
+                _seen_codes = set()
+                for _pe in _fn_probe_log:
+                    _rex = (_pe.get("result_excerpt") or "")
+                    _rm = _re.search(r"Returned:\s*(\d+)", _rex)
+                    if _rm:
+                        _rv = int(_rm.group(1))
+                        if _rv != 0:
+                            _seen_codes.add(hex(_rv) if _rv > 0xFFFFFFF0 else str(_rv))
+                _code_str = ", ".join(sorted(_seen_codes)) or "unknown"
+                try:
+                    _save_finding(job_id, {
+                        "function": fn_name,
+                        "status": "error",
+                        "finding": f"All {_fn_tool_call_count} probes returned sentinel codes: {_code_str}. "
+                                   f"No working call found.",
+                        "working_call": None,
+                        "notes": f"Auto-recorded: LLM exhausted {_fn_tool_call_count} tool calls "
+                                 f"without calling record_finding.",
+                    })
+                    _finding_recorded = True
+                    logger.info("[%s] explore_worker: forced record_finding(error) for %s — codes: %s",
+                                job_id, fn_name, _code_str)
+                except Exception as _frf:
+                    logger.debug("[%s] forced record_finding failed for %s: %s", job_id, fn_name, _frf)
 
             # Force enrich_invocable if the model skipped it and the function has params
             if not _enrich_called and inv.get("parameters"):

@@ -20,6 +20,7 @@ logger = logging.getLogger("mcp_factory.api")
 #   EXPLORE_MAX_ROUNDS=1   → ~3x faster, shallower enrichment (good for dev)
 #   EXPLORE_MAX_FUNCTIONS=10 → cap number of functions probed
 _MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "3"))
+_MAX_TOOL_CALLS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_TOOL_CALLS", "15"))
 _MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
 
 _SENTINEL_DEFAULTS: dict[int, str] = {
