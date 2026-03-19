@@ -22,8 +22,8 @@ from concurrent.futures import ThreadPoolExecutor as _TPE
 from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
-from api.executor import _execute_tool
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob
+from api.executor import _execute_tool, _execute_tool_traced
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace
 from api.telemetry import _openai_client
 from api.explore_phases import (
     _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
@@ -1062,6 +1062,9 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
             _observed_successes: list[dict] = []
             _enrich_called = False
+            # Accumulate tool calls and traces for transcript + executor_trace.json
+            _mini_tool_log: list[dict] = []
+            _mini_traces: list[dict] = []
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
                 try:
@@ -1098,6 +1101,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     ],
                 })
 
+                _round_reasoning = (msg.content or "").strip()
+                _first_in_round = True
                 for tc in msg.tool_calls:
                     _fn = tc.function  # type: ignore[union-attr]
                     tc_name = _fn.name
@@ -1107,7 +1112,25 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                         tc_args = {}
 
                     tc_inv = inv_map.get(tc_name)
-                    tool_result = _execute_tool(tc_inv, tc_args) if tc_inv else f"Tool '{tc_name}' not found."
+                    if tc_inv:
+                        _traced = _execute_tool_traced(tc_inv, tc_args)
+                        tool_result = _traced["result_str"]
+                        _tc_trace = _traced.get("trace")
+                    else:
+                        tool_result = f"Tool '{tc_name}' not found."
+                        _tc_trace = None
+
+                    # Accumulate for transcript and executor_trace.json
+                    _mini_tool_log.append({
+                        "call": tc_name,
+                        "args": tc_args,
+                        "result": tool_result,
+                        "trace": _tc_trace,
+                        "reasoning": _round_reasoning if _first_in_round else None,
+                    })
+                    if _tc_trace:
+                        _mini_traces.append(_tc_trace)
+                    _first_in_round = False
 
                     if tc_name == "enrich_invocable":
                         _enrich_called = True
@@ -1132,6 +1155,28 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
                                 job_id, tc_name, str(tool_result)[:120])
                     conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+
+            # Persist this mini-session to chat_transcript.txt and executor_trace.json
+            # so it's visible in the session snapshot alongside the main chat sessions.
+            try:
+                _mini_user_msg = (
+                    f"[GAP MINI-SESSION: {fn_name}]\n"
+                    f"Domain expert answer: {answer_text!r}\n"
+                    f"{technical_ctx}"
+                    f"{prev_ctx}"
+                )
+                _mini_final = "(mini-session complete)"
+                # Pick up the last assistant text turn if any
+                for _turn in reversed(conversation):
+                    if _turn.get("role") == "assistant" and _turn.get("content"):
+                        _mini_final = _turn["content"]
+                        break
+                _append_transcript(job_id, _mini_user_msg, _mini_final, _mini_tool_log)
+                if _mini_traces:
+                    _append_executor_trace(job_id, _mini_traces)
+            except Exception as _tr_e:
+                logger.debug("[%s] gap_mini_sessions: transcript write failed for %s: %s",
+                              job_id, fn_name, _tr_e)
 
             # Ground-truth consistency enforcement — same logic as main explore loop
             if _observed_successes:
