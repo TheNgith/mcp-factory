@@ -732,6 +732,20 @@ async def session_snapshot(job_id: str):
                         _download_blob(ARTIFACT_CONTAINER, f"{job_id}/diagnosis_raw.json"))
         except Exception:
             pass  # not yet generated — silently omit
+
+        # ── Sentinel calibration (Phase 0.5 error-code map) ────────────
+        try:
+            zf.writestr("sentinel_calibration.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/sentinel_calibration.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
+
+        # ── Gap resolution log (mini-session outcomes per function) ─────
+        try:
+            zf.writestr("gap_resolution_log.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/gap_resolution_log.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
         # ── Session metadata ───────────────────────────────────────────────────
         # Strip DOMAIN ANSWER lines from hints — those are gap answers, not user-supplied hints
         _raw_hints = status.get("hints", "") or ""
