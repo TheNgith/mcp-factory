@@ -552,7 +552,8 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
 
     Each answer is:
     - Written into vocab.json under gap_answers so the chat LLM sees it in context
-    - Appended to status.json hints so the next explore/refine pass uses it
+    - Appended to status.json hints
+    - Triggers a targeted mini-session per function and re-runs gap generation
     """
     body = body or {}
     answers: list[dict] = body.get("answers") or []
@@ -593,7 +594,35 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     _persist_job_status(job_id, {**current, "hints": combined, "updated_at": time.time()})
 
     logger.info("[%s] answer-gaps: stored %d answers", job_id, len([a for a in answers if a.get("answer", "").strip()]))
-    return JSONResponse({"job_id": job_id, "answers_stored": len(gap_answers)})
+
+    # Trigger targeted mini-sessions for every function that received an answer,
+    # then re-run gap generation to surface any remaining unknowns.
+    from api.explore import _run_gap_answer_mini_sessions
+    inv_map = _job_inv_maps.get(job_id)
+    if not inv_map:
+        try:
+            raw_inv = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+            inv_map = json.loads(raw_inv)
+        except Exception:
+            inv_map = None
+    if inv_map:
+        all_invocables = list(inv_map.values())
+        t = threading.Thread(
+            target=_run_gap_answer_mini_sessions,
+            args=(job_id, all_invocables),
+            daemon=True,
+            name=f"gap-refinement-{job_id}",
+        )
+        t.start()
+        logger.info("[%s] answer-gaps: spawned gap mini-session worker for %d invocables",
+                    job_id, len(all_invocables))
+        return JSONResponse(
+            {"job_id": job_id, "answers_stored": len(gap_answers), "status": "re_exploring"},
+            status_code=202,
+        )
+    else:
+        logger.warning("[%s] answer-gaps: no invocables found — answers stored but no re-exploration triggered", job_id)
+        return JSONResponse({"job_id": job_id, "answers_stored": len(gap_answers)})
 
 
 @app.get("/api/jobs/{job_id}/session-snapshot")
@@ -646,9 +675,16 @@ async def session_snapshot(job_id: str):
 
         # ── Hints ─────────────────────────────────────────────────────────────
         hints_lines = []
-        if status.get("hints"):
+        # Strip DOMAIN ANSWER entries — those are gap answers stored by answer_gaps,
+        # not actual user-supplied hints. Real hints are everything else.
+        _raw_hints_txt = status.get("hints", "") or ""
+        _clean_hints_txt = " | ".join(
+            p.strip() for p in _raw_hints_txt.split(" | ")
+            if p.strip() and not p.strip().startswith("DOMAIN ANSWER")
+        )
+        if _clean_hints_txt:
             hints_lines.append("# User Hints\n")
-            hints_lines.append(status["hints"])
+            hints_lines.append(_clean_hints_txt)
         if status.get("use_cases"):
             hints_lines.append("\n\n# Use Cases\n")
             hints_lines.append(status["use_cases"])
@@ -657,6 +693,13 @@ async def session_snapshot(job_id: str):
         # ── Clarification questions → markdown ────────────────────────────────
         gaps = status.get("explore_questions") or []
         if gaps:
+            # Load vocab to get submitted gap answers (stored under vocab.gap_answers)
+            _vocab_for_gaps: dict = {}
+            try:
+                _vocab_for_gaps = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json"))
+            except Exception:
+                pass
+            _gap_answers = _vocab_for_gaps.get("gap_answers") or {}
             lines = ["# Clarification Questions from Discovery\n"]
             for i, g in enumerate(gaps, 1):
                 q = g.get("question") or g.get("uncertainty") or ""
@@ -665,7 +708,7 @@ async def session_snapshot(job_id: str):
                 lines.append(f"## {i}. {fn}\n**Question:** {q}\n")
                 if td:
                     lines.append(f"**Technical detail:** `{td}`\n")
-                ans = (status.get("vocab_gap_answers") or {}).get(fn, "")
+                ans = _gap_answers.get(fn, "")
                 lines.append(f"**Answer:** {ans if ans else '(unanswered)'}\n")
             zf.writestr("clarification-questions.md", "\n".join(lines))
 
@@ -690,11 +733,17 @@ async def session_snapshot(job_id: str):
         except Exception:
             pass  # not yet generated — silently omit
         # ── Session metadata ───────────────────────────────────────────────────
+        # Strip DOMAIN ANSWER lines from hints — those are gap answers, not user-supplied hints
+        _raw_hints = status.get("hints", "") or ""
+        _clean_hints = " | ".join(
+            p.strip() for p in _raw_hints.split(" | ")
+            if p.strip() and not p.strip().startswith("DOMAIN ANSWER")
+        )
         meta = {
             "job_id":        job_id,
             "component":     status.get("component_name", "unknown"),
             "explore_phase": status.get("explore_phase"),
-            "hints":         status.get("hints", ""),
+            "hints":         _clean_hints,
             "use_cases":     status.get("use_cases", ""),
             "created_at":    status.get("created_at"),
             "updated_at":    status.get("updated_at"),

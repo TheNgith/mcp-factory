@@ -3,26 +3,32 @@
 ## Development Setup
 
 ### Prerequisites
-- **Python 3.6+** for binary analysis scripts
-- **.NET 8 SDK** (planned for future MCP generation components)
-- **Visual Studio Build Tools** with C++ Desktop Development workload
+- **Python 3.10+** — the API uses union types (`bytes | None`), `dict[str, Any]` generics,
+  and `match` statements. Python 3.6 will not work.
+- **.NET 8 SDK** — required only for the Aspire local orchestration (`aspire/AppHost`)
 - **git** for version control
-- **vcpkg** for dependency management (auto-installed by scripts)
 
-### Initial Setup
+### Initial Setup (API)
 
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/evanking12/mcp-factory.git
 cd mcp-factory
 
-# 2. Run fixture tests to verify setup
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\run_fixtures.ps1 -BootstrapVcpkg
+# 2. Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 
-# 3. Verify smoke tests pass
-.\scripts\smoke_test.ps1
+# 3. Install API dependencies
+pip install -r api/requirements.txt
+
+# 4. Run the API locally
+uvicorn api.main:app --reload --port 8000
 ```
+
+> **Note:** `scripts/run_fixtures.ps1` and `scripts/smoke_test.ps1` are Section 2-3
+> era scripts for the static discovery engine (`src/discovery/`), not the API.
+> Do not use them to validate API changes.
 
 ## Workflow
 
@@ -86,23 +92,23 @@ test(smoke): add COM object detection validation
 
 ## Testing
 
-### Automated Tests
+### Automated Tests (API)
 
 ```powershell
-# Run full fixture suite
-.\scripts\run_fixtures.ps1
+# Validate Python syntax across all changed files
+python -c "import ast; [ast.parse(open(f, encoding='utf-8').read()) for f in ['api/explore.py','api/main.py','api/chat.py']]; print('OK')"
 
-# Verify outputs
-.\scripts\smoke_test.ps1
-
-# Check specific exports
-Select-String -Path "artifacts\zstd_tier2_api_zstd_fixture.csv" -Pattern "ZSTD_" | Measure-Object
+# Run the full CI pipeline against the live Azure endpoint
+.\sessions\ci-run.ps1 `
+    -ApiUrl  "https://mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io" `
+    -ApiKey  "<key>" `
+    -DllPath "C:\path\to\contoso_cs.dll"
 ```
 
 ### Manual Testing
-- Test with vcpkg fixtures (zstd, sqlite3)
-- Verify on different VS installations when possible
-- Check PowerShell 5.1 compatibility
+- Test against `contoso_cs.dll` using `ci-run.ps1`
+- Check PowerShell 5.1 compatibility for any `.ps1` script changes
+- See `sessions/README.md` for full test suite and scoring rubric
 
 ## Pull Request Guidelines
 
@@ -139,12 +145,25 @@ Problem this solves or feature it adds
 
 ```
 mcp-factory/
-├── src/discovery/          # Section 2-3: Binary analysis (Evan)
-├── src/mcp/                # Section 4: MCP generation (Layalie, Caden)
-├── src/verification/       # Section 5: Verification UI (Thinh)
-├── scripts/                # Automation (PowerShell)
-├── tests/fixtures/         # Test dependencies
-├── docs/                   # Architecture, ADRs, logs
+├── api/                    # FastAPI backend: discovery, explore, chat, generate
+│   ├── main.py             # FastAPI routes
+│   ├── explore.py          # Explore orchestration + mini-session worker
+│   ├── explore_prompts.py  # LLM prompt builders + gap question generation
+│   ├── explore_vocab.py    # Vocab table management
+│   ├── explore_phases.py   # Sentinel calibration, write-unlock probe
+│   ├── chat.py             # Agentic SSE chat loop
+│   ├── executor.py         # DLL/CLI/GUI/bridge dispatch
+│   └── storage.py          # Blob Storage helpers
+├── ui/                     # FastAPI web UI (proxies /api/* to pipeline)
+├── src/discovery/          # Section 2-3: Static binary analysis (legacy)
+├── sessions/               # CI scripts, test data, run archives
+│   ├── ci-run.ps1          # Full headless pipeline runner
+│   ├── contoso_cs/         # Test binary config and test suite
+│   └── _runs/              # Archived session snapshots
+├── infra/                  # Bicep infrastructure (ACA, Storage, Key Vault)
+├── aspire/                 # .NET Aspire local orchestration
+├── scripts/                # Section 2-3 era automation (PowerShell)
+├── tests/                  # pytest tests
 └── artifacts/              # Generated outputs (gitignored)
 ```
 

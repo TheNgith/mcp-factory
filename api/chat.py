@@ -268,17 +268,14 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
         "role": "system",
         "content": (
             _domain_preamble
-            + "You are an AI agent with direct control over a Windows application via MCP tools.\n"
+            + "You are an AI agent that calls DLL functions via MCP tools to service user requests.\n"
             "RULES:\n"
-            "1. When asked to perform an action, call the appropriate tool(s) immediately. "
-            "You may call multiple tools in a single response to perform sequences faster "
-            "(e.g. to calculate 4 × 3 you would call press_four, press_multiply_by, press_three, press_equals all at once).\n"
-            "   Match the user's intent to the exact tool name — for multiply use press_multiply_by, "
-            "for divide use press_divide_by, for add use press_plus, for subtract use press_minus.\n"
-            "2. After all tool calls finish, always write a plain-text sentence summarising "
-            "what happened and the result visible on screen.\n"
-            "3. Never launch an application that is already open — call the launch tool only once per session.\n"
-            "4. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
+            "1. When asked to perform an action, call the appropriate DLL function tool(s) immediately. "
+            "You may batch multiple independent calls in a single response to perform sequences faster — "
+            "never make one call per response when several can be issued together.\n"
+            "2. After all tool calls finish, write a plain-text summary of what was done and the result. "
+            "Always decode return values for the user (e.g. convert cents to dollars, resolve error codes by name).\n"
+            "3. If the user asks about your capabilities (e.g. 'list your tools', 'what can you do'), "
             "reply with plain text only — do not call any tools.\n"
             + _id_format_rule
             + _error_code_rule
@@ -345,6 +342,65 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
         return
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
+
+    # ── Server-side invocable + tool-schema fallback ───────────────────────
+    # When the caller passes only job_id (headless test runner, CI pipeline)
+    # and omits the invocables/tools arrays, load them from the in-memory
+    # registry or blob storage so the chat session is always self-sufficient.
+    # This removes the fragile "pass 25 KB of JSON through the PS serializer"
+    # dependency and survives container restarts that wipe in-memory state.
+    if not invocables and job_id:
+        from api.storage import _JOB_INVOCABLE_MAPS as _jimap  # type: ignore
+        _loaded: dict = {}
+        if job_id in _jimap:
+            _loaded = dict(_jimap[job_id])
+        else:
+            try:
+                import json as _json_fb
+                from api.storage import _download_blob as _dl_fb
+                from api.config import ARTIFACT_CONTAINER as _AC_fb
+                _raw_inv = _dl_fb(_AC_fb, f"{job_id}/invocables_map.json")
+                _loaded = _json_fb.loads(_raw_inv)
+                _jimap[job_id] = _loaded
+                logger.info("[%s] stream_chat: loaded %d invocables from blob fallback", job_id, len(_loaded))
+            except Exception as _fb_e:
+                logger.debug("[%s] stream_chat: blob fallback failed: %s", job_id, _fb_e)
+        if _loaded:
+            invocables = list(_loaded.values())
+            inv_map.update(_loaded)
+
+    # ── Tool-schema fallback ───────────────────────────────────────────────
+    # If the caller sent no tools array (or it was empty), build OpenAI tool
+    # schemas from the invocables so the LLM always has the DLL functions.
+    if not tools and invocables:
+        import re as _re_chat
+        for _inv in invocables:
+            _props: dict = {}
+            _required: list = []
+            for _p in (_inv.get("parameters") or []):
+                if isinstance(_p, str):
+                    _p = {"name": _p, "type": "string"}
+                _pname = _p.get("name", "arg")
+                _json_type = _p.get("json_type") or "string"
+                _props[_pname] = {
+                    "type": _json_type,
+                    "description": _p.get("description") or _p.get("type", "string"),
+                }
+                if _p.get("direction", "in") != "out":
+                    _required.append(_pname)
+            _safe = _re_chat.sub(r"[^a-zA-Z0-9_.\-]", "_", _inv["name"])[:64]
+            _desc = _inv.get("doc") or _inv.get("description") or _inv["name"]
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": _safe,
+                    "description": _desc,
+                    "parameters": {"type": "object", "properties": _props, "required": _required},
+                },
+            })
+            # Ensure inv_map lookup works whether the model uses the raw or sanitised name
+            if _safe not in inv_map:
+                inv_map[_safe] = _inv
 
     MAX_TOOL_ROUNDS = 14
     _last_call_signature = ""

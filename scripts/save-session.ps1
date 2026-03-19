@@ -16,7 +16,8 @@ param(
     [string]$Note = "",
     [string]$SessionsRoot = "$PSScriptRoot\..\sessions",
     [string]$ApiKey = "",
-    [string]$TranscriptPath = ""
+    [string]$TranscriptPath = "",
+    [string]$OutDir = ""          # When set, merge all artifacts INTO this folder instead of creating a new dated one
 )
 
 if (-not $ApiKey) {
@@ -56,7 +57,7 @@ New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 $snapshotUrl = $ApiUrl.TrimEnd('/') + "/api/jobs/" + $JobId + "/session-snapshot"
 $zipPath     = Join-Path $env:TEMP ("mcp-session-" + $JobId + ".zip")
 $headers     = @{}
-if ($ApiKey) { $headers["X-API-Key"] = $ApiKey }
+if ($ApiKey) { $headers["X-Pipeline-Key"] = $ApiKey }
 
 Write-Host "  Downloading from $snapshotUrl ..." -ForegroundColor Yellow
 try {
@@ -98,17 +99,30 @@ if (-not $Note) {
 }
 
 # ?? 7. Final folder name ?????????????????????????????????????????????????????
-$noteSlug   = ($Note -replace '[^a-zA-Z0-9]', '-' -replace '-{2,}', '-' -replace '^-|-$', '').ToLower()
-$folderName = $datePart + "-" + $commitHash + "-" + $noteSlug
-$sessionDir = Join-Path $SessionsRoot $folderName
-
-if (Test-Path $sessionDir) {
-    $i = 2
-    while (Test-Path ($sessionDir + "-" + $i)) { $i++ }
-    $sessionDir = $sessionDir + "-" + $i
+if ($OutDir) {
+    # Merge snapshot artifacts directly into the caller-supplied folder (e.g. _runs/{JobId})
+    # instead of creating a new dated folder. This gives every ci-run ONE folder with both
+    # the live test transcript/results AND the full snapshot artifacts.
+    $sessionDir = $OutDir
     $folderName = Split-Path $sessionDir -Leaf
+    New-Item -ItemType Directory -Force -Path $sessionDir | Out-Null
+    Get-ChildItem $tempDir -Force | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $sessionDir $_.Name) -Recurse -Force
+    }
+    Remove-Item $tempDir -Recurse -Force
+} else {
+    $noteSlug   = ($Note -replace '[^a-zA-Z0-9]', '-' -replace '-{2,}', '-' -replace '^-|-$', '').ToLower()
+    $folderName = $datePart + "-" + $commitHash + "-" + $noteSlug
+    $sessionDir = Join-Path $SessionsRoot $folderName
+
+    if (Test-Path $sessionDir) {
+        $i = 2
+        while (Test-Path ($sessionDir + "-" + $i)) { $i++ }
+        $sessionDir = $sessionDir + "-" + $i
+        $folderName = Split-Path $sessionDir -Leaf
+    }
+    Move-Item $tempDir $sessionDir
 }
-Move-Item $tempDir $sessionDir
 Write-Host "  Folder : $sessionDir"
 Write-Host ""
 
@@ -530,10 +544,18 @@ $entry = [PSCustomObject]@{
 $existing = @()
 if (Test-Path $indexPath) {
     try {
-        $rawJson = Get-Content $indexPath -Raw
-        $parsed  = ConvertFrom-Json $rawJson
-        if ($parsed -is [System.Array]) { $existing = $parsed }
-        elseif ($null -ne $parsed)      { $existing = @($parsed) }
+        $rawJson  = Get-Content $indexPath -Raw
+        $parsed   = ConvertFrom-Json $rawJson
+        $rawArray = if ($parsed -is [System.Array]) { $parsed } elseif ($null -ne $parsed) { @($parsed) } else { @() }
+        # Unwrap any PS5.1 serialisation artifact where a 1-element array round-tripped
+        # through ConvertFrom-Json and back produces a {value:[...], Count:N} wrapper.
+        foreach ($item in $rawArray) {
+            if ($null -ne $item.PSObject.Properties['value'] -and $null -ne $item.PSObject.Properties['Count']) {
+                foreach ($inner in @($item.value)) { $existing += $inner }
+            } else {
+                $existing += $item
+            }
+        }
     } catch { $existing = @() }
 }
 $existing += $entry

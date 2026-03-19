@@ -82,7 +82,7 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
 - **Pipeline** (`Dockerfile`) — `uvicorn api.main:app` on port 8000. Runs discovery, reads Key Vault secrets via Managed Identity. Writes uploads/artifacts to Blob Storage.
 - **UI** (`Dockerfile.ui`) — `uvicorn ui.main:app` on port 8080. Proxies `/api/*` to the pipeline URL via `httpx`. Holds no secrets.
 
-## Current Status — Week 10 / 16
+## Current Status — Week 11 / 16
 
 > **Summary:** Full end-to-end pipeline is **live in Azure**. Analyze → generate → chat verified against `calc.exe` and `notepad.exe`. MCP stdio server (`generated/notepad/mcp_stdio.py`) registered in `.vscode/mcp.json` — VS Code Copilot connects natively via `#mcp-notepad`. Azure Monitor Workbook deployed alongside App Insights showing live operational metrics. Self-hosted Windows runner VM provisioned in Bicep for GUI automation CI jobs. All known gaps closed.
 
@@ -94,7 +94,7 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
   - ✅ 29/29 demo targets pass across all 10 source-type sections
 - [x] **Section 4: MCP Generation** — **COMPLETE (cloud + local + Copilot)**
   - ✅ `python mcp_factory.py --target <file>` runs full pipeline in one command
-  - ✅ Flask MCP server with `/tools`, `/invoke`, `/chat`, `/download/invocables`
+  - ✅ FastAPI MCP server with `/api/chat`, `/api/jobs`, `/api/generate` endpoints
   - ✅ Chat UI at `http://localhost:5000`; shows tool calls + live execution results
   - ✅ Working demos: Calculator (55 invocables, WinUI3) and Notepad (Win32)
   - ✅ `/api/generate` live in ACA — returns correct tool schema, saved to Blob artifacts
@@ -139,6 +139,7 @@ az containerapp update --name mcp-factory-ui --resource-group mcp-factory-rg --i
 | CI/CD OIDC activation | ✅ **Closed 2026-03-07** — Federated credential created; `Contributor` role assigned on both ACA apps. |
 | MCP protocol proof (Copilot tool call) | ✅ **Closed 2026-03-07** — Confirmed live: opened Copilot Chat, asked it to open Notepad and type "hello world" — it called `file_new` then `type_text` through the MCP stdio protocol. Notepad opened and text appeared. |
 | GUI / COM / CLI Windows analysis in cloud | ✅ **Closed 2026-03-07** — `scripts/gui_bridge.py` FastAPI worker runs on the Windows runner VM, exposing `POST /analyze` for all 4 Windows-only source types (GUI pywinauto, COM/TLB pythoncom, Windows EXE CLI, registry scan). `api/main.py` calls the bridge after static analysis and merges results. Wired into Bicep via `guiBridgeUrl` / `guiBridgeSecret` params; VM auto-starts the bridge as a scheduled task on boot. |
+| Gap answers not triggering re-discovery | ✅ **Closed 2026-03-19** — `answer_gaps` now spawns `_run_gap_answer_mini_sessions`: targeted LLM mini-session per answered function with expert answer + `technical_question` injected as opening context, followed by re-run of gap generation. |
 
 **Approach:** A **Hybrid Discovery Engine** that intelligently routes any target file to the appropriate analyzers based on detected capabilities, producing a uniform MCP JSON contract that §4 consumes directly.
 

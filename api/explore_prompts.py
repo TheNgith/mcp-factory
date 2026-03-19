@@ -124,6 +124,7 @@ Output ONLY valid JSON (no markdown fences):
     {
       "function": "<function_name or 'general'>",
       "question": "<plain-English question for a business user — NO function names, NO error codes, NO jargon. E.g. 'Does processing a payment require any kind of setup or login step first?'>",
+      "technical_question": "<developer-targeted question including the function name, observed error code, and specific unknown. E.g. 'CS_ProcessPayment returned 0xFFFFFFFB on every probe — which function must be called first to unlock write-mode, and are there argument format constraints?'>",
       "technical_detail": "<one sentence for developers: what was observed — include the actual return value or error code. E.g. 'CS_ProcessPayment consistently returned 0xFFFFFFFB (write denied) on every probe.'>"
     }
   ]
@@ -136,6 +137,8 @@ Rules:
   error conditions not observed, functions that always failed
 - `question` must be plain English — a product owner or QA analyst should immediately understand it
   with no programming knowledge. Never include raw numbers, hex codes, or C function names.
+- `technical_question` is for developers: include the function name, exact return codes, and phrase it
+  as an action-oriented question (e.g. "what must be called first", "what argument format is required")
 - `technical_detail` is for developers: include the actual observed values (return codes, hex, function name)
 - If everything is well-documented and confident, return {"gaps": []}
 """

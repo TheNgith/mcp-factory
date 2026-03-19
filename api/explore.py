@@ -39,6 +39,44 @@ from api.explore_prompts import (
 
 logger = logging.getLogger("mcp_factory.api")
 
+
+def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
+    """Build OpenAI tool call schemas from a list of invocable dicts."""
+    from api.chat import _RECORD_FINDING_TOOL, _ENRICH_INVOCABLE_TOOL  # type: ignore
+    tool_schemas: list[dict] = []
+    for inv in invocables:
+        props: dict = {}
+        required: list = []
+        for p in (inv.get("parameters") or []):
+            if isinstance(p, str):
+                p = {"name": p, "type": "string"}
+            pname = p.get("name", "arg")
+            json_type = p.get("json_type") or "string"
+            props[pname] = {
+                "type": json_type,
+                "description": p.get("description") or p.get("type", "string"),
+            }
+            if p.get("direction", "in") != "out":
+                required.append(pname)
+        safe_name = _re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
+        desc = inv.get("doc") or inv.get("description") or inv.get("signature") or inv["name"]
+        tool_schemas.append({
+            "type": "function",
+            "function": {
+                "name": safe_name,
+                "description": desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": props,
+                    "required": required,
+                },
+            },
+        })
+    tool_schemas.append(_RECORD_FINDING_TOOL)
+    tool_schemas.append(_ENRICH_INVOCABLE_TOOL)
+    return tool_schemas
+
+
 def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     """Background worker: explore each invocable with the LLM and enrich the schema."""
     if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
@@ -79,42 +117,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     inv_map["record_finding"] = _findings_inv
 
     # Build tool schemas list for the LLM
-    from api.generate import run_generate as _run_gen  # noqa: F401
-    from api.chat import _RECORD_FINDING_TOOL, _ENRICH_INVOCABLE_TOOL  # type: ignore
-
-    # Build tools from invocables
-    tool_schemas: list[dict] = []
-    import re as _re
-    for inv in invocables:
-        props: dict = {}
-        required: list = []
-        for p in (inv.get("parameters") or []):
-            if isinstance(p, str):
-                p = {"name": p, "type": "string"}
-            pname = p.get("name", "arg")
-            json_type = p.get("json_type") or "string"
-            props[pname] = {
-                "type": json_type,
-                "description": p.get("description") or p.get("type", "string"),
-            }
-            if p.get("direction", "in") != "out":
-                required.append(pname)
-        safe_name = _re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
-        desc = inv.get("doc") or inv.get("description") or inv.get("signature") or inv["name"]
-        tool_schemas.append({
-            "type": "function",
-            "function": {
-                "name": safe_name,
-                "description": desc,
-                "parameters": {
-                    "type": "object",
-                    "properties": props,
-                    "required": required,
-                },
-            },
-        })
-    tool_schemas.append(_RECORD_FINDING_TOOL)
-    tool_schemas.append(_ENRICH_INVOCABLE_TOOL)
+    tool_schemas = _build_tool_schemas(invocables)
 
     client = _openai_client()
     # Use the dedicated explore model (gpt-4o-mini by default) for cost efficiency.
@@ -167,9 +170,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _user_hints = (_job_meta.get("hints") or "").strip()
             _use_cases_text = (_job_meta.get("use_cases") or "").strip()
             if _user_hints:
-                import re as _re_h
                 # Extract ID-like patterns (e.g. CUST-001, ORD-20040301-0042)
-                _hint_ids = list(dict.fromkeys(_re_h.findall(r'[A-Z]{2,6}-[\w-]+', _user_hints)))
+                _hint_ids = list(dict.fromkeys(_re.findall(r'[A-Z]{2,6}-[\w-]+', _user_hints)))
                 if _hint_ids and "id_formats" not in vocab:
                     vocab["id_formats"] = _hint_ids
                 # Store full hint text as notes for the LLM to reason from
@@ -193,7 +195,6 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                  if inv.get("execution", {}).get("dll_path")),
                 "",
             )
-            import re as _re2
             from pathlib import Path as _Path
             _data: bytes | None = None
             # Primary: read from local path (works when running on Windows or
@@ -222,9 +223,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     pass
             if _data is not None:
                 _text = _data.decode("ascii", errors="ignore")
-                _raw  = sorted(set(m.group(0).strip() for m in _re2.finditer(r"[ -~]{6,}", _text) if m.group(0).strip()))
-                _ids     = [s for s in _raw if _re2.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
-                _emails  = [s for s in _raw if _re2.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, _re2.I)]
+                _raw  = sorted(set(m.group(0).strip() for m in _re.finditer(r"[ -~]{6,}", _text) if m.group(0).strip()))
+                _ids     = [s for s in _raw if _re.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
+                _emails  = [s for s in _raw if _re.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, _re.I)]
                 _fmts    = [s for s in _raw if "%" in s and any(c in s for c in ("s", "d", "u", "f", "lu")) and len(s) < 120]
                 _dll_strings = {"ids": _ids, "emails": _emails, "all": _raw}
                 _status  = [s for s in _raw if s.isupper() and 4 <= len(s) <= 16 and s.isalpha()
@@ -912,6 +913,229 @@ def _attempt_gap_resolution(
                                 _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
                     except Exception as _ve:
                         logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
+
+
+def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
+    """Targeted mini-sessions driven by user gap answers.
+
+    For each function that has an answer in vocab.gap_answers, fires a focused
+    LLM session with the domain expert answer injected as opening context.
+    After all mini-sessions complete, re-runs confidence gap generation so the
+    UI reflects the updated understanding (Task 3 — re-discovery loop).
+    """
+    from api.storage import _load_findings
+
+    if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
+        return
+
+    try:
+        # Load vocab to get gap_answers
+        vocab: dict = {}
+        try:
+            raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json")
+            vocab = json.loads(raw)
+        except Exception:
+            pass
+
+        gap_answers: dict = vocab.get("gap_answers") or {}
+        # Only retry specific functions — skip 'general' answers (they feed hints only)
+        targeted = {fn: ans for fn, ans in gap_answers.items() if fn != "general" and (ans or "").strip()}
+        if not targeted:
+            logger.info("[%s] gap_mini_sessions: no function-specific answers — skipping", job_id)
+            return
+
+        client = _openai_client()
+        model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+
+        _job_meta = _get_job_status(job_id) or {}
+        _use_cases_text = _job_meta.get("use_cases", "")
+        sentinels = _SENTINEL_DEFAULTS
+
+        inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
+        inv_map["enrich_invocable"] = {
+            "name": "enrich_invocable", "source_type": "enrich", "_job_id": job_id,
+            "execution": {"method": "enrich"}, "parameters": [],
+        }
+        inv_map["record_finding"] = {
+            "name": "record_finding", "source_type": "findings", "_job_id": job_id,
+            "execution": {"method": "findings"}, "parameters": [],
+        }
+        tool_schemas = _build_tool_schemas(invocables)
+
+        explore_questions = _job_meta.get("explore_questions") or []
+
+        logger.info("[%s] gap_mini_sessions: %d answered function(s) to retry: %s",
+                    job_id, len(targeted), list(targeted))
+
+        for i, (fn_name, answer_text) in enumerate(targeted.items()):
+            inv = inv_map.get(fn_name)
+            if not inv:
+                logger.debug("[%s] gap_mini_sessions: no invocable for %s — skipping", job_id, fn_name)
+                continue
+
+            _set_explore_status(job_id, i, len(targeted), f"Gap mini-session: {fn_name}\u2026")
+            logger.info("[%s] gap_mini_sessions: starting mini-session for %s", job_id, fn_name)
+
+            all_findings = _load_findings(job_id)
+            prev_finding = next((f for f in reversed(all_findings) if f.get("function") == fn_name), None)
+            prev_ctx = (
+                f"Previous attempt: {prev_finding.get('finding', 'no finding')}.\n"
+                if prev_finding else ""
+            )
+
+            # Inject the technical_question from the gap if available — gives the mini-session
+            # a specific action-oriented goal derived from the original gap generation.
+            fn_gap = next((g for g in explore_questions if g.get("function") == fn_name), {})
+            technical_q = fn_gap.get("technical_question", "")
+            technical_ctx = f"Technical context: {technical_q}\n" if technical_q else ""
+
+            sys_msg = _build_explore_system_message(
+                invocables, all_findings,
+                sentinels=sentinels, vocab=vocab, use_cases=_use_cases_text,
+            )
+            conversation = [
+                sys_msg,
+                {
+                    "role": "user",
+                    "content": (
+                        f"DOMAIN EXPERT ANSWER for '{fn_name}'.\n"
+                        f"{technical_ctx}"
+                        f"{prev_ctx}"
+                        f"A domain expert answered: {answer_text!r}\n\n"
+                        f"Use this information to re-probe '{fn_name}' now. "
+                        "Apply the expert's answer to determine the correct prerequisite calls, "
+                        "argument formats, or conditions needed for a successful call. "
+                        "Goal: find a call that returns 0 (success). "
+                        "When done, call enrich_invocable and record_finding with what you found. "
+                        "If every probe still fails after applying the answer, call "
+                        "record_finding(status='error') with exact codes seen."
+                    ),
+                },
+            ]
+
+            _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
+            _observed_successes: list[dict] = []
+            _enrich_called = False
+
+            for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
+                try:
+                    from typing import cast, Any as _Any
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=conversation,
+                        tools=cast(_Any, tool_schemas),
+                        tool_choice="auto",
+                        temperature=0,
+                    )
+                except Exception as exc:
+                    logger.warning("[%s] gap_mini_sessions: OpenAI call failed for %s round %d: %s",
+                                   job_id, fn_name, _round, exc)
+                    break
+
+                msg = response.choices[0].message
+                if not msg.tool_calls:
+                    break
+
+                conversation.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,  # type: ignore[union-attr]
+                                "arguments": tc.function.arguments,  # type: ignore[union-attr]
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                })
+
+                for tc in msg.tool_calls:
+                    _fn = tc.function  # type: ignore[union-attr]
+                    tc_name = _fn.name
+                    try:
+                        tc_args = json.loads(_fn.arguments)
+                    except json.JSONDecodeError:
+                        tc_args = {}
+
+                    tc_inv = inv_map.get(tc_name)
+                    tool_result = _execute_tool(tc_inv, tc_args) if tc_inv else f"Tool '{tc_name}' not found."
+
+                    if tc_name == "enrich_invocable":
+                        _enrich_called = True
+
+                    if tc_name == fn_name:
+                        _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
+                        if _ret_m and int(_ret_m.group(1)) == 0:
+                            _out_bases = frozenset({
+                                "undefined", "undefined2", "undefined4", "undefined8",
+                                "uint", "uint32_t", "int", "int32_t", "dword",
+                                "ulong", "uint4", "uint8", "long", "ulong32",
+                            })
+                            _clean: dict = {}
+                            for _k, _v in tc_args.items():
+                                _p = _p_lookup.get(_k, {})
+                                _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                                _is_out = "*" in _p.get("type", "") and _pt in _out_bases
+                                if not _is_out and _p.get("direction", "in") != "out":
+                                    _clean[_k] = _v
+                            _observed_successes.append(_clean)
+
+                    logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
+                                job_id, tc_name, str(tool_result)[:120])
+                    conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+
+            # Ground-truth consistency enforcement — same logic as main explore loop
+            if _observed_successes:
+                _patch_finding(job_id, fn_name, {"working_call": _observed_successes[0], "status": "success"})
+                logger.info("[%s] gap_mini_sessions: resolved %s \u2192 success %s",
+                            job_id, fn_name, _observed_successes[0])
+            else:
+                _cur = _load_findings(job_id)
+                _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
+                if _ff and _ff.get("working_call") is not None:
+                    _vi = inv_map.get(fn_name)
+                    if _vi:
+                        try:
+                            _vr = _execute_tool(_vi, _ff["working_call"])
+                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                            if _vm:
+                                _vret = int(_vm.group(1))
+                                if _vret not in sentinels and _vret <= 0xFFFFFFF0:
+                                    _patch_finding(job_id, fn_name, {"status": "success"})
+                                else:
+                                    _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
+                        except Exception as _ve:
+                            logger.debug("[%s] gap_mini_sessions: verify failed for %s: %s",
+                                         job_id, fn_name, _ve)
+
+        # Task 3 — Re-discovery loop: re-run confidence gap generation after all mini-sessions
+        # so the UI reflects the updated understanding. Gaps for resolved functions are dropped.
+        try:
+            logger.info("[%s] gap_mini_sessions: re-generating confidence gaps after mini-sessions\u2026", job_id)
+            _set_explore_status(job_id, len(targeted), len(targeted), "Re-assessing gaps\u2026")
+            updated_findings = _load_findings(job_id)
+            new_gaps = _generate_confidence_gaps(client, model, updated_findings, invocables)
+            resolved = {f.get("function") for f in updated_findings if f.get("status") == "success"}
+            new_gaps = [g for g in new_gaps if g.get("function") not in resolved]
+            _gap_current = _get_job_status(job_id) or {}
+            _persist_job_status(job_id, {**_gap_current, "explore_questions": new_gaps}, sync=True)
+            logger.info("[%s] gap_mini_sessions: %d gap(s) remain after re-assessment", job_id, len(new_gaps))
+        except Exception as _re_e:
+            logger.debug("[%s] gap_mini_sessions: re-gap generation failed: %s", job_id, _re_e)
+
+        _cur_status = _get_job_status(job_id) or {}
+        _persist_job_status(
+            job_id,
+            {**_cur_status, "explore_phase": "done", "updated_at": time.time()},
+            sync=True,
+        )
+        logger.info("[%s] gap_mini_sessions: complete", job_id)
+
+    except Exception as exc:
+        logger.error("[%s] gap_mini_sessions: fatal error: %s", job_id, exc)
 
 
 def _set_explore_status(job_id: str, explored: int, total: int, message: str) -> None:

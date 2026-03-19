@@ -18,6 +18,7 @@ from api.config import UPLOAD_CONTAINER, ANALYSIS_QUEUE
 from api.storage import (
     _queue_service_client,
     _download_blob,
+    _get_job_status,
     _persist_job_status,
 )
 from api.telemetry import _ai_span, _warmup_openai
@@ -38,36 +39,43 @@ def _analyze_worker(
     # module cache makes this effectively free after the first import).
     from api.discovery import _run_discovery
 
+    # Snapshot fields written at job-creation time (component_name, hints,
+    # use_cases, created_at) so every subsequent status overwrite preserves them.
+    _init = _get_job_status(job_id) or {}
+
     _persist_job_status(job_id, {
+        **_init,
         "status": "running",
         "progress": 10,
         "message": f"Discovery started for {original_name}",
         "result": None,
         "error": None,
-        "created_at": time.time(),
         "updated_at": time.time(),
     }, sync=True)
     try:
         _persist_job_status(job_id, {
+            **_init,
             "status": "running",
             "progress": 30,
             "message": "Running binary analysis pipeline…",
             "result": None,
             "error": None,
-            "created_at": time.time(),
             "updated_at": time.time(),
         }, sync=True)
         print(f"[DIAG {job_id}] entering _run_discovery", flush=True)
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
             result = _run_discovery(tmp_path, job_id, hints)
         print(f"[DIAG {job_id}] _run_discovery returned {len(result.get('invocables',[]))} invocables", flush=True)
+        # Re-read current status to pick up explore_phase/explore_questions written
+        # by explore.py during the run, then layer the final fields on top.
+        _current = _get_job_status(job_id) or _init
         _final_payload = {
+            **_current,
             "status": "done",
             "progress": 100,
             "message": f"Analysis complete \u2014 {len(result.get('invocables', []))} invocables found",
             "result": result,
             "error": None,
-            "created_at": time.time(),
             "updated_at": time.time(),
         }
         ok = _persist_job_status(job_id, _final_payload, sync=True)
@@ -94,12 +102,12 @@ def _analyze_worker(
     except Exception as exc:
         logger.error("[%s] Async discovery failed: %s", job_id, exc)
         _persist_job_status(job_id, {
+            **(_get_job_status(job_id) or _init),
             "status": "error",
             "progress": 0,
             "message": "Analysis failed",
             "result": None,
             "error": str(exc),
-            "created_at": time.time(),
             "updated_at": time.time(),
         }, sync=True)
     finally:

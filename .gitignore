@@ -53,6 +53,10 @@ debug_stdole/
 logs/
 mcp_dumpbin_out/
 
+# Session run data — large binary artifacts, transcripts, per-run folders
+# Scripts and fixtures live here too but are regenerated from source
+sessions/
+
 # Working/scratch documents not for version control
 docs/SECTIONS_2_3_GAP_ANALYSIS.md
 
