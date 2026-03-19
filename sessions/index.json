@@ -184,5 +184,31 @@
     },
     "function_status": null,
     "saved_at": "2026-03-19T19:12:04.5684201+00:00"
+  },
+  {
+    "date": "2026-03-19",
+    "commit": "3c7338c",
+    "commit_msg": "fix: all 7 session data quality issues",
+    "job_id": "2026-03-18-8c16d04-post-sentinel-fix-run1",
+    "component": "unknown",
+    "note": "unknown-run3",
+    "folder": "2026-03-19-3c7338c-unknown-run3",
+    "finding_counts": {
+      "success": 0,
+      "partial": 0,
+      "failed": 0,
+      "total": 0
+    },
+    "gap_count": 0,
+    "known_ids": "(none recorded)",
+    "vocab_completeness": null,
+    "vocab_coverage": null,
+    "transcript_metrics": {
+      "tool_calls": 0,
+      "sentinel_hits": 0,
+      "dll_errors": 0
+    },
+    "function_status": null,
+    "saved_at": "2026-03-19T19:22:37.1539241+00:00"
   }
 ]
