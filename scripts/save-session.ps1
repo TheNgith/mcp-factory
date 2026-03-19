@@ -246,7 +246,7 @@ if (Test-Path $findPath) {
             $wlines = @()
             foreach ($f in $arr) {
                 if ($f.status -eq "success" -and $f.working_call) {
-                    $fn = if ($f.function_name) { $f.function_name } elseif ($f.invocable_id) { $f.invocable_id } else { "unknown" }
+                    $fn = if ($f.function) { $f.function } else { "unknown" }
                     $wlines += "- **" + $fn + "**: " + ($f.working_call | ConvertTo-Json -Compress)
                 }
             }

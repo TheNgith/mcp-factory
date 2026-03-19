@@ -578,6 +578,9 @@ def _call_execute_bridge(inv: dict, args: dict) -> tuple[str | None, dict]:
             "latency_ms":      round(dt_ms, 2),
             "probe_triggered": _probe_triggered,
             "exception":       None,
+            "fn":              inv.get("name", ""),
+            "args_keys":       list(args.keys()),
+            "result_excerpt":  str(result)[:200],
         }
         return result, _trace
     except Exception as exc:

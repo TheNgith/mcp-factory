@@ -310,6 +310,24 @@ def _patch_finding(job_id: str, function_name: str, patch: dict) -> None:
         all_findings = list(findings)
     if not updated:
         return
+
+    # When status is patched, recompute successes/attempts/confidence and
+    # back-fill all entries for this function so the counts stay accurate.
+    if "status" in patch:
+        fn_entries = [f for f in all_findings if f.get("function") == function_name]
+        attempts = len(fn_entries)
+        successes = sum(1 for f in fn_entries if f.get("status") == "success")
+        ratio = successes / attempts if attempts else 0.0
+        confidence = "high" if ratio >= 0.75 else ("medium" if ratio >= 0.40 else "low")
+        with _JOB_FINDINGS_LOCK:
+            all_f = _JOB_FINDINGS.get(job_id, [])
+            for f in all_f:
+                if f.get("function") == function_name:
+                    f["attempts"] = attempts
+                    f["successes"] = successes
+                    f["confidence"] = confidence
+            all_findings = list(all_f)
+
     try:
         _upload_to_blob(
             ARTIFACT_CONTAINER,

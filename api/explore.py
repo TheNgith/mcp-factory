@@ -148,6 +148,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             sentinels = _calibrate_sentinels(invocables, client, model)
             logger.info("[%s] explore_worker: phase0.5 sentinels: %s", job_id,
                         {f"0x{k:08X}": v for k, v in sentinels.items()})
+            try:
+                _upload_to_blob(
+                    ARTIFACT_CONTAINER,
+                    f"{job_id}/sentinel_calibration.json",
+                    json.dumps({f"0x{k:08X}": v for k, v in sentinels.items()}, indent=2).encode(),
+                )
+            except Exception as _sce:
+                logger.debug("[%s] explore_worker: sentinel artifact upload failed: %s", job_id, _sce)
         except Exception as _se:
             logger.debug("[%s] explore_worker: phase0.5 failed, using defaults: %s", job_id, _se)
 
@@ -162,6 +170,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         except Exception:
             pass  # normal on first run
 
+        # Persist calibrated error codes from sentinels into vocab so
+        # vocab_coverage.json can score against real DLL-specific codes.
+        if sentinels is not _SENTINEL_DEFAULTS:
+            vocab.setdefault("error_codes", {f"0x{k:08X}": v for k, v in sentinels.items()})
+
         # Seed vocab from user-supplied hints so the LLM starts informed
         # even before Phase 0 extracts strings from the binary.
         _use_cases_text = ""
@@ -174,9 +187,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 _hint_ids = list(dict.fromkeys(_re.findall(r'[A-Z]{2,6}-[\w-]+', _user_hints)))
                 if _hint_ids and "id_formats" not in vocab:
                     vocab["id_formats"] = _hint_ids
-                # Store full hint text as notes for the LLM to reason from
-                if "notes" not in vocab:
-                    vocab["notes"] = f"User description: {_user_hints}"
+                # Strip DOMAIN ANSWER entries injected by the answer_gaps endpoint
+                # before writing notes so synthetic answers don't pollute the vocab.
+                _clean_hints = " | ".join(
+                    p.strip() for p in _user_hints.split(" | ")
+                    if p.strip() and not p.strip().startswith("DOMAIN ANSWER")
+                )
+                if _clean_hints and "notes" not in vocab:
+                    vocab["notes"] = f"User description: {_clean_hints}"
                 logger.info("[%s] explore_worker: seeded vocab from user hints: %s", job_id, _user_hints[:80])
             # Persist use_cases into vocab so the chat phase sees it even after
             # vocab["notes"] may be overwritten by later vocabulary updates.
@@ -1125,6 +1143,32 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             logger.info("[%s] gap_mini_sessions: %d gap(s) remain after re-assessment", job_id, len(new_gaps))
         except Exception as _re_e:
             logger.debug("[%s] gap_mini_sessions: re-gap generation failed: %s", job_id, _re_e)
+
+        # Write gap resolution log artifact so session snapshots can report
+        # what changed (resolved vs. still-open) across the mini-session run.
+        try:
+            _targeted_fns = {inv.get("name") for inv in targeted}
+            _grl_findings = _load_findings(job_id)
+            _grl = [
+                {
+                    "function":    f.get("function"),
+                    "status":      f.get("status"),
+                    "working_call": f.get("working_call"),
+                    "confidence":  f.get("confidence"),
+                    "successes":   f.get("successes", 0),
+                    "attempts":    f.get("attempts", 0),
+                }
+                for f in _grl_findings
+                if f.get("function") in _targeted_fns
+            ]
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{job_id}/gap_resolution_log.json",
+                json.dumps(_grl, indent=2).encode(),
+            )
+            logger.info("[%s] gap_mini_sessions: gap_resolution_log written (%d entries)", job_id, len(_grl))
+        except Exception as _grl_e:
+            logger.debug("[%s] gap_mini_sessions: gap_resolution_log upload failed: %s", job_id, _grl_e)
 
         _cur_status = _get_job_status(job_id) or {}
         _persist_job_status(
