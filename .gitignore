@@ -54,8 +54,14 @@ logs/
 mcp_dumpbin_out/
 
 # Session run data — large binary artifacts, transcripts, per-run folders
-# Scripts and fixtures live here too but are regenerated from source
 sessions/
+# Keep the headless runner scripts and contoso_cs fixtures tracked
+!sessions/ci-run.ps1
+!sessions/score-session.ps1
+!sessions/contoso_cs/
+!sessions/contoso_cs/**
+!sessions/misc/
+!sessions/misc/**
 
 # Working/scratch documents not for version control
 docs/SECTIONS_2_3_GAP_ANALYSIS.md
