@@ -546,6 +546,40 @@ if (Test-Path $diagPath) {
 $modelContextSizeKB = $null
 if (Test-Path $contextPath) { $modelContextSizeKB = [Math]::Round((Get-Item $contextPath).Length / 1024, 1) }
 
+# ── 12.9. sentinel_calibration.json (Phase 0.5 assigned meanings) ────────────
+$sentCalibPath    = Join-Path $sessionDir "sentinel_calibration.json"
+$sentCalibSummary = $null
+if (Test-Path $sentCalibPath) {
+    try {
+        $sc = Get-Content $sentCalibPath -Raw | ConvertFrom-Json
+        $scEntries = @($sc.PSObject.Properties)
+        $sentCalibSummary = [PSCustomObject]@{
+            count    = $scEntries.Count
+            meanings = [PSCustomObject]$sc
+        }
+        Write-Host ("  sentinel_calibration.json: $($scEntries.Count) codes assigned — " +
+            ($scEntries | Select-Object -First 3 | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", ") -ForegroundColor Cyan
+    } catch { Write-Host "  sentinel_calibration.json skipped" -ForegroundColor DarkYellow }
+}
+
+# ── 12.95. gap_resolution_log.json (mini-session per-gap outcomes) ────────────
+$gapResPath    = Join-Path $sessionDir "gap_resolution_log.json"
+$gapResSummary = $null
+if (Test-Path $gapResPath) {
+    try {
+        $gr = @(Get-Content $gapResPath -Raw | ConvertFrom-Json)
+        $grResolved   = @($gr | Where-Object { $_.resolved -eq $true }).Count
+        $grUnresolved = @($gr | Where-Object { $_.resolved -ne $true }).Count
+        $gapResSummary = [PSCustomObject]@{
+            total      = $gr.Count
+            resolved   = $grResolved
+            unresolved = $grUnresolved
+        }
+        $grColor = if ($grUnresolved -gt 0) { "Yellow" } else { "Green" }
+        Write-Host ("  gap_resolution_log.json: $grResolved resolved / $grUnresolved unresolved") -ForegroundColor $grColor
+    } catch { Write-Host "  gap_resolution_log.json skipped" -ForegroundColor DarkYellow }
+}
+
 # ── 13. SUMMARY.md — DEPRECATED ──────────────────────────────────────────────
 # SUMMARY.md is a derived read-only artifact synthesised from the raw JSONs.
 # It was removed from active maintenance because:
@@ -739,10 +773,12 @@ $entry = [PSCustomObject]@{
     transcript_present      = $transcriptPresent
     mini_transcript_present = $miniTranscriptPresent
     transcript_metrics = $transcriptMetrics
-    probe_summary      = $probeSummary
-    param_desc_quality = $paramDescQuality
-    function_status    = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
-    saved_at           = (Get-Date -Format "o")
+    probe_summary           = $probeSummary
+    param_desc_quality      = $paramDescQuality
+    sentinel_calibration    = $sentCalibSummary
+    gap_resolution          = $gapResSummary
+    function_status         = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
+    saved_at                = (Get-Date -Format "o")
 }
 # Phase 0-C: robust read — PS5.1 ConvertFrom-Json unwraps 1-element arrays,
 # so we detect the resulting bare object and re-wrap it.
