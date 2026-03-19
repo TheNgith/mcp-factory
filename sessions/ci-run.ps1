@@ -25,7 +25,7 @@ param(
     [string]$ApiKey         = "",
     [string]$Hints          = "",           # free-text hints for discovery
     [string]$UseCases       = "",           # use cases for discovery
-    [string]$AnswersJson    = "",           # path to gap answers JSON (default: CONTOSO_CS_ANSWERS.json)
+    [string]$AnswersJson    = "",           # path to gap answers JSON (default: contoso_cs/ANSWERS.json)
     [string]$SessionsRoot   = $PSScriptRoot,
     [int]   $PollIntervalSec = 10,          # how often to poll job status
     [int]   $TimeoutMin     = 30,           # max wait for generate+discover
@@ -217,7 +217,7 @@ Write-Step 3 "Submit clarification answers"
 
 # Find answers file
 if (-not $AnswersJson) {
-    $AnswersJson = Join-Path $SessionsRoot "CONTOSO_CS_ANSWERS.json"
+    $AnswersJson = Join-Path $SessionsRoot "contoso_cs\ANSWERS.json"
 }
 
 if (Test-Path $AnswersJson) {

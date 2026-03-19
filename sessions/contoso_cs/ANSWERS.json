@@ -1,6 +1,6 @@
 {
   "_comment": "Pre-written domain answers for contoso_cs.dll discovery runs.",
-  "_usage": "Submit via: Invoke-RestMethod -Method POST -Uri '$API_URL/api/jobs/$JOB_ID/answer-gaps' -ContentType 'application/json' -Body (Get-Content sessions/CONTOSO_CS_ANSWERS.json -Raw)",
+  "_usage": "Submit via: Invoke-RestMethod -Method POST -Uri '$API_URL/api/jobs/$JOB_ID/answer-gaps' -ContentType 'application/json' -Body (Get-Content sessions/contoso_cs/ANSWERS.json -Raw)",
   "_note": "These answers bypass the clarification-questions UI step and pre-seed vocab.json with domain knowledge.",
 
   "answers": [

@@ -121,7 +121,7 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | `-JobId` | no | — | Reuse an existing job (implies `-SkipUpload`) |
 | `-Hints` | no | — | Free-text domain hints injected at generate time |
 | `-UseCases` | no | — | Use cases injected at generate time |
-| `-AnswersJson` | no | `sessions/CONTOSO_CS_ANSWERS.json` | Path to pre-written gap answers |
+| `-AnswersJson` | no | `sessions/contoso_cs/ANSWERS.json` | Path to pre-written gap answers |
 | `-PollIntervalSec` | no | 10 | How often to poll job status |
 | `-TimeoutMin` | no | 30 | Max minutes to wait for generate or discover |
 | `-SkipUpload` | no | false | Skip upload+generate; requires `-JobId` |

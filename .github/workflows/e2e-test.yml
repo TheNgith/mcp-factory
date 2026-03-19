@@ -25,8 +25,8 @@ on:
     branches: [main]
     paths:
       - 'api/**'
-      - 'sessions/CONTOSO_CS_ANSWERS.json'
-      - 'sessions/CONTOSO_CS_TEST_SUITE.md'
+      - 'sessions/contoso_cs/ANSWERS.json'
+      - 'sessions/contoso_cs/TEST_SUITE.md'
   workflow_dispatch:
     inputs:
       skip_discover:

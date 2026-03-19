@@ -428,7 +428,7 @@ if (Test-Path $diagPath) {
 }
 
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
-$templatePath = Join-Path $SessionsRoot "CONTOSO_CS_TEST_SUITE.md"
+$templatePath = Join-Path $SessionsRoot "contoso_cs\TEST_SUITE.md"
 $resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
 # Phase 8-A: load diagnosis_raw for pre-filling context in TEST_RESULTS
 $diagRawForTests = @()
@@ -440,7 +440,7 @@ if (Test-Path $templatePath) {
     $tr += "**Session:** " + $folderName + "`n"
     $tr += "**Commit:** " + $commitHash + " - " + $commitMsg + "`n"
     $tr += "**Job ID:** " + $JobId + "`n`n"
-    $tr += "See [../../CONTOSO_CS_TEST_SUITE.md](../../CONTOSO_CS_TEST_SUITE.md) for full prompts.`n`n---`n`n"
+    $tr += "See [../../contoso_cs/TEST_SUITE.md](../../contoso_cs/TEST_SUITE.md) for full prompts.`n`n---`n`n"
     $tr += "## Scoring Table`n`n"
     $tr += "| ID | Description | ID Format | Amount/Value Encoding | Error Decode | Init Order | Overall |`n"
     $tr += "|----|-------------|-----------|----------------------|--------------|------------|---------|`n"
@@ -491,7 +491,7 @@ if (Test-Path $templatePath) {
     Set-Content -Path $resultsPath -Value $tr -Encoding UTF8
     Write-Host "  Created TEST_RESULTS.md" -ForegroundColor Green
 } else {
-    Write-Host "  Skipped TEST_RESULTS.md (template not found at sessions/CONTOSO_CS_TEST_SUITE.md)" -ForegroundColor DarkYellow
+    Write-Host "  Skipped TEST_RESULTS.md (template not found at sessions/contoso_cs/TEST_SUITE.md)" -ForegroundColor DarkYellow
 }
 
 # ?? 16. README.md index ??????????????????????????????????????????????????????
@@ -563,7 +563,7 @@ Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  1. Run test prompts from sessions/CONTOSO_CS_TEST_SUITE.md and fill in TEST_RESULTS.md"
+Write-Host "  1. Run test prompts from sessions/contoso_cs/TEST_SUITE.md and fill in TEST_RESULTS.md"
 Write-Host "  2. Update SUMMARY.md 'What to investigate next' section"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"
