@@ -60,6 +60,7 @@ sessions/
 !sessions/score-session.ps1
 !sessions/run-tests.ps1
 !sessions/compare.ps1
+!sessions/run-contoso.ps1
 !sessions/contoso_cs/
 !sessions/contoso_cs/**
 !sessions/misc/
