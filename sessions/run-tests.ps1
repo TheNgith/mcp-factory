@@ -21,6 +21,7 @@ param(
     [string]  $ApiKey      = "",
     [string[]]$Tests       = @(),         # e.g. @("T04","T07") -- empty = all 28
     [int]     $TimeoutSec  = 180,         # per-prompt API timeout
+    [int]     $Concurrency = 7,           # parallel requests (RunspacePool)
     [switch]  $ScoreAfter,               # run score-session.ps1 when done
     [string]  $SessionsRoot = $PSScriptRoot
 )
@@ -82,49 +83,30 @@ if ($Tests.Count -gt 0) {
     $runIds = $testSuite.Keys
 }
 
-# -- Run loop -------------------------------------------------------------------
+# -- Run loop (parallel via RunspacePool, PS 5.1 compatible) -------------------
 Write-Host ""
 Write-Host "=== MCP Factory -- Headless Test Runner ===" -ForegroundColor Cyan
-Write-Host "  API    : $baseUrl"
-Write-Host "  Job ID : $JobId"
-Write-Host "  Tests  : $($runIds -join ', ')"
-Write-Host "  Output : $OutDir"
+Write-Host "  API         : $baseUrl"
+Write-Host "  Job ID      : $JobId"
+Write-Host "  Tests       : $($runIds -join ', ')"
+Write-Host "  Concurrency : $Concurrency"
+Write-Host "  Output      : $OutDir"
 Write-Host ""
 
-$transcriptParts = [System.Collections.Generic.List[string]]::new()
-$transcriptParts.Add("# MCP Factory -- Chat Transcript (headless)")
-$transcriptParts.Add("# Job: $JobId  |  Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
-$transcriptParts.Add("")
+# Script block executed in each runspace -- returns a PSCustomObject result
+$workerScript = {
+    param($baseUrl, $JobId, $headers, $id, $prompt, $TimeoutSec)
 
-$passCount = 0
-$failCount = 0
-
-foreach ($id in $runIds) {
-    $prompt = $testSuite[$id]
-    Write-Host "  Running $id ... " -NoNewline
-
-    # Build the request body -- fresh single-turn conversation per test
-    $bodyObj = @{
-        job_id   = $JobId
-        messages = @( @{ role = "user"; content = $prompt } )
-    }
-    $bodyJson = $bodyObj | ConvertTo-Json -Depth 5 -Compress
-
+    $bodyJson = (@{ job_id=$JobId; messages=@(@{role="user";content=$prompt}) } | ConvertTo-Json -Depth 5 -Compress)
     $assistantText = ""
-    $toolLines     = [System.Collections.Generic.List[string]]::new()
+    $toolLines     = @()
     $errorMsg      = ""
 
     try {
-        $resp = Invoke-WebRequest `
-            -Uri            "$baseUrl/api/chat" `
-            -Method         POST `
-            -Headers        $headers `
-            -Body           $bodyJson `
-            -ContentType    "application/json" `
-            -TimeoutSec     $TimeoutSec `
-            -UseBasicParsing
+        $resp = Invoke-WebRequest -Uri "$baseUrl/api/chat" -Method POST `
+            -Headers $headers -Body $bodyJson -ContentType "application/json" `
+            -TimeoutSec $TimeoutSec -UseBasicParsing
 
-        # Parse SSE events: each line is "data: {json}" or blank
         $sb = [System.Text.StringBuilder]::new()
         foreach ($line in ($resp.Content -split "`n")) {
             $line = $line.Trim()
@@ -132,77 +114,118 @@ foreach ($id in $runIds) {
                 try {
                     $evt = $Matches[1] | ConvertFrom-Json
                     switch ($evt.type) {
-                        "token" {
-                            [void]$sb.Append($evt.content)
+                        "token"       { [void]$sb.Append($evt.content) }
+                        "tool_call"   {
+                            $argsStr = if ($evt.args) { $evt.args | ConvertTo-Json -Compress -Depth 5 } else { "{}" }
+                            $toolLines += "TOOL: $($evt.name)($argsStr)"
                         }
-                        "tool_call" {
-                            if ($evt.args) {
-                                $argsStr = ($evt.args | ConvertTo-Json -Compress -Depth 5)
-                            } else {
-                                $argsStr = "{}"
-                            }
-                            $toolLines.Add("TOOL: $($evt.name)($argsStr)")
-                        }
-                        "tool_result" {
-                            $toolLines.Add("   -> $($evt.result)")
-                        }
-                        "error" {
-                            $errorMsg = $evt.message
-                        }
+                        "tool_result" { $toolLines += "   -> $($evt.result)" }
+                        "error"       { $errorMsg = $evt.message }
                     }
-                } catch { }
+                } catch {}
             }
         }
         $assistantText = $sb.ToString().Trim()
-
-        if ($errorMsg) {
-            Write-Host "ERROR ($errorMsg)" -ForegroundColor Red
-            $failCount++
-        } else {
-            if ($assistantText.Length -gt 60) {
-                $preview = $assistantText.Substring(0, 60) + "..."
-            } else {
-                $preview = $assistantText
-            }
-            Write-Host "OK -- $preview" -ForegroundColor Green
-            $passCount++
-        }
     } catch {
         $errorMsg = $_.Exception.Message
-        Write-Host "TIMEOUT/ERROR" -ForegroundColor Red
-        Write-Host "    $errorMsg" -ForegroundColor DarkRed
-        $failCount++
     }
 
-    # -- Write test block to transcript ----------------------------------------
+    [PSCustomObject]@{
+        Id            = $id
+        Prompt        = $prompt
+        AssistantText = $assistantText
+        ToolLines     = $toolLines
+        Error         = $errorMsg
+    }
+}
+
+# -- Dispatch all tests in parallel --------------------------------------------
+$pool = [RunspaceFactory]::CreateRunspacePool(1, $Concurrency)
+$pool.Open()
+
+$pending = [System.Collections.Generic.List[hashtable]]::new()
+foreach ($id in $runIds) {
+    $ps = [PowerShell]::Create()
+    $ps.RunspacePool = $pool
+    [void]$ps.AddScript($workerScript).AddParameters(@{
+        baseUrl    = $baseUrl
+        JobId      = $JobId
+        headers    = $headers
+        id         = $id
+        prompt     = $testSuite[$id]
+        TimeoutSec = $TimeoutSec
+    })
+    $pending.Add(@{ PS = $ps; Handle = $ps.BeginInvoke(); Id = $id })
+}
+
+# -- Harvest results as they complete -----------------------------------------
+$resultMap  = @{}
+$passCount  = 0
+$failCount  = 0
+$remaining  = [System.Collections.Generic.List[hashtable]]::new($pending)
+
+Write-Host "  Waiting for $($pending.Count) tests (concurrency=$Concurrency)..." -ForegroundColor DarkGray
+
+while ($remaining.Count -gt 0) {
+    $done = @($remaining | Where-Object { $_.Handle.IsCompleted })
+    foreach ($job in $done) {
+        $r = $job.PS.EndInvoke($job.Handle)[0]
+        $job.PS.Dispose()
+        $remaining.Remove($job)
+        $resultMap[$r.Id] = $r
+
+        if ($r.Error) {
+            Write-Host "  $($r.Id) ... TIMEOUT/ERROR ($($r.Error))" -ForegroundColor Red
+            $failCount++
+        } else {
+            $preview = if ($r.AssistantText.Length -gt 60) { $r.AssistantText.Substring(0,60) + "..." } else { $r.AssistantText }
+            Write-Host "  $($r.Id) ... OK -- $preview" -ForegroundColor Green
+            $passCount++
+        }
+    }
+    if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 300 }
+}
+
+$pool.Close()
+$pool.Dispose()
+
+# -- Build transcript in original test order -----------------------------------
+$transcriptParts = [System.Collections.Generic.List[string]]::new()
+$transcriptParts.Add("# MCP Factory -- Chat Transcript (headless)")
+$transcriptParts.Add("# Job: $JobId  |  Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
+$transcriptParts.Add("")
+
+foreach ($id in $runIds) {
+    $r = $resultMap[$id]
+    if (-not $r) { continue }
+
     $transcriptParts.Add("# ==== TEST $id ====")
-    $transcriptParts.Add("# Prompt: $prompt")
+    $transcriptParts.Add("# Prompt: $($r.Prompt)")
     $transcriptParts.Add("")
     $transcriptParts.Add("[USER]")
-    $transcriptParts.Add($prompt)
+    $transcriptParts.Add($r.Prompt)
     $transcriptParts.Add("")
 
-    if ($toolLines.Count -gt 0) {
+    if ($r.ToolLines.Count -gt 0) {
         $transcriptParts.Add("[TOOL CALLS]")
-        foreach ($tl in $toolLines) { $transcriptParts.Add($tl) }
+        foreach ($tl in $r.ToolLines) { $transcriptParts.Add($tl) }
         $transcriptParts.Add("")
     }
 
-    if ($errorMsg) {
+    if ($r.Error) {
         $transcriptParts.Add("[ERROR]")
-        $transcriptParts.Add($errorMsg)
+        $transcriptParts.Add($r.Error)
     } else {
         $transcriptParts.Add("[ASSISTANT]")
-        $transcriptParts.Add($assistantText)
+        $transcriptParts.Add($r.AssistantText)
     }
 
     $transcriptParts.Add("")
     $transcriptParts.Add("---")
     $transcriptParts.Add("")
-
-    # Flush transcript after each test so partial results survive a crash
-    $transcriptParts | Set-Content (Join-Path $OutDir "chat_transcript.txt") -Encoding UTF8
 }
+
+$transcriptParts | Set-Content (Join-Path $OutDir "chat_transcript.txt") -Encoding UTF8
 
 # -- Summary --------------------------------------------------------------------
 Write-Host ""
