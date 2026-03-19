@@ -151,6 +151,35 @@ def _append_executor_trace(job_id: str, entries: list) -> None:
         logger.warning("[%s] _append_executor_trace failed: %s", job_id, exc)
 
 
+def _append_explore_probe_log(job_id: str, entries: list) -> None:
+    """Append explore-phase probe entries to {job_id}/explore_probe_log.json.
+
+    Each entry records one tool call made by the autonomous discovery loop:
+    phase, function being explored, round number, tool called, args, result
+    excerpt, reasoning text, and the low-level executor trace.  This is the
+    diagnostic record for 'what did the explore loop actually probe?'
+    """
+    if not entries:
+        return
+    try:
+        blob_name = f"{job_id}/explore_probe_log.json"
+        try:
+            existing = json.loads(
+                _download_blob(ARTIFACT_CONTAINER, blob_name).decode("utf-8", errors="replace")
+            )
+            if not isinstance(existing, list):
+                existing = []
+        except Exception:
+            existing = []
+        existing.extend(entries)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER, blob_name,
+            json.dumps(existing, indent=2, default=str).encode("utf-8"),
+        )
+    except Exception as exc:
+        logger.warning("[%s] _append_explore_probe_log failed: %s", job_id, exc)
+
+
 def _persist_job_status(job_id: str, payload: dict, *, sync: bool = False) -> bool:
     """Write job status to in-memory cache and persist to Blob.
 

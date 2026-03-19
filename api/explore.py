@@ -23,7 +23,7 @@ from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool, _execute_tool_traced
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log
 from api.telemetry import _openai_client
 from api.explore_phases import (
     _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
@@ -145,7 +145,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         try:
             logger.info("[%s] explore_worker: phase0.5 calibrating sentinels…", job_id)
             _set_explore_status(job_id, 0, total, "Calibrating error codes…")
-            sentinels = _calibrate_sentinels(invocables, client, model)
+            sentinels = _calibrate_sentinels(invocables, client, model, job_id=job_id)
             logger.info("[%s] explore_worker: phase0.5 sentinels: %s", job_id,
                         {f"0x{k:08X}": v for k, v in sentinels.items()})
             try:
@@ -373,6 +373,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _enrich_called = False
             _best_raw_result: str = ""  # best successful result captured for hypothesis generation
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
+            _fn_probe_log: list[dict] = []  # accumulate probe entries for explore_probe_log.json
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
                 try:
@@ -426,7 +427,18 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     tc_inv = inv_map.get(tc_name)
                     if tc_inv is not None:
                         try:
-                            tool_result = _execute_tool(tc_inv, tc_args)
+                            _tc_traced = _execute_tool_traced(tc_inv, tc_args)
+                            tool_result = _tc_traced["result_str"]
+                            _fn_probe_log.append({
+                                "phase": "explore",
+                                "function": fn_name,
+                                "round": _round,
+                                "reasoning": (msg.content or "").strip() or None,
+                                "tool": tc_name,
+                                "args": tc_args,
+                                "result_excerpt": str(tool_result)[:200],
+                                "trace": _tc_traced.get("trace"),
+                            })
                         except Exception as exc:
                             tool_result = f"Tool error: {exc}"
                     else:
@@ -536,7 +548,16 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     _vi = inv_map.get(fn_name)
                     if _vi:
                         try:
-                            _vr = _execute_tool(_vi, _ff["working_call"])
+                            _vt = _execute_tool_traced(_vi, _ff["working_call"])
+                            _vr = _vt["result_str"]
+                            _fn_probe_log.append({
+                                "phase": "verify",
+                                "function": fn_name,
+                                "tool": fn_name,
+                                "args": _ff["working_call"],
+                                "result_excerpt": str(_vr)[:200],
+                                "trace": _vt.get("trace"),
+                            })
                             _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
                             if _vm:
                                 _vret = int(_vm.group(1))
@@ -576,7 +597,16 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         and _cv.get("function") in already_explored
                     ):
                         _cv_inv = inv_map[_cv["function"]]
-                        _cv_result = _execute_tool(_cv_inv, _cv.get("args") or {})
+                        _cvt = _execute_tool_traced(_cv_inv, _cv.get("args") or {})
+                        _cv_result = _cvt["result_str"]
+                        _fn_probe_log.append({
+                            "phase": "cross_validate",
+                            "function": fn_name,
+                            "tool": _cv["function"],
+                            "args": _cv.get("args") or {},
+                            "result_excerpt": str(_cv_result)[:200],
+                            "trace": _cvt.get("trace"),
+                        })
                         _patch_finding(
                             job_id, fn_name,
                             {"cross_validation": f"{_cv['function']}({_cv.get('args')}) → {_cv_result}"},
@@ -620,6 +650,13 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                             logger.debug("[%s] vocab persist failed: %s", job_id, _vpe)
                     except Exception as _ve:
                         logger.debug("[%s] vocab update failed for %s: %s", job_id, fn_name, _ve)
+
+            # Flush probe log for this function to explore_probe_log.json blob
+            if _fn_probe_log:
+                try:
+                    _append_explore_probe_log(job_id, _fn_probe_log)
+                except Exception as _ple:
+                    logger.debug("[%s] explore probe log flush failed for %s: %s", job_id, fn_name, _ple)
 
         # Run exploration: parallel if EXPLORE_CONCURRENCY > 1, else sequential
         if _CONCURRENCY > 1:

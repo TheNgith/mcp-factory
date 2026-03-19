@@ -12,7 +12,7 @@ import os as _os
 import re as _re
 from collections import defaultdict
 
-from api.executor import _execute_tool
+from api.executor import _execute_tool, _execute_tool_traced
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -31,16 +31,27 @@ _SENTINEL_DEFAULTS: dict[int, str] = {
 }
 
 
-def _calibrate_sentinels(invocables: list[dict], client, model: str) -> dict[int, str]:
+def _calibrate_sentinels(
+    invocables: list[dict], client, model: str, job_id: str = ""
+) -> dict[int, str]:
     """Phase 0.5: probe every exported function with no args and cluster the
     non-zero high-bit return values to discover this DLL's sentinel error codes.
     Falls back to _SENTINEL_DEFAULTS if nothing useful is found."""
     counts: dict[int, int] = defaultdict(int)
     val_fns: dict[int, list[str]] = defaultdict(list)
+    _calibrate_entries: list[dict] = []
 
     for inv in invocables:
         try:
-            result = _execute_tool(inv, {})
+            _ct = _execute_tool_traced(inv, {})
+            result = _ct["result_str"]
+            _calibrate_entries.append({
+                "phase": "calibrate_sentinels",
+                "function": inv["name"],
+                "args": {},
+                "result_excerpt": str(result)[:200],
+                "trace": _ct.get("trace"),
+            })
             m = _re.match(r"Returned:\s*(\d+)", result or "")
             if not m:
                 continue
@@ -51,6 +62,13 @@ def _calibrate_sentinels(invocables: list[dict], client, model: str) -> dict[int
             val_fns[val].append(inv["name"])
         except Exception:
             pass
+
+    if job_id and _calibrate_entries:
+        try:
+            from api.storage import _append_explore_probe_log
+            _append_explore_probe_log(job_id, _calibrate_entries)
+        except Exception as _fle:
+            logger.debug("[%s] calibrate_sentinels probe flush failed: %s", job_id, _fle)
 
     candidates = {
         v: fns for v, fns in val_fns.items()

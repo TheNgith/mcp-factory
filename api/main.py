@@ -732,6 +732,13 @@ async def session_snapshot(job_id: str):
         except Exception:
             pass  # not yet generated — silently omit
 
+        # ── Explore probe log (every probe call in discover phase) ─────
+        try:
+            zf.writestr("explore_probe_log.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/explore_probe_log.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
+
         # ── Raw diagnosis records (one per chat message) ───────────────
         try:
             zf.writestr("diagnosis_raw.json",
