@@ -73,11 +73,11 @@ foreach ($s in $selected) {
     $diag     = if ($s.verdict) { $s.verdict } else { "-" }
 
     $row = ($s.folder).PadRight($colWidth) + " | " +
-           [string]$success.PadRight(7) + " | " +
-           [string]$total.PadRight(5) + " | " +
+           ([string]$success).PadRight(7) + " | " +
+           ([string]$total).PadRight(5) + " | " +
            $vcpct.PadRight(7) + " | " +
            $cov.PadRight(8) + " | " +
-           [string]$txTools.PadRight(7) + " | " +
+           ([string]$txTools).PadRight(7) + " | " +
            $diag
     Write-Host $row
 }

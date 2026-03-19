@@ -297,7 +297,7 @@ if ($SkipSave) {
 
     $saveScript = Join-Path $SessionsRoot "..\scripts\save-session.ps1"
     if (Test-Path $saveScript) {
-        & $saveScript -ApiUrl $base -JobId $JobId -TranscriptPath (Join-Path $outDir "chat_transcript.txt")
+        & $saveScript -ApiUrl $base -ApiKey $ApiKey -JobId $JobId -TranscriptPath (Join-Path $outDir "chat_transcript.txt")
         Write-OK "Session saved"
     } else {
         Write-Skip "save-session.ps1 not found at $saveScript"
