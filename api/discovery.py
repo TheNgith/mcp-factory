@@ -270,7 +270,9 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         "--no-demangle",
     ]
     if hints:
-        cmd += ["--tag", hints[:40].replace(" ", "_")]
+        import re as _re
+        _safe_tag = _re.sub(r"[^A-Za-z0-9_\-]", "_", hints[:40])
+        cmd += ["--tag", _safe_tag]
     if IS_WINDOWS:
         cmd += ["--registry"]  # scan HKLM App Paths, Uninstall, COM CLSIDs (§1.c / P9)
 
