@@ -785,4 +785,118 @@ The probe loop never disappears — it's still required for semantic invariants,
 **Static analysis ceiling for true black-box (ordinal-only, no strings, no version info, no debug info):**
 Export names: `#1`, `#2`, `#3` only. Capstone still harvests sentinel constants. IAT still reveals capabilities. Decompiler still recovers param count and types. PE Version Info empty. The LLM then enters probing with type signatures and capability context — still a massive improvement over today's name-only baseline.
 
+---
+
+### G10 — Static analysis audit artifact in session snapshot (~2 hrs)
+
+**The verification problem:** After G2–G9 are implemented, the pipeline injects a large amount of pre-computed static evidence into the LLM's context. Without a way to inspect what was injected and whether the model used it correctly, there's no way to know if a probe failure was caused by bad static data, a plumbing bug, or a genuine model reasoning gap.
+
+**Change — new artifact: `static_analysis.json`**
+
+Written at the end of Phase 0 (before any probe calls), uploaded to blob alongside `vocab.json` and `mcp_schema.json`. Included in the `session-snapshot` ZIP as a first-class artifact.
+
+Structure:
+```json
+{
+  "generated_at": "2026-03-19T20:14:00Z",
+  "dll_name": "contoso_cs.dll",
+  "pe_version_info": {
+    "FileDescription": "Contoso CRM Helper Library",
+    "CompanyName": "Contoso Ltd",
+    "ProductVersion": "1.0.0.0",
+    "OriginalFilename": "contoso_cs.dll"
+  },
+  "iat_capabilities": {
+    "filesystem": ["ReadFile", "WriteFile"],
+    "network": [],
+    "crypto": [],
+    "registry": [],
+    "raw_imports": ["kernel32.dll", "msvcrt.dll"]
+  },
+  "binary_strings": {
+    "ids_found": ["CUST-001", "CUST-002", "ORD-20260315-0117"],
+    "status_tokens": ["ACTIVE", "LOCKED", "SUSPENDED"],
+    "format_strings": ["%s: balance %d cents"],
+    "emails_found": []
+  },
+  "sentinel_constants": {
+    "source": "capstone",
+    "harvested": {
+      "0xFFFFFFFB": {"function": "CS_ProcessPayment", "instruction": "MOV EAX, 0xFFFFFFFB"},
+      "0xFFFFFFFC": {"function": "CS_LookupCustomer", "instruction": "MOV EAX, 0xFFFFFFFC"}
+    },
+    "calibration_fallback_used": false
+  },
+  "ghidra_enrichment": {
+    "functions_decompiled": 8,
+    "param_names_recovered": 14,
+    "decompile_failures": [],
+    "sample": {
+      "CS_ProcessPayment": {
+        "signature": "int CS_ProcessPayment(char* customerId, int amount_cents)",
+        "decompiled_c_excerpt": "if (!g_isInitialized) return 0xFFFFFFFC;\nif (strncmp(id, \"CUST-\", 5) != 0) return 0xFFFFFFFC;"
+      }
+    }
+  },
+  "vocab_seeded": {
+    "id_formats": ["CUST-001", "CUST-002"],
+    "source": "binary",
+    "overrode_user_hints": false
+  },
+  "injected_into_prompt": true,
+  "static_hints_block_length": 412
+}
+```
+
+**Change — `save-session.ps1` verification step**
+
+After downloading the session snapshot ZIP, add a new step that reads `static_analysis.json` and cross-checks it against the session transcript and findings:
+
+```powershell
+# Step X: Static Analysis Verification
+$static = Get-Content "$sessionDir/static_analysis.json" | ConvertFrom-Json
+
+# Check 1: every harvested sentinel appears in vocab error_codes
+$sentinelMisses = @()
+foreach ($hex in $static.sentinel_constants.harvested.PSObject.Properties.Name) {
+    if (-not $vocab.error_codes.$hex) { $sentinelMisses += $hex }
+}
+
+# Check 2: binary-extracted IDs appear in at least one successful finding
+$idMisses = @()
+foreach ($id in $static.binary_strings.ids_found) {
+    $used = $findings | Where-Object { $_.args -match [regex]::Escape($id) }
+    if (-not $used) { $idMisses += $id }
+}
+
+# Check 3: IAT says no network — verify no findings reference HTTP/socket calls
+$networkFindings = $findings | Where-Object { $_.result -match "http|socket|connect" }
+```
+
+Write results to `static_verification.json`:
+```json
+{
+  "sentinel_misses": [],
+  "id_misses": ["ORD-20260315-0117"],
+  "capability_contradictions": [],
+  "verdict": "PASS",
+  "notes": "ORD-20260315-0117 found in binary but no finding used an order ID — consider adding order lookup test"
+}
+```
+
+Surface `verdict` and any misses in `SUMMARY.md` under a new "Static Analysis Verification" section.
+
+**What this tells you per session:**
+
+| Finding | What it means | Action |
+|---|---|---|
+| `sentinel_misses: ["0xFFFFFFFB"]` | Capstone found it, vocab never got it | Plumbing bug in G9 → G7 handoff |
+| `id_misses: ["CUST-002"]` | Binary contains CUST-002 but no probe used it | Model ignored binary string hints — recall problem |
+| `capability_contradictions: ["http"]` | IAT says no network but finding says HTTP | Static analysis is wrong or DLL delegates via COM |
+| `verdict: PASS` | Every binary-derived fact was used or confirmed | Static enrichment working correctly |
+
+**Effect:** Every session tells you not just "what did the model do" but "did it correctly use the static evidence we handed it." Distinguishes pipeline bugs from model reasoning gaps immediately.
+
+---
+
 > **Note on 0-A:** Root cause was `api/worker.py` not `api/main.py`. `main.py` wrote `component_name` correctly at job creation, but `_analyze_worker` overwrote the entire status dict on every progress update, stripping it out. Fix: import `_get_job_status`, snapshot `_init` at the start of the worker, spread `{**_init, ...}` into all four `_persist_job_status` calls. Final-payload call re-reads current status after explore completes to also preserve `explore_phase`/`explore_questions`.
