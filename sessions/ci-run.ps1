@@ -234,6 +234,38 @@ if (Test-Path $AnswersJson) {
 }
 
 # =============================================================================
+# STEP 3.5 -- Re-run Discover with enriched vocab (answers → explore again)
+# This is the step the web UI does after clarification answers are submitted.
+# The explorer now probes with domain context (ID formats, cent encoding, etc.)
+# baked into vocab.json, producing working_call findings the test model can use.
+# =============================================================================
+if ($SkipDiscover) {
+    Write-Step "3.5" "Re-Discover -- skipped (SkipDiscover)"
+} else {
+    Write-Step "3.5" "Re-run Discover with enriched vocab"
+
+    try {
+        $r = Invoke-RestMethod -Uri "$base/api/jobs/$JobId/explore" -Method POST `
+            -Headers $headers -ContentType "application/json" -Body "{}" -UseBasicParsing
+        Write-OK "Re-Discover queued"
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 409) {
+            Write-OK "Re-Discover already running"
+        } else {
+            Write-Host "    WARN: Re-Discover trigger failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host "  Waiting for Re-Discover to complete..." -ForegroundColor DarkGray
+    $result = Wait-ForJob -Id $JobId -Phase "discover"
+    if (-not $result) {
+        Write-Host "    WARN: Re-Discover timed out -- continuing to tests with partial enrichment" -ForegroundColor Yellow
+    } else {
+        Write-OK "Re-Discover complete. explore_phase=$($result.explore_phase)"
+    }
+}
+
+# =============================================================================
 # STEP 4 -- Run 28 test prompts (headless, one at a time)
 # =============================================================================
 if ($SkipTests) {

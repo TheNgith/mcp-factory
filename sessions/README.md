@@ -1,9 +1,25 @@
 ﻿# Sessions
 
-Each subfolder is a point-in-time snapshot of a discovery job, named:
+This folder contains the automated CI pipeline, test runner, scorer, and per-run output snapshots.
+
+---
+
+## Pipeline overview
+
+The correct execution order — matching what the web UI does:
+
 ```
-YYYY-MM-DD-{commit}-{slug}/
+1. Upload DLL + Generate     generate a raw MCP schema from export names
+2. Discover (explore)        probe the DLL; build initial vocab.json
+3. Submit answers             inject domain knowledge into vocab.json
+3.5 Re-Discover               probe again with enriched vocab → working_call findings
+4. Run tests                 28 headless prompts against /api/chat
+5. Score                     deterministic regex rubric → TEST_RESULTS.md
+6. Save session snapshot     archive to sessions/_runs/{JobId}/
+7. Compare                   regression summary across last N sessions
 ```
+
+Step 3.5 is the critical one most often missed in one-shot pipelines: the model needs to probe the DLL **after** domain answers are in vocab.json so it produces correct `working_call` findings that the test-phase model can rely on.
 
 ---
 
@@ -84,14 +100,124 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 
 ---
 
+## Script reference
+
+### `ci-run.ps1` — full pipeline (upload → generate → discover → answers → re-discover → test → score)
+
+```powershell
+.\sessions\ci-run.ps1 `
+    -ApiUrl    "https://mcp-factory-pipeline.icycoast-8ddfa278.eastus.azurecontainerapps.io" `
+    -ApiKey    "YOUR_KEY" `
+    -DllPath   "C:\path\to\contoso_cs.dll" `
+    -Hints     "Loyalty/rewards system. Customer IDs: CUST-NNN." `
+    -UseCases  "Check balance, redeem points, process payment"
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-ApiUrl` | yes | — | Pipeline API base URL |
+| `-ApiKey` | no | env `PIPELINE_API_KEY` | `X-Pipeline-Key` header |
+| `-DllPath` | yes* | env `MCP_FACTORY_DLL_PATH` | Path to the DLL to analyze |
+| `-JobId` | no | — | Reuse an existing job (implies `-SkipUpload`) |
+| `-Hints` | no | — | Free-text domain hints injected at generate time |
+| `-UseCases` | no | — | Use cases injected at generate time |
+| `-AnswersJson` | no | `sessions/CONTOSO_CS_ANSWERS.json` | Path to pre-written gap answers |
+| `-PollIntervalSec` | no | 10 | How often to poll job status |
+| `-TimeoutMin` | no | 30 | Max minutes to wait for generate or discover |
+| `-SkipUpload` | no | false | Skip upload+generate; requires `-JobId` |
+| `-SkipDiscover` | no | false | Skip both discover passes (including re-discover) |
+| `-SkipTests` | no | false | Skip test execution (score only) |
+| `-SkipSave` | no | false | Skip save-session snapshot |
+| `-FailOnRegress` | no | false | Exit 1 if score is lower than previous best |
+
+---
+
+### `run-tests.ps1` — headless test runner (run 28 prompts, write transcript)
+
+```powershell
+.\sessions\run-tests.ps1 -ApiUrl "..." -JobId "abc12345"
+.\sessions\run-tests.ps1 -ApiUrl "..." -JobId "abc12345" -Tests T05,T14,T21,T23   # specific tests only
+.\sessions\run-tests.ps1 -ApiUrl "..." -JobId "abc12345" -ScoreAfter              # auto-score when done
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-ApiUrl` | yes | — | Pipeline API base URL |
+| `-JobId` | yes | — | Job to run prompts against |
+| `-ApiKey` | no | — | `X-Pipeline-Key` header |
+| `-OutDir` | no | `_runs/{JobId}` | Where to write transcript + results |
+| `-Tests` | no | all 28 | Comma-separated test IDs to run, e.g. `T05,T14` |
+| `-TimeoutSec` | no | 180 | Per-prompt API timeout |
+| `-Concurrency` | no | 3 | Parallel runspaces (reduce if hitting 429s) |
+| `-ScoreAfter` | no | false | Run `score-session.ps1` automatically when done |
+
+---
+
+### `score-session.ps1` — score a transcript against the rubric
+
+```powershell
+.\sessions\score-session.ps1 -SessionDir "sessions\_runs\abc12345"
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-SessionDir` | yes | — | Folder containing `chat_transcript.txt` |
+| `-ShowAll` | no | false | Print all test results including PASSes |
+
+---
+
+### `compare.ps1` — cross-session regression table
+
+```powershell
+.\sessions\compare.ps1
+.\sessions\compare.ps1 -Count 5
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-Count` | no | 10 | How many recent sessions to compare |
+| `-Sessions` | no | — | Explicit list of session folder names |
+| `-FailOnRegression` | no | false | Exit 1 if any function regressed |
+
+---
+
+### `watch-and-run.ps1` — local CI watcher (auto-run on every git push)
+
+```powershell
+.\sessions\watch-and-run.ps1 -ApiUrl "..." -DllPath "C:\path\to\contoso_cs.dll"
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-ApiUrl` | yes | — | Pipeline API base URL |
+| `-DllPath` | yes | — | Path to the DLL |
+| `-ApiKey` | no | env `PIPELINE_API_KEY` | Auth key |
+| `-PollSec` | no | 30 | How often to check for new commits |
+| `-RunOnce` | no | false | Run immediately then exit |
+
+---
+
+### `scripts/save-session.ps1` — snapshot a job into sessions/
+
+```powershell
+.\scripts\save-session.ps1 -ApiUrl "..." -JobId "abc12345"
+.\scripts\save-session.ps1 -ApiUrl "..." -JobId "abc12345" -Note "payment-fix"
+```
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `-ApiUrl` | yes | — | Pipeline API base URL |
+| `-JobId` | yes | — | Job to snapshot |
+| `-ApiKey` | no | env `MCP_FACTORY_API_KEY` | Auth key |
+| `-Note` | no | auto (`{component}-run{N}`) | Short label for the session folder |
+| `-TranscriptPath` | no | auto-searched in Downloads | Path to chat transcript file |
+
+---
+
 ## Session index
 
-| Date | Commit | Job ID | Note | Key findings |
+| Date | Commit | Job ID | Note | Score |
 |---|---|---|---|---|
-| 2026-03-17 | `0b11f66` | `a0fc70e8` | gap-answer-boxes | CS_LookupCustomer working (CUST-001, param_3=0). CS_ProcessPayment write-denied â€” CS_Initialize not called first. CS_UnlockAccount null-argument on LOCKED status when account is already ACTIVE. |
-| 2026-03-17 | `b8e0744` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
-| 2026-03-17 | `b8e0744` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
-| 2026-03-17 | `33f9114` | `a0fc70e8` | unknown-run2 | unknown - (fill in after testing) |
-| 2026-03-18 | `8c16d04` | `cac5f644` | post-sentinel-fix-run1 | unknown - (fill in after testing) |
-| 2026-03-18 | `8c16d04` | `cac5f644` | post-sentinel-fix-run1 | unknown - (fill in after testing) |
+| 2026-03-18 | unknown | `f4cad83c` | baseline (no bridge, no hints) | 23/28 (82%) |
+| 2026-03-18 | unknown | `0c5a7b47` | schema-less + SkipDiscover | 12/28 (43%) |
 

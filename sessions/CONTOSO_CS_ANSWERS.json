@@ -27,7 +27,7 @@
     {
       "function": "CS_LookupCustomer",
       "question": "What does CS_LookupCustomer return and what format is the customer ID?",
-      "answer": "param_1 = customer_id string in CUST-XXX format (zero-padded 3-digit number). Returns structured customer record with id, name, status, tier, balance_cents, loyalty_points. If a raw integer is given (e.g. 7), it must be formatted as CUST-007 before calling."
+      "answer": "param_1 = customer_id string in CUST-XXX format (zero-padded 3-digit number). Returns structured customer record with id, name, email, phone, status, tier, balance_cents, loyalty_points. If a raw integer is given (e.g. 7), it must be formatted as CUST-007 before calling."
     },
     {
       "function": "CS_GetAccountBalance",
