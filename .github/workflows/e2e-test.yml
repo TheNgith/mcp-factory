@@ -21,12 +21,6 @@
 name: E2E Regression Test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'api/**'
-      - 'sessions/contoso_cs/ANSWERS.json'
-      - 'sessions/contoso_cs/TEST_SUITE.md'
   workflow_dispatch:
     inputs:
       skip_discover:
