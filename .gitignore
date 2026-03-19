@@ -58,6 +58,8 @@ sessions/
 # Keep the headless runner scripts and contoso_cs fixtures tracked
 !sessions/ci-run.ps1
 !sessions/score-session.ps1
+!sessions/run-tests.ps1
+!sessions/compare.ps1
 !sessions/contoso_cs/
 !sessions/contoso_cs/**
 !sessions/misc/
