@@ -18,8 +18,11 @@ logger = logging.getLogger("mcp_factory.api")
 
 # Tunable via env for development speed vs. quality tradeoff:
 #   EXPLORE_MAX_ROUNDS=1   → ~3x faster, shallower enrichment (good for dev)
+#   EXPLORE_MAX_ROUNDS=5   → default (5 LLM turns per function, up to 15 total DLL calls)
+#   EXPLORE_MAX_TOOL_CALLS → hard cap on DLL probe calls per function (prevents one function
+#                             from starving the others; every function is guaranteed exploration)
 #   EXPLORE_MAX_FUNCTIONS=10 → cap number of functions probed
-_MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "3"))
+_MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "5"))
 _MAX_TOOL_CALLS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_TOOL_CALLS", "15"))
 _MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
 
