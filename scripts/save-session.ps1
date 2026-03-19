@@ -356,6 +356,34 @@ $sm += "| Gap questions open | " + $gapCount + " |`n"
 $sm += "| Vocab coverage (error codes) | " + $(if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
 $sm += "| Vocab completeness (named params) | " + $(if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
 $sm += "| Known IDs in vocab | " + $knownIds + " |`n`n---`n`n"
+$sm += "## Static Analysis Verification`n`n"
+if ($null -ne $staticVerification) {
+    $sentinelInfo = if ($staticVerification.sentinel_count -gt 0) {
+        $staticVerification.sentinel_count.ToString() + " constants harvested via Capstone (G-9)"
+    } else { "none found" }
+    $iatInfo = if ($staticVerification.iat_categories.Count -gt 0) {
+        "capabilities: " + ($staticVerification.iat_categories -join ", ")
+    } else { "no special capabilities detected" }
+    $sm += "| Metric | Value |`n|---|---|`n"
+    $sm += "| Sentinel source | " + $staticVerification.source + " |`n"
+    $sm += "| Sentinels harvested | " + $sentinelInfo + " |`n"
+    $sm += "| IDs in binary | " + $staticVerification.id_count + " |`n"
+    $sm += "| IAT profile | " + $iatInfo + " |`n"
+    $sm += "| Verdict | **" + $staticVerification.verdict + "** |`n"
+    if (@($staticVerification.sentinel_misses).Count -gt 0) {
+        $sm += "`n> ⚠ Sentinel misses (in binary, not in vocab): " + ($staticVerification.sentinel_misses -join ", ") + "`n"
+    }
+    if (@($staticVerification.id_misses).Count -gt 0) {
+        $sm += "`n> IDs extracted from binary but not exercised in any finding: " +
+               ($staticVerification.id_misses -join ", ") + "`n"
+    }
+    foreach ($note in @($staticVerification.notes)) {
+        $sm += "`n> $note`n"
+    }
+} else {
+    $sm += "> static_analysis.json not found — Phase 0 static enrichment may not have run for this session.`n"
+}
+$sm += "`n---`n`n"
 $sm += "## Working calls confirmed`n`n" + $workingBlock + "`n`n---`n`n"
 $sm += "## Gap questions open`n`n" + $gapBlock + "`n`n---`n`n"
 $sm += "## What to investigate next`n`n> Fill this in after testing`n`n-`n"
@@ -441,8 +469,116 @@ if (Test-Path $diagPath) {
     }
 }
 
+# ── 14.9. Static Analysis Verification (G-10) ───────────────────────────────
+# Cross-check static_analysis.json against vocab.json and findings.json to verify
+# the pipeline correctly used the binary evidence it extracted.
+$staticAnalysisPath = Join-Path $sessionDir "static_analysis.json"
+$staticVerification = $null
+$staticVerdictColor = "DarkYellow"
+$staticVerdictStr   = "n/a"
+if (Test-Path $staticAnalysisPath) {
+    try {
+        $sa = Get-Content $staticAnalysisPath -Raw | ConvertFrom-Json
+
+        $sentinelMisses    = @()
+        $idMisses          = @()
+        $capContradictions = @()
+        $svNotes           = @()
+
+        # Check 1: every harvested sentinel should appear in vocab error_codes
+        if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
+            foreach ($hexProp in $sa.sentinel_constants.harvested.PSObject.Properties) {
+                $hex = $hexProp.Name
+                if ($null -ne $vocab -and $vocab.error_codes) {
+                    if (-not $vocab.error_codes.PSObject.Properties[$hex]) {
+                        $sentinelMisses += $hex
+                    }
+                }
+            }
+        }
+
+        # Check 2: binary-extracted IDs should appear in at least one finding's args
+        $findingsText = ""
+        if (Test-Path $findPath) {
+            try { $findingsText = Get-Content $findPath -Raw } catch { }
+        }
+        if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
+            foreach ($id in @($sa.binary_strings.ids_found)) {
+                if ($findingsText -and $findingsText -notmatch [regex]::Escape($id)) {
+                    $idMisses += $id
+                }
+            }
+        }
+
+        # Check 3: IAT says no networking — verify no findings reference HTTP/socket
+        $networkCats = @()
+        if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
+            $networkCats = @($sa.iat_capabilities.categories.PSObject.Properties.Name) |
+                           Where-Object { $_ -in @("networking","network","rpc") }
+        }
+        if ($networkCats.Count -eq 0 -and $findingsText -and
+            $findingsText -match "(?i)http|socket|winsock") {
+            $capContradictions += "IAT has no network imports but findings mention HTTP/socket"
+        }
+
+        # Summary metadata
+        if ($sa.pe_version_info) {
+            $vDesc = $sa.pe_version_info.FileDescription
+            if ($vDesc) { $svNotes += "PE identity: $vDesc" }
+        }
+        $sentinelCount = 0
+        if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
+            $sentinelCount = @($sa.sentinel_constants.harvested.PSObject.Properties).Count
+        }
+        $idCount = 0
+        if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
+            $idCount = @($sa.binary_strings.ids_found).Count
+        }
+        $iatCats = @()
+        if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
+            $iatCats = @($sa.iat_capabilities.categories.PSObject.Properties.Name)
+        }
+
+        $staticVerdictStr = "PASS"
+        if ($sentinelMisses.Count -gt 0 -or $capContradictions.Count -gt 0) { $staticVerdictStr = "FAIL" }
+        elseif ($idMisses.Count -gt 0) { $staticVerdictStr = "WARN" }
+
+        $staticVerification = [PSCustomObject]@{
+            sentinel_count            = $sentinelCount
+            sentinel_misses           = $sentinelMisses
+            id_count                  = $idCount
+            id_misses                 = $idMisses
+            iat_categories            = $iatCats
+            capability_contradictions = $capContradictions
+            verdict                   = $staticVerdictStr
+            notes                     = $svNotes
+            source                    = if ($sa.sentinel_constants.source) { $sa.sentinel_constants.source } else { "none" }
+        }
+        $staticVerification | ConvertTo-Json -Depth 3 |
+            Set-Content -Path (Join-Path $sessionDir "static_verification.json") -Encoding UTF8
+
+        $staticVerdictColor = switch ($staticVerdictStr) {
+            "PASS" { "Green" }
+            "WARN" { "Yellow" }
+            "FAIL" { "Red" }
+            default { "DarkYellow" }
+        }
+        Write-Host ("  Static analysis: $sentinelCount sentinels, $idCount IDs, IAT:[" +
+                    ($iatCats -join ",") + "] verdict=$staticVerdictStr") -ForegroundColor $staticVerdictColor
+        if ($sentinelMisses.Count -gt 0) {
+            Write-Host "    ⚠ Sentinel misses (harvested but not in vocab): $($sentinelMisses -join ', ')" -ForegroundColor Yellow
+        }
+        if ($idMisses.Count -gt 0) {
+            Write-Host "    → IDs in binary not used in any finding: $($idMisses -join ', ')" -ForegroundColor Cyan
+        }
+    } catch {
+        Write-Host "  static_verification.json skipped: $_" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "  static_analysis.json not found (Phase 0 may not have run)" -ForegroundColor DarkYellow
+}
+
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
-$templatePath = Join-Path $SessionsRoot "contoso_cs\TEST_SUITE.md"
 $resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
 # Phase 8-A: load diagnosis_raw for pre-filling context in TEST_RESULTS
 $diagRawForTests = @()

@@ -370,17 +370,24 @@ def _parse_output(
         # Source tag so the UI can show "recovered by Ghidra"
         source_tag = "ghidra_export" if fn.get("is_exported") else "ghidra_internal"
 
+        # G-5: include decompiled C body in doc so explore agent sees parameter
+        # semantics, error code conditions, and local variable names without probing.
+        _decompiled_c = fn.get("decompiled_c", "")
+        _base_doc = (
+            f"Recovered by Ghidra static analysis. "
+            f"Address: {fn.get('address', '?')}. "
+            f"Calling convention: {cc_ghidra}."
+        )
+        _doc = (_base_doc + "\n\nDecompiled C:\n" + _decompiled_c) if _decompiled_c else _base_doc
+
         invocables.append({
             "name":        name,
             "source_type": source_tag,
             "signature":   fn.get("signature", name),
             "confidence":  confidence,
             "dll_path":    str(binary_path),
-            "doc_comment": (
-                f"Recovered by Ghidra static analysis. "
-                f"Address: {fn.get('address', '?')}. "
-                f"Calling convention: {cc_ghidra}."
-            ),
+            "doc_comment": _doc,
+            "doc":         _doc,
             "parameters":  parameters,
             "return_type": ret_type,
             "execution": {

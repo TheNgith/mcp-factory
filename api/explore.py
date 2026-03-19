@@ -204,9 +204,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         except Exception as _he:
             logger.debug("[%s] explore_worker: hints seed failed: %s", job_id, _he)
 
-        # Phase 0: extract static hints from the DLL binary (best-effort)
+        # Phase 0: static enrichment — G-4 IAT, G-7 binary strings, G-8 PE version info, G-9 Capstone sentinels
         _static_hints_block = ""
         _dll_strings: dict = {}
+        _static_analysis_result: dict = {}
         try:
             dll_path = next(
                 (inv.get("execution", {}).get("dll_path", "") for inv in invocables
@@ -240,30 +241,54 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 except Exception:
                     pass
             if _data is not None:
-                _text = _data.decode("ascii", errors="ignore")
-                _raw  = sorted(set(m.group(0).strip() for m in _re.finditer(r"[ -~]{6,}", _text) if m.group(0).strip()))
-                _ids     = [s for s in _raw if _re.match(r"[A-Z]{2,6}-[\w-]+", s) and len(s) < 40]
-                _emails  = [s for s in _raw if _re.match(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", s, _re.I)]
-                _fmts    = [s for s in _raw if "%" in s and any(c in s for c in ("s", "d", "u", "f", "lu")) and len(s) < 120]
-                _dll_strings = {"ids": _ids, "emails": _emails, "all": _raw}
-                _status  = [s for s in _raw if s.isupper() and 4 <= len(s) <= 16 and s.isalpha()
-                            and s.lower() in {"active","inactive","pending","shipped","delivered",
-                                              "cancelled","suspended","complete","unknown","locked","unlocked"}]
-                parts = []
-                if _ids:    parts.append("Known IDs/codes: " + ", ".join(_ids[:20]))
-                if _emails: parts.append("Known emails: " + ", ".join(_emails[:10]))
-                if _status: parts.append("Known status values: " + ", ".join(_status[:15]))
-                if _fmts:   parts.append("Output format strings: " + " | ".join(_fmts[:5]))
-                if parts:
-                    _static_hints_block = (
-                        "\nSTATIC ANALYSIS HINTS (strings extracted from DLL binary):\n"
-                        + "\n".join(parts)
-                        + "\nUse these as probe values for string params before trying generic ones.\n"
+                from api.static_analysis import run_static_analysis, build_vocab_seeds, build_static_hints_block as _build_shb
+                _dll_name = _Path(dll_path).name if dll_path else "unknown.dll"
+                _static_analysis_result = run_static_analysis(_data, _dll_name)
+
+                # G-7: promote binary evidence into vocab as first-class facts
+                # (binary strings are ground truth — they override nothing the user
+                # set, but fill any vocab key the user left empty)
+                _vocab_seeds = build_vocab_seeds(_static_analysis_result, vocab)
+                for _k, _v in _vocab_seeds.items():
+                    vocab.setdefault(_k, _v)
+                    if _k not in vocab or vocab[_k] == _v:
+                        vocab[_k] = _v  # ensure seed takes effect even if key exists but is falsy
+                if _vocab_seeds:
+                    logger.info("[%s] explore_worker: phase0 vocab seeds applied: %s",
+                                job_id, list(_vocab_seeds.keys()))
+
+                # Build legacy-compat dll_strings dict for _probe_write_unlock
+                _bs = _static_analysis_result.get("binary_strings", {})
+                _dll_strings = {
+                    "ids":    _bs.get("ids_found", []),
+                    "emails": _bs.get("emails_found", []),
+                    "all":    _bs.get("ids_found", []) + _bs.get("emails_found", []),
+                }
+
+                # Build text block appended to LLM prompt (secondary role after vocab)
+                _static_hints_block = _build_shb(_static_analysis_result)
+                _static_analysis_result["injected_into_prompt"] = bool(_static_hints_block)
+                _static_analysis_result["static_hints_block_length"] = len(_static_hints_block)
+
+                # Persist static_analysis.json to blob so save-session can verify it
+                try:
+                    _upload_to_blob(
+                        ARTIFACT_CONTAINER,
+                        f"{job_id}/static_analysis.json",
+                        json.dumps(_static_analysis_result, indent=2).encode(),
                     )
-                    logger.info("[%s] explore_worker: phase0 found %d IDs, %d emails, %d formats",
-                                job_id, len(_ids), len(_emails), len(_fmts))
+                    logger.info("[%s] explore_worker: phase0 static_analysis.json uploaded", job_id)
+                except Exception as _sa_err:
+                    logger.debug("[%s] explore_worker: static_analysis.json upload failed: %s", job_id, _sa_err)
+
+                logger.info("[%s] explore_worker: phase0 G-4/G-7/G-8/G-9 complete — "
+                            "%d IDs, %d sentinels, IAT:%s",
+                            job_id,
+                            len(_bs.get("ids_found", [])),
+                            len(_static_analysis_result.get("sentinel_constants", {}).get("harvested", {})),
+                            list(_static_analysis_result.get("iat_capabilities", {}).get("categories", {}).keys()))
         except Exception as _e:
-            logger.debug("[%s] explore_worker: phase0 string extraction failed: %s", job_id, _e)
+            logger.debug("[%s] explore_worker: phase0 static enrichment failed: %s", job_id, _e)
 
         # Phase 1: write-unlock probe — mirror of run_local.py --write-probe logic
         write_unlock_block = ""

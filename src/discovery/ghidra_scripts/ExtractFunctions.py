@@ -25,22 +25,29 @@ import os
 
 
 def _decompile_params(func, decompiler, monitor):
-    """Use Ghidra's DecompInterface to recover parameter info for *func*.
+    """Use Ghidra's DecompInterface to recover parameter info and decompiled C for *func*.
 
     getParameters() on a stripped export-only DLL returns [] because Ghidra
     has no internal call sites to infer argument types from.  The decompiler,
     however, analyses the stack frame and register usage *inside* the function
     body and usually recovers at least the count and size of each parameter.
 
-    Returns a list of {"name", "type", "ordinal"} dicts, or [] on failure.
+    Returns a tuple:
+      params       - list of {"name", "type", "ordinal"} dicts (may be [])
+      decompiled_c - first 1200 chars of decompiled C body (may be "")
+
+    G-5: The decompiled C text is added to each exported function's JSON entry
+    so ghidra_analyzer.py can map it into the invocable doc field.  This gives
+    the LLM direct visibility of error code conditions, parameter semantics, and
+    local variable names recovered by Ghidra's decompiler.
     """
     try:
         results = decompiler.decompileFunction(func, 30, monitor)
         if not results or not results.decompileCompleted():
-            return []
+            return [], ""
         high_func = results.getHighFunction()
         if not high_func:
-            return []
+            return [], ""
         proto = high_func.getFunctionPrototype()
         params = []
         for i in range(proto.getNumParams()):
@@ -50,10 +57,20 @@ def _decompile_params(func, decompiler, monitor):
                 "type":    str(p.getDataType()),
                 "ordinal": i,
             })
-        return params
+        # G-5: capture decompiled C body (truncated to cap token cost)
+        decompiled_c = ""
+        try:
+            decompiled_func = results.getDecompiledFunction()
+            if decompiled_func:
+                c_text = decompiled_func.getC()
+                if c_text:
+                    decompiled_c = str(c_text)[:1200]
+        except Exception as _dc_exc:
+            print("WARNING: decompiled C capture for " + func.getName() + ": " + str(_dc_exc))
+        return params, decompiled_c
     except Exception as exc:
         print("WARNING: decompiler params for " + func.getName() + ": " + str(exc))
-        return []
+        return [], ""
 
 
 def run():
@@ -124,8 +141,9 @@ def run():
             #   2. Fall back to getParameters() for internal functions or when
             #      the decompiler is not available / returns nothing.
             params = []
+            decompiled_c = ""
             if is_exported and decompiler is not None:
-                params = _decompile_params(func, decompiler, decompiler_monitor)
+                params, decompiled_c = _decompile_params(func, decompiler, decompiler_monitor)
                 if params:
                     print("INFO: decompiler recovered " + str(len(params)) +
                           " params for exported " + func.getName())
@@ -159,6 +177,7 @@ def run():
                 "return_type":        str(func.getReturnType()),
                 "parameters":         params,
                 "is_exported":        is_exported,
+                "decompiled_c":       decompiled_c,  # G-5: full decompiler output (may be "")
             })
 
         result["functions"]      = functions

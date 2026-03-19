@@ -746,6 +746,14 @@ async def session_snapshot(job_id: str):
                         _download_blob(ARTIFACT_CONTAINER, f"{job_id}/gap_resolution_log.json"))
         except Exception:
             pass  # not yet generated — silently omit
+
+        # ── Static analysis artifact (G-4/G-7/G-8/G-9 enrichment) ──────
+        try:
+            zf.writestr("static_analysis.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/static_analysis.json"))
+        except Exception:
+            pass  # Phase 0 may not have run yet — silently omit
+
         # ── Session metadata ───────────────────────────────────────────────────
         # Strip DOMAIN ANSWER lines from hints — those are gap answers, not user-supplied hints
         _raw_hints = status.get("hints", "") or ""
