@@ -123,6 +123,12 @@ Required changes:
 | P8-A | ⚠️ Unverified | |
 | Gap answer re-discovery loop | ✅ Done | 2026-03-19 — `_run_gap_answer_mini_sessions` in `explore.py`, wired in `main.py answer_gaps` |
 | Dual question format | ✅ Done | 2026-03-19 — `technical_question` field added to `_GAP_SYSTEM` in `explore_prompts.py` |
+| G4 — IAT capability injection | ✅ Done | 2026-03-19 `ad522f0` — `api/static_analysis.py`, `_extract_iat_capabilities()` |
+| G5 — Full decompiled C text | ✅ Done | 2026-03-19 `ad522f0` — `ExtractFunctions.py` + `ghidra_analyzer.py` |
+| G7 — Binary strings → first-class vocab | ✅ Done | 2026-03-19 `ad522f0` — `build_vocab_seeds()` in `api/static_analysis.py` |
+| G8 — PE Version Info extraction | ✅ Done | 2026-03-19 `ad522f0` — `_extract_pe_version_info()` in `api/static_analysis.py` |
+| G9 — Capstone sentinel harvesting | ✅ Done | 2026-03-19 `ad522f0` — `_harvest_sentinels_capstone()` in `api/static_analysis.py` |
+| G10 — Static analysis audit artifact | ✅ Done | 2026-03-19 `ad522f0` — `static_analysis.json` in ZIP + `save-session.ps1` step 14.9 |
 
 ---
 
@@ -516,7 +522,7 @@ Phases 0, 1, 2, 3 can proceed in parallel once Phase 0 is done.
 
 ---
 
-*Last updated: 2026-03-19 — 0-A and 0-C completed*
+*Last updated: 2026-03-19 — 0-A, 0-C, G4, G5, G7, G8, G9, G10 completed (`ad522f0`)*
 
 ---
 
@@ -653,14 +659,14 @@ The current Phase 0 scan is equivalent to the Unix `strings` tool — it finds n
 
 ### Effort summary
 
-| Item | Effort | Priority | Unlocks |
-|------|--------|----------|---------|
-| G2 — Ghidra decompiler param enrichment | ~1 day | **HIGH — blocks contoso_cs quality** | Pre-loaded param names/types; exploration becomes verification not guessing |
-| G4 — IAT capability injection | ~2 hrs | **HIGH** | Read/write classification becomes definitive; dependency confusion eliminated |
-| G5 — Full decompiled C text per function | ~3 hrs | **HIGH** | Error codes visible in source; param semantics direct-read; sentinel calibration becomes confirmation |
-| G1 — hints-aware string ranking | ~2 hrs | Medium | Better probe candidates immediately, no new dependencies |
-| G3 — PE `.rdata` XRef string filter | ~half day | Low | Cleaner string extraction; depends on `pefile` (already present) |
-| G6 — FLOSS obfuscated string extraction | ~1 day | Low (stretch) | Real-world DLLs with stack-assembled/XOR strings; adds `flare-floss` dependency |
+| Item | Effort | Priority | Status | Unlocks |
+|------|--------|----------|--------|----------|
+| G2 — Ghidra decompiler param enrichment | ~1 day | **HIGH — blocks contoso_cs quality** | ⬜ | Pre-loaded param names/types; exploration becomes verification not guessing |
+| G4 — IAT capability injection | ~2 hrs | **HIGH** | ✅ `ad522f0` | Read/write classification becomes definitive; dependency confusion eliminated |
+| G5 — Full decompiled C text per function | ~3 hrs | **HIGH** | ✅ `ad522f0` | Error codes visible in source; param semantics direct-read; sentinel calibration becomes confirmation |
+| G1 — hints-aware string ranking | ~2 hrs | Medium | ⬜ | Better probe candidates immediately, no new dependencies |
+| G3 — PE `.rdata` XRef string filter | ~half day | Low | ⬜ | Cleaner string extraction; depends on `pefile` (already present) |
+| G6 — FLOSS obfuscated string extraction | ~1 day | Low (stretch) | ⬜ | Real-world DLLs with stack-assembled/XOR strings; adds `flare-floss` dependency |
 
 **G2 + G4 + G5 should be treated as a single P2-level block** — together they change the pipeline from "empirical probe-and-discover" to "read the evidence, confirm with probes." G1, G3, G6 are incremental improvements on top of that foundation.
 
@@ -752,17 +758,18 @@ sentinels = _harvest_sentinels_capstone(dll_bytes, exported_fn_rvas)
 
 ### Updated effort summary (all G items)
 
-| Item | Effort | Deps | Priority | Key unlock |
-|------|--------|------|----------|------------|
-| G2 — Ghidra decompiler param enrichment | ~1 day | Ghidra (present) | **HIGH** | Param names/types pre-loaded; exploration → verification |
-| G4 — IAT capability injection | ~2 hrs | pefile (present) | **HIGH** | Read/write classification definitive |
-| G5 — Full decompiled C text per function | ~3 hrs | Ghidra (present) | **HIGH** | Error code conditions literal in source |
-| G7 — Binary strings → first-class vocab | ~1 hr | none | **HIGH** | Ground-truth evidence treated as facts, not suggestions |
-| G8 — PE Version Info extraction | ~30 min | pefile (present) | **HIGH** | Domain context from the binary itself; critical for black-box DLLs |
-| G9 — Capstone sentinel harvesting | ~2 hrs | `capstone` (new, tiny) | **HIGH** | Sentinel table from binary arithmetic; eliminates probe-to-failure loop |
-| G1 — Hints-aware string ranking | ~2 hrs | none | Medium | Better probe candidates |
-| G3 — PE `.rdata` XRef string filter | ~half day | pefile (present) | Low | Cleaner string extraction |
-| G6 — FLOSS obfuscated string extraction | ~1 day | `flare-floss` (new) | Low (stretch) | Stack-assembled/XOR strings in real-world DLLs |
+| Item | Effort | Deps | Priority | Status | Key unlock |
+|------|--------|------|----------|--------|------------|
+| G2 — Ghidra decompiler param enrichment | ~1 day | Ghidra (present) | **HIGH** | ⬜ | Param names/types pre-loaded; exploration → verification |
+| G4 — IAT capability injection | ~2 hrs | pefile (present) | **HIGH** | ✅ `ad522f0` | Read/write classification definitive |
+| G5 — Full decompiled C text per function | ~3 hrs | Ghidra (present) | **HIGH** | ✅ `ad522f0` | Error code conditions literal in source |
+| G7 — Binary strings → first-class vocab | ~1 hr | none | **HIGH** | ✅ `ad522f0` | Ground-truth evidence treated as facts, not suggestions |
+| G8 — PE Version Info extraction | ~30 min | pefile (present) | **HIGH** | ✅ `ad522f0` | Domain context from the binary itself; critical for black-box DLLs |
+| G9 — Capstone sentinel harvesting | ~2 hrs | `capstone` (new, tiny) | **HIGH** | ✅ `ad522f0` | Sentinel table from binary arithmetic; eliminates probe-to-failure loop |
+| G10 — Static analysis audit artifact | ~2 hrs | none | **HIGH** | ✅ `ad522f0` | Per-session cross-check of static evidence vs. findings |
+| G1 — Hints-aware string ranking | ~2 hrs | none | Medium | ⬜ | Better probe candidates |
+| G3 — PE `.rdata` XRef string filter | ~half day | pefile (present) | Low | ⬜ | Cleaner string extraction |
+| G6 — FLOSS obfuscated string extraction | ~1 day | `flare-floss` (new) | Low (stretch) | ⬜ | Stack-assembled/XOR strings in real-world DLLs |
 
 **G7 + G8 + G9 are the cheapest high-value items in the entire roadmap.** Combined ~3.5 hrs, all pure Python, all zero LLM cost. They complete the "read before you probe" foundation that G2/G4/G5 start.
 
@@ -898,5 +905,11 @@ Surface `verdict` and any misses in `SUMMARY.md` under a new "Static Analysis Ve
 **Effect:** Every session tells you not just "what did the model do" but "did it correctly use the static evidence we handed it." Distinguishes pipeline bugs from model reasoning gaps immediately.
 
 ---
+
+> **Note on G4/G7/G8/G9:** All four are implemented in the new `api/static_analysis.py` module (`run_static_analysis()`, `build_vocab_seeds()`, `build_static_hints_block()`). `capstone 5.0.7` added as a dependency. Verified on `contoso_cs.dll`: all 5 sentinels harvested, 8 IDs, 9 status tokens, 3 format strings, IAT=filesystem-only — all seeded into `vocab` before the first probe call.
+
+> **Note on G5:** `_decompile_params()` in `ExtractFunctions.py` now returns `(params, decompiled_c)` tuple capturing `getDecompiledFunction().getC()` (first 1200 chars). `ghidra_analyzer.py` injects it into each invocable's `doc` field.
+
+> **Note on G10:** `save-session.ps1` step 14.9 reads `static_analysis.json`, cross-checks sentinels→vocab, binary IDs→findings, IAT no-network claim→findings text. Writes `static_verification.json` with PASS/WARN/FAIL verdict.
 
 > **Note on 0-A:** Root cause was `api/worker.py` not `api/main.py`. `main.py` wrote `component_name` correctly at job creation, but `_analyze_worker` overwrote the entire status dict on every progress update, stripping it out. Fix: import `_get_job_status`, snapshot `_init` at the start of the worker, spread `{**_init, ...}` into all four `_persist_job_status` calls. Final-payload call re-reads current status after explore completes to also preserve `explore_phase`/`explore_questions`.
