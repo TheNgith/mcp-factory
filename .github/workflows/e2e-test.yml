@@ -71,32 +71,34 @@ jobs:
       - name: Run E2E pipeline
         shell: pwsh
         run: |
-          $dllPath = "$env:RUNNER_TEMP\contoso_cs.dll"
+          $dllPath      = "$env:RUNNER_TEMP\contoso_cs.dll"
           $skipUpload   = '${{ github.event.inputs.existing_job_id }}' -ne ''
           $existingJob  = '${{ github.event.inputs.existing_job_id }}'
           $skipDiscover = '${{ github.event.inputs.skip_discover }}' -eq 'true'
 
-          $args = @(
-            "-ApiUrl",   $env:PIPELINE_API_URL,
-            "-ApiKey",   $env:PIPELINE_API_KEY,
-            "-FailOnRegress"
-          )
+          # Use a hashtable splat (never use $args — reserved PS automatic variable)
+          $ciArgs = @{
+            ApiUrl       = $env:PIPELINE_API_URL
+            ApiKey       = $env:PIPELINE_API_KEY
+            Hints        = "Loyalty rewards points system. Customer IDs format CUST-NNN. Functions manage accounts, point balances, redemptions, transactions."
+            UseCases     = "Check balance, redeem points, add points from purchase, get transaction history, unlock VIP tier"
+            FailOnRegress = $true
+            SkipSave     = $true
+          }
 
           if ($skipUpload -and $existingJob) {
-            $args += @("-SkipUpload", "-JobId", $existingJob)
+            $ciArgs['SkipUpload'] = $true
+            $ciArgs['JobId']      = $existingJob
           } elseif (Test-Path $dllPath) {
-            $args += @("-DllPath", $dllPath)
+            $ciArgs['DllPath'] = $dllPath
           } else {
             Write-Host "No DLL and no existing job -- aborting" -ForegroundColor Red
             exit 1
           }
 
-          if ($skipDiscover) { $args += "-SkipDiscover" }
+          if ($skipDiscover) { $ciArgs['SkipDiscover'] = $true }
 
-          # SkipSave in CI -- we commit the session folder ourselves below
-          $args += "-SkipSave"
-
-          & .\sessions\ci-run.ps1 @args
+          & .\sessions\ci-run.ps1 @ciArgs
           exit $LASTEXITCODE
         env:
           PIPELINE_API_URL: ${{ secrets.PIPELINE_API_URL }}
