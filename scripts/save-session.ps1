@@ -806,6 +806,18 @@ if ($jsonOut -and $jsonOut.TrimStart()[0] -ne '[') { $jsonOut = "[$jsonOut]" }
 $jsonOut | Set-Content $indexPath -Encoding UTF8
 Write-Host "  Updated index.json" -ForegroundColor Green
 
+# ── 17.5. Stable current-gaps.md — always reflects the latest run ────────────
+$currentGapsOut = Join-Path $SessionsRoot "current-gaps.md"
+$gapsSource = Join-Path $sessionDir "clarification-questions.md"
+if (Test-Path $gapsSource) {
+    Copy-Item $gapsSource $currentGapsOut -Force
+    Write-Host "  Wrote sessions/current-gaps.md ($gapCount question(s))" -ForegroundColor Cyan
+} else {
+    # No gaps this run — write an empty marker so the prompt file always works
+    Set-Content $currentGapsOut "# No clarification questions for this run`n`nAll functions explored successfully." -Encoding UTF8
+    Write-Host "  sessions/current-gaps.md — no questions this run" -ForegroundColor DarkGray
+}
+
 # ── 18. Refresh DASHBOARD.md ─────────────────────────────────────────────────
 $comparePath = Join-Path $SessionsRoot "compare.ps1"
 if (Test-Path $comparePath) {
@@ -830,4 +842,15 @@ Write-Host "  1. Run test prompts from sessions/contoso_cs/TEST_SUITE.md and fil
 Write-Host "  2. Diagnose from raw artifacts: findings.json, vocab.json, executor_trace.json, explore_probe_log.json, chat_transcript.txt"
 $commitCmd = "git add sessions/ ; git commit -m `"session: " + $JobId + " " + $Note + "`" ; git push"
 Write-Host "  3. Commit: $commitCmd"
+if ($gapCount -gt 0) {
+    Write-Host ""
+    Write-Host "── Clarification questions (answer via /api/jobs/$JobId/answer-gaps) ─────" -ForegroundColor Yellow
+    Write-Host $gapBlock -ForegroundColor DarkYellow
+    Write-Host "── POST template ────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "   scripts\answer-gaps.prompt.md  -> ask Copilot -> fill answers below" -ForegroundColor DarkGray
+    Write-Host "   curl -X POST $($ApiUrl.TrimEnd('/'))/api/jobs/$JobId/answer-gaps \\" -ForegroundColor DarkGray
+    Write-Host "     -H 'Content-Type: application/json' \\" -ForegroundColor DarkGray
+    Write-Host "     -d '{`"answers`":[{`"function`":` "<FN>`",`"answer`":`"<YOUR ANSWER>`"}]}'" -ForegroundColor DarkGray
+    Write-Host "─────────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+}
 
