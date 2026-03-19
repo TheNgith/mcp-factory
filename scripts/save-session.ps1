@@ -270,18 +270,37 @@ if (Test-Path $vocabPath) {
 # Phase 5-C: vocab completeness = fraction of params with a human semantic name
 $vocabCompleteness = $null
 $invMapPath = Join-Path $sessionDir "artifacts\invocables_map.json"
+$paramDescQuality = $null
 if (Test-Path $invMapPath) {
     try {
         $invMap = Get-Content $invMapPath -Raw | ConvertFrom-Json
         $totalParams = 0; $namedParams = 0
+        $boilerplateParams = [System.Collections.Generic.List[string]]@()
         foreach ($prop in $invMap.PSObject.Properties) {
             foreach ($p in @($prop.Value.parameters)) {
                 $totalParams++
                 if ($p.name -and $p.name -notmatch '^param_\d+$') { $namedParams++ }
+                # 5. Param description quality: flag Ghidra boilerplate or empty descriptions
+                $desc = if ($p.description) { $p.description } else { "" }
+                if ($desc -eq "" -or $desc -match '^param_\d+' -or $desc -match 'Ghidra' -or
+                    $desc.Length -lt 8) {
+                    $fn  = $prop.Name
+                    $pnm = if ($p.name) { $p.name } else { "(unnamed)" }
+                    $boilerplateParams.Add("$fn.$pnm")
+                }
             }
         }
         if ($totalParams -gt 0) {
             $vocabCompleteness = [Math]::Round($namedParams / $totalParams, 2)
+        }
+        $paramDescQuality = [PSCustomObject]@{
+            total_params        = $totalParams
+            named_params        = $namedParams
+            boilerplate_count   = $boilerplateParams.Count
+            boilerplate_params  = @($boilerplateParams)
+        }
+        if ($boilerplateParams.Count -gt 0) {
+            Write-Host ("  param descriptions: $($boilerplateParams.Count)/$totalParams still boilerplate/empty") -ForegroundColor Yellow
         }
     } catch { }
 }
@@ -422,17 +441,81 @@ if (Test-Path $probePath) {
         $probeTotal   = $probe.Count
         $probeByPhase = @{}
         $probeFns     = [System.Collections.Generic.HashSet[string]]@()
+        $probeFnCounts = @{}   # fn -> probe count (for distribution)
+        $verifyPass   = 0; $verifyFail = 0
+        $sentinelsObserved = [System.Collections.Generic.HashSet[string]]@()
+
         foreach ($entry in $probe) {
             $ph = if ($entry.phase) { $entry.phase } else { "unknown" }
             $probeByPhase[$ph] = [int]($probeByPhase[$ph]) + 1
-            if ($entry.function) { [void]$probeFns.Add($entry.function) }
+            if ($entry.function) {
+                [void]$probeFns.Add($entry.function)
+                $probeFnCounts[$entry.function] = [int]($probeFnCounts[$entry.function]) + 1
+            }
+            # 2. Verify pass/fail
+            if ($ph -eq "verify") {
+                $rex = $entry.result_excerpt
+                if ($rex -and $rex -match 'Returned:\s*(\d+)') {
+                    $retVal = [int64]$Matches[1] -band 0xFFFFFFFF
+                    if ($retVal -eq 0) { $verifyPass++ } else { $verifyFail++ }
+                } else { $verifyFail++ }
+            }
+            # 6. Sentinels observed from live probe results
+            if ($entry.result_excerpt) {
+                $sentMatches = [regex]::Matches($entry.result_excerpt, '0x[Ff]{7}[0-9A-Fa-f]|Returned:\s*(42949672[0-9]{2})')
+                foreach ($sm in $sentMatches) { [void]$sentinelsObserved.Add($sm.Value) }
+                # also catch decimal high-bit values like 4294967295
+                $decMatches = [regex]::Matches($entry.result_excerpt, 'Returned:\s*(4294967\d{3})')
+                foreach ($dm2 in $decMatches) { [void]$sentinelsObserved.Add($dm2.Groups[1].Value) }
+            }
         }
+
+        # 4. Probes-per-function distribution
+        $probeDist = $null
+        if ($probeFnCounts.Count -gt 0) {
+            $counts = @($probeFnCounts.Values)
+            $pMin = ($counts | Measure-Object -Minimum).Minimum
+            $pMax = ($counts | Measure-Object -Maximum).Maximum
+            $pAvg = [Math]::Round(($counts | Measure-Object -Average).Average, 1)
+            $pOver = @($probeFnCounts.GetEnumerator() | Where-Object { $_.Value -gt 9 } |
+                       Select-Object -ExpandProperty Key)
+            $probeDist = [PSCustomObject]@{
+                min = $pMin; max = $pMax; avg = $pAvg
+                over_probed_fns = $pOver   # functions probed > 9 times (possible loop-stuck)
+            }
+        }
+
+        # 1. Unprobed functions (in invocables_map but never appeared in probe log)
+        $unprobedFns = @()
+        if (Test-Path $invMapPath) {
+            try {
+                $im2 = Get-Content $invMapPath -Raw | ConvertFrom-Json
+                foreach ($prop in $im2.PSObject.Properties) {
+                    if (-not $probeFns.Contains($prop.Name)) { $unprobedFns += $prop.Name }
+                }
+            } catch { }
+        }
+
         $probeSummary = [PSCustomObject]@{
-            total_probes      = $probeTotal
-            functions_probed  = $probeFns.Count
-            by_phase          = [PSCustomObject]$probeByPhase
+            total_probes       = $probeTotal
+            functions_probed   = $probeFns.Count
+            unprobed_functions = $unprobedFns
+            by_phase           = [PSCustomObject]$probeByPhase
+            verify_pass        = $verifyPass
+            verify_fail        = $verifyFail
+            probe_distribution = $probeDist
+            sentinels_observed = @($sentinelsObserved)
         }
-        Write-Host ("  explore_probe_log.json: $probeTotal probes across $($probeFns.Count) functions") -ForegroundColor Green
+        $unprobeColor = if ($unprobedFns.Count -gt 0) { "Yellow" } else { "Green" }
+        $verifyColor  = if ($verifyFail -gt 0) { "Yellow" } else { "Green" }
+        Write-Host ("  explore_probe_log.json: $probeTotal probes, $($probeFns.Count) fns probed, $($unprobedFns.Count) unprobed") -ForegroundColor $unprobeColor
+        Write-Host ("  verify: $verifyPass pass / $verifyFail fail") -ForegroundColor $verifyColor
+        if ($sentinelsObserved.Count -gt 0) {
+            Write-Host ("  sentinels observed in probes: " + ($sentinelsObserved -join ", ")) -ForegroundColor Cyan
+        }
+        if ($pOver -and $pOver.Count -gt 0) {
+            Write-Host ("  over-probed functions (>9): " + ($pOver -join ", ")) -ForegroundColor Yellow
+        }
     } catch { Write-Host "  explore_probe_log.json skipped" -ForegroundColor DarkYellow }
 }
 
@@ -514,6 +597,15 @@ if (-not (Test-Path $destTranscript)) {
     }
 } else {
     Write-Host "  chat_transcript.txt present in snapshot" -ForegroundColor Green
+}
+
+# 3. transcript_present / mini_transcript_present flags
+$transcriptPresent      = Test-Path $destTranscript
+$miniTranscriptPath     = Join-Path $sessionDir "mini_session_transcript.txt"
+$miniTranscriptPresent  = Test-Path $miniTranscriptPath
+if (-not $miniTranscriptPresent) {
+    # also accept inside artifacts/ subdir (older ZIP layouts)
+    $miniTranscriptPresent = Test-Path (Join-Path $sessionDir "artifacts\mini_session_transcript.txt")
 }
 
 # ── 14.5. transcript metrics (Phase 5-B) ──────────────────────────────
@@ -644,8 +736,11 @@ $entry = [PSCustomObject]@{
     known_ids          = $knownIds
     vocab_completeness = $vocabCompleteness
     vocab_coverage     = $vocabCoverageScore
+    transcript_present      = $transcriptPresent
+    mini_transcript_present = $miniTranscriptPresent
     transcript_metrics = $transcriptMetrics
     probe_summary      = $probeSummary
+    param_desc_quality = $paramDescQuality
     function_status    = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
     saved_at           = (Get-Date -Format "o")
 }
