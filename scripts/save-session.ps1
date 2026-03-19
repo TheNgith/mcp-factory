@@ -334,6 +334,112 @@ if (Test-Path $gapsPath) {
     $gapBlock = $gt
 }
 
+# ── 12.5. Pre-parse static_analysis.json (required before SUMMARY.md) ─────────────
+$staticAnalysisPath = Join-Path $sessionDir "static_analysis.json"
+$staticVerification = $null; $staticVerdictStr = "n/a"
+if (Test-Path $staticAnalysisPath) {
+    try {
+        $sa = Get-Content $staticAnalysisPath -Raw | ConvertFrom-Json
+        $sentinelMisses = @(); $idMisses = @(); $capContradictions = @(); $svNotes = @()
+        if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
+            foreach ($h in $sa.sentinel_constants.harvested.PSObject.Properties) {
+                if ($null -ne $vocab -and $vocab.error_codes -and
+                    -not $vocab.error_codes.PSObject.Properties[$h.Name]) {
+                    $sentinelMisses += $h.Name
+                }
+            }
+        }
+        $saFindText = if (Test-Path $findPath) { try { Get-Content $findPath -Raw } catch { "" } } else { "" }
+        if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
+            foreach ($id in @($sa.binary_strings.ids_found)) {
+                if ($saFindText -and $saFindText -notmatch [regex]::Escape($id)) { $idMisses += $id }
+            }
+        }
+        $saNetCats = if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
+            @($sa.iat_capabilities.categories.PSObject.Properties.Name) |
+                Where-Object { $_ -in @("networking","network","rpc") }
+        } else { @() }
+        if ($saNetCats.Count -eq 0 -and $saFindText -match "(?i)http|socket|winsock") {
+            $capContradictions += "IAT has no network imports but findings mention HTTP/socket"
+        }
+        if ($sa.pe_version_info -and $sa.pe_version_info.FileDescription) {
+            $svNotes += "PE identity: $($sa.pe_version_info.FileDescription)"
+        }
+        $saCount = if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
+            @($sa.sentinel_constants.harvested.PSObject.Properties).Count } else { 0 }
+        $saIdCnt = if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
+            @($sa.binary_strings.ids_found).Count } else { 0 }
+        $saIat   = if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
+            @($sa.iat_capabilities.categories.PSObject.Properties.Name) } else { @() }
+        $staticVerdictStr = if ($sentinelMisses.Count -gt 0 -or $capContradictions.Count -gt 0) { "FAIL" }
+                            elseif ($idMisses.Count -gt 0) { "WARN" } else { "PASS" }
+        $staticVerification = [PSCustomObject]@{
+            sentinel_count            = $saCount;     sentinel_misses           = $sentinelMisses
+            id_count                  = $saIdCnt;     id_misses                 = $idMisses
+            iat_categories            = $saIat;       capability_contradictions = $capContradictions
+            verdict                   = $staticVerdictStr; notes = $svNotes
+            source = if ($sa.sentinel_constants.source) { $sa.sentinel_constants.source } else { "none" }
+        }
+    } catch { }
+}
+
+# ── 12.6. Pre-parse executor_trace.json (required before SUMMARY.md) ───────────
+$execTracePath    = Join-Path $sessionDir "executor_trace.json"
+$execTraceSummary = $null
+if (Test-Path $execTracePath) {
+    try {
+        $et = @(Get-Content $execTracePath -Raw | ConvertFrom-Json)
+        $etTotal = $et.Count; $etOk = 0; $etExcTypes = @{}
+        $etFnFail = [System.Collections.Generic.List[string]]@()
+        foreach ($entry in $et) {
+            $tr = if ($entry.trace) { $entry.trace } else { $entry }
+            $ok = if ($null -ne $tr.ok) { [bool]$tr.ok } else { -not ($tr.exception_class) }
+            if ($ok) { $etOk++ } else {
+                $exc = if ($tr.exception_class) { $tr.exception_class } else { "unknown" }
+                $etExcTypes[$exc] = [int]($etExcTypes[$exc]) + 1
+                $fn = if ($entry.function_name) { $entry.function_name }
+                      elseif ($tr.function_name) { $tr.function_name } else { $null }
+                if ($fn) { $etFnFail.Add("$fn ($exc)") }
+            }
+        }
+        $execTraceSummary = [PSCustomObject]@{
+            total_calls = $etTotal; ok = $etOk; failed = ($etTotal - $etOk)
+            error_rate  = if ($etTotal -gt 0) { [Math]::Round(($etTotal - $etOk) / $etTotal, 2) } else { 0.0 }
+            exception_types   = [PSCustomObject]$etExcTypes
+            function_failures = @($etFnFail)
+        }
+        $etColor = if ($etTotal - $etOk -gt 0) { "Yellow" } else { "Green" }
+        Write-Host ("  executor_trace.json: $etTotal calls, $etOk ok, $($etTotal - $etOk) failed") -ForegroundColor $etColor
+    } catch { Write-Host "  executor_trace.json skipped" -ForegroundColor DarkYellow }
+}
+
+# ── 12.7. Pre-parse diagnosis_raw.json (required before SUMMARY.md + DIAGNOSIS.json) ──
+$diagPath = Join-Path $sessionDir "diagnosis_raw.json"
+$diagRaw  = @(); $diagOut = $null
+if (Test-Path $diagPath) {
+    try {
+        $diagRaw  = @(Get-Content $diagPath -Raw | ConvertFrom-Json)
+        $dCats    = @{}; $dSent = 0; $dErr = 0; $dRnds = 0
+        foreach ($d in $diagRaw) {
+            $dSent += [int]($d.sentinel_hits); $dErr += [int]($d.dll_errors)
+            $dRnds += [int]($d.round_count)
+            if ($d.dll_errors    -gt 0) { $dCats["dll_error"]       = [int]($dCats["dll_error"])       + $d.dll_errors }
+            if ($d.sentinel_hits -gt 0) { $dCats["sentinel_0xffff"] = [int]($dCats["sentinel_0xffff"]) + $d.sentinel_hits }
+        }
+        $diagOut = [PSCustomObject]@{
+            total_messages   = $diagRaw.Count; total_rounds     = $dRnds
+            total_sentinels  = $dSent;         total_dll_errors = $dErr
+            failure_categories = [PSCustomObject]$dCats
+            verdict = if ($dSent -eq 0 -and $dErr -eq 0) { "clean" }
+                      elseif ($dSent -gt 5 -or $dErr -gt 3) { "blocked" } else { "partial" }
+        }
+    } catch { }
+}
+
+# ── 12.8. model_context.txt size ────────────────────────────────────────────
+$modelContextSizeKB = $null
+if (Test-Path $contextPath) { $modelContextSizeKB = [Math]::Round((Get-Item $contextPath).Length / 1024, 1) }
+
 # ?? 13. SUMMARY.md ???????????????????????????????????????????????????????????
 $sm  = "# Session Summary`n`n"
 $sm += "> For pipeline architecture and how vocab.json/schema/findings fit together, see [../WORKFLOW.md](../WORKFLOW.md)`n`n"
@@ -355,7 +461,26 @@ $sm += "| Failed | " + $failedCount + " |`n"
 $sm += "| Gap questions open | " + $gapCount + " |`n"
 $sm += "| Vocab coverage (error codes) | " + $(if ($null -ne $vocabCoverageScore) { $vocabCoverageScore } else { "(n/a)" }) + " |`n"
 $sm += "| Vocab completeness (named params) | " + $(if ($null -ne $vocabCompleteness) { $vocabCompleteness } else { "(n/a)" }) + " |`n"
-$sm += "| Known IDs in vocab | " + $knownIds + " |`n`n---`n`n"
+$sm += "| Known IDs in vocab | " + $knownIds + " |`n"
+$sm += "| Model context size | " + $(if ($null -ne $modelContextSizeKB) { "$modelContextSizeKB KB" } else { "(n/a)" }) + " |`n"
+$sm += "| Static analysis verdict | " + $staticVerdictStr + " |`n"
+$sm += "| Executor error rate | " + $(if ($null -ne $execTraceSummary) {
+    "$($execTraceSummary.error_rate) ($($execTraceSummary.failed)/$($execTraceSummary.total_calls) calls)" } else { "(n/a)" }) + " |`n"
+$sm += "| DIAGNOSIS verdict | " + $(if ($null -ne $diagOut) { $diagOut.verdict } else { "(n/a)" }) + " |`n`n---`n`n"
+# Per-function status table
+if ($functionStatus.Count -gt 0) {
+    $sm += "## Function Status`n`n"
+    $sm += "| Function | Status |`n|---|---|`n"
+    foreach ($fn in ($functionStatus.Keys | Sort-Object)) {
+        $st   = $functionStatus[$fn]
+        $icon = switch ($st) { "success" { "✅" } "partial" { "⚠️" } "failed" { "❌" } default { "?" } }
+        $sm  += "| $fn | $icon $st |`n"
+    }
+    if ($null -ne $execTraceSummary -and $execTraceSummary.function_failures.Count -gt 0) {
+        $sm += "`n**Executor failures:** " + ($execTraceSummary.function_failures -join "; ") + "`n"
+    }
+    $sm += "`n---`n`n"
+}
 $sm += "## Static Analysis Verification`n`n"
 if ($null -ne $staticVerification) {
     $sentinelInfo = if ($staticVerification.sentinel_count -gt 0) {
@@ -386,6 +511,13 @@ if ($null -ne $staticVerification) {
 $sm += "`n---`n`n"
 $sm += "## Working calls confirmed`n`n" + $workingBlock + "`n`n---`n`n"
 $sm += "## Gap questions open`n`n" + $gapBlock + "`n`n---`n`n"
+if ($null -ne $vocab -and $vocab.gap_answers) {
+    $sm += "## Domain answers (gap_answers)`n`n"
+    foreach ($ga in $vocab.gap_answers.PSObject.Properties) {
+        $sm += "- **$($ga.Name):** $($ga.Value)`n"
+    }
+    $sm += "`n---`n`n"
+}
 $sm += "## What to investigate next`n`n> Fill this in after testing`n`n-`n"
 Set-Content -Path (Join-Path $sessionDir "SUMMARY.md") -Value $sm -Encoding UTF8
 Write-Host "  Wrote SUMMARY.md" -ForegroundColor Green
@@ -426,153 +558,32 @@ if (Test-Path $destTranscript) {
         $txLines = Get-Content $destTranscript
         $transcriptMetrics = [PSCustomObject]@{
             tool_calls    = (@($txLines | Where-Object { $_ -match '^🔧 ' })).Count
-            sentinel_hits = (@($txLines | Where-Object { $_ -match 'Returned: 429496729[345]' })).Count
+            sentinel_hits = (@($txLines | Where-Object { $_ -match '0xFFFFFFF|Returned: 429496729' })).Count
             dll_errors    = (@($txLines | Where-Object { $_ -match 'DLL call error' })).Count
         }
     } catch { }
 }
 
-# ── 14.75. DIAGNOSIS.json (Phase 3-C) ──────────────────────────────────
-$diagPath = Join-Path $sessionDir "diagnosis_raw.json"
-if (Test-Path $diagPath) {
-    try {
-        $diagRaw = @(Get-Content $diagPath -Raw | ConvertFrom-Json)
-        $categories = @{}
-        $totalSentinels = 0; $totalDllErrors = 0; $totalRounds = 0
-        foreach ($d in $diagRaw) {
-            $totalSentinels += [int]($d.sentinel_hits)
-            $totalDllErrors += [int]($d.dll_errors)
-            $totalRounds    += [int]($d.round_count)
-            if ($d.dll_errors -gt 0) {
-                $cat = "dll_error"
-                $categories[$cat] = [int]($categories[$cat]) + $d.dll_errors
-            }
-            if ($d.sentinel_hits -gt 0) {
-                $cat = "sentinel_0xffff"
-                $categories[$cat] = [int]($categories[$cat]) + $d.sentinel_hits
-            }
-        }
-        $diagOut = [PSCustomObject]@{
-            total_messages  = $diagRaw.Count
-            total_rounds    = $totalRounds
-            total_sentinels = $totalSentinels
-            total_dll_errors = $totalDllErrors
-            failure_categories = $categories
-            verdict = if ($totalSentinels -eq 0 -and $totalDllErrors -eq 0) { "clean" }
-                      elseif ($totalSentinels -gt 5 -or $totalDllErrors -gt 3) { "blocked" }
-                      else { "partial" }
-        }
-        $diagOut | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $sessionDir "DIAGNOSIS.json") -Encoding UTF8
-        Write-Host "  Wrote DIAGNOSIS.json (verdict=$($diagOut.verdict))" -ForegroundColor $(if ($diagOut.verdict -eq 'clean') { 'Green' } elseif ($diagOut.verdict -eq 'blocked') { 'Red' } else { 'Yellow' })
-    } catch {
-        Write-Host "  DIAGNOSIS.json skipped" -ForegroundColor DarkYellow
-    }
+# ── 14.75. DIAGNOSIS.json (Phase 3-C) — write pre-computed result (parsed in step 12.7) ──
+if ($null -ne $diagOut) {
+    $diagOut | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $sessionDir "DIAGNOSIS.json") -Encoding UTF8
+    $dColor = if ($diagOut.verdict -eq 'clean') { 'Green' } elseif ($diagOut.verdict -eq 'blocked') { 'Red' } else { 'Yellow' }
+    Write-Host "  Wrote DIAGNOSIS.json (verdict=$($diagOut.verdict))" -ForegroundColor $dColor
 }
 
-# ── 14.9. Static Analysis Verification (G-10) ───────────────────────────────
-# Cross-check static_analysis.json against vocab.json and findings.json to verify
-# the pipeline correctly used the binary evidence it extracted.
-$staticAnalysisPath = Join-Path $sessionDir "static_analysis.json"
-$staticVerification = $null
-$staticVerdictColor = "DarkYellow"
-$staticVerdictStr   = "n/a"
-if (Test-Path $staticAnalysisPath) {
-    try {
-        $sa = Get-Content $staticAnalysisPath -Raw | ConvertFrom-Json
-
-        $sentinelMisses    = @()
-        $idMisses          = @()
-        $capContradictions = @()
-        $svNotes           = @()
-
-        # Check 1: every harvested sentinel should appear in vocab error_codes
-        if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
-            foreach ($hexProp in $sa.sentinel_constants.harvested.PSObject.Properties) {
-                $hex = $hexProp.Name
-                if ($null -ne $vocab -and $vocab.error_codes) {
-                    if (-not $vocab.error_codes.PSObject.Properties[$hex]) {
-                        $sentinelMisses += $hex
-                    }
-                }
-            }
-        }
-
-        # Check 2: binary-extracted IDs should appear in at least one finding's args
-        $findingsText = ""
-        if (Test-Path $findPath) {
-            try { $findingsText = Get-Content $findPath -Raw } catch { }
-        }
-        if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
-            foreach ($id in @($sa.binary_strings.ids_found)) {
-                if ($findingsText -and $findingsText -notmatch [regex]::Escape($id)) {
-                    $idMisses += $id
-                }
-            }
-        }
-
-        # Check 3: IAT says no networking — verify no findings reference HTTP/socket
-        $networkCats = @()
-        if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
-            $networkCats = @($sa.iat_capabilities.categories.PSObject.Properties.Name) |
-                           Where-Object { $_ -in @("networking","network","rpc") }
-        }
-        if ($networkCats.Count -eq 0 -and $findingsText -and
-            $findingsText -match "(?i)http|socket|winsock") {
-            $capContradictions += "IAT has no network imports but findings mention HTTP/socket"
-        }
-
-        # Summary metadata
-        if ($sa.pe_version_info) {
-            $vDesc = $sa.pe_version_info.FileDescription
-            if ($vDesc) { $svNotes += "PE identity: $vDesc" }
-        }
-        $sentinelCount = 0
-        if ($sa.sentinel_constants -and $sa.sentinel_constants.harvested) {
-            $sentinelCount = @($sa.sentinel_constants.harvested.PSObject.Properties).Count
-        }
-        $idCount = 0
-        if ($sa.binary_strings -and $sa.binary_strings.ids_found) {
-            $idCount = @($sa.binary_strings.ids_found).Count
-        }
-        $iatCats = @()
-        if ($sa.iat_capabilities -and $sa.iat_capabilities.categories) {
-            $iatCats = @($sa.iat_capabilities.categories.PSObject.Properties.Name)
-        }
-
-        $staticVerdictStr = "PASS"
-        if ($sentinelMisses.Count -gt 0 -or $capContradictions.Count -gt 0) { $staticVerdictStr = "FAIL" }
-        elseif ($idMisses.Count -gt 0) { $staticVerdictStr = "WARN" }
-
-        $staticVerification = [PSCustomObject]@{
-            sentinel_count            = $sentinelCount
-            sentinel_misses           = $sentinelMisses
-            id_count                  = $idCount
-            id_misses                 = $idMisses
-            iat_categories            = $iatCats
-            capability_contradictions = $capContradictions
-            verdict                   = $staticVerdictStr
-            notes                     = $svNotes
-            source                    = if ($sa.sentinel_constants.source) { $sa.sentinel_constants.source } else { "none" }
-        }
-        $staticVerification | ConvertTo-Json -Depth 3 |
-            Set-Content -Path (Join-Path $sessionDir "static_verification.json") -Encoding UTF8
-
-        $staticVerdictColor = switch ($staticVerdictStr) {
-            "PASS" { "Green" }
-            "WARN" { "Yellow" }
-            "FAIL" { "Red" }
-            default { "DarkYellow" }
-        }
-        Write-Host ("  Static analysis: $sentinelCount sentinels, $idCount IDs, IAT:[" +
-                    ($iatCats -join ",") + "] verdict=$staticVerdictStr") -ForegroundColor $staticVerdictColor
-        if ($sentinelMisses.Count -gt 0) {
-            Write-Host "    ⚠ Sentinel misses (harvested but not in vocab): $($sentinelMisses -join ', ')" -ForegroundColor Yellow
-        }
-        if ($idMisses.Count -gt 0) {
-            Write-Host "    → IDs in binary not used in any finding: $($idMisses -join ', ')" -ForegroundColor Cyan
-        }
-    } catch {
-        Write-Host "  static_verification.json skipped: $_" -ForegroundColor DarkYellow
+# ── 14.9. Static Analysis Verification (G-10) — write pre-computed result (parsed in step 12.5) ──
+if ($null -ne $staticVerification) {
+    $staticVerification | ConvertTo-Json -Depth 3 |
+        Set-Content -Path (Join-Path $sessionDir "static_verification.json") -Encoding UTF8
+    $saColor = switch ($staticVerdictStr) { "PASS" { "Green" } "WARN" { "Yellow" } "FAIL" { "Red" } default { "DarkYellow" } }
+    Write-Host ("  Static analysis: $($staticVerification.sentinel_count) sentinels, " +
+        "$($staticVerification.id_count) IDs, IAT:[" + ($staticVerification.iat_categories -join ",") +
+        "] verdict=$staticVerdictStr") -ForegroundColor $saColor
+    if (@($staticVerification.sentinel_misses).Count -gt 0) {
+        Write-Host "    ⚠ Sentinel misses (harvested but not in vocab): $($staticVerification.sentinel_misses -join ', ')" -ForegroundColor Yellow
+    }
+    if (@($staticVerification.id_misses).Count -gt 0) {
+        Write-Host "    → IDs in binary not used in any finding: $($staticVerification.id_misses -join ', ')" -ForegroundColor Cyan
     }
 } else {
     Write-Host "  static_analysis.json not found (Phase 0 may not have run)" -ForegroundColor DarkYellow
@@ -580,11 +591,8 @@ if (Test-Path $staticAnalysisPath) {
 
 # ?? 15. TEST_RESULTS.md ?????????????????????????????????????????????????????
 $resultsPath  = Join-Path $sessionDir "TEST_RESULTS.md"
-# Phase 8-A: load diagnosis_raw for pre-filling context in TEST_RESULTS
-$diagRawForTests = @()
-if ($diagPath -and (Test-Path $diagPath)) {
-    try { $diagRawForTests = @(Get-Content $diagPath -Raw | ConvertFrom-Json) } catch { }
-}
+# Phase 8-A: diagnosis_raw pre-parsed in step 12.7 — reuse directly
+$diagRawForTests = $diagRaw
 if (Test-Path $templatePath) {
     $tr  = "# Test Results - " + $datePart + "`n`n"
     $tr += "**Session:** " + $folderName + "`n"
