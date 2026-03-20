@@ -154,7 +154,7 @@ def _normalize_invocable(raw: Any) -> dict | None:
     return out
 
 
-def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[dict]:
+def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "", *, skip_cache: bool = False) -> list[dict]:
     """Dispatch Windows-only analysis to the GUI bridge VM.
 
     Covers GUI (pywinauto), COM/TLB (pythoncom), CLI (Windows EXEs),
@@ -440,7 +440,7 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "",
     # ── Augment with Windows-only analysis via GUI bridge (if configured) ──
     # The bridge covers GUI buttons, COM/TLB interfaces, Windows EXE CLI help,
     # and registry scan — none of which run in the Linux container.
-    bridge_invocables = _call_gui_bridge(binary_path, job_id, hints)
+    bridge_invocables = _call_gui_bridge(binary_path, job_id, hints, skip_cache=skip_cache)
     if not GUI_BRIDGE_URL or not GUI_BRIDGE_SECRET:
         logger.info("[%s] STEP 9 \u2014  Bridge not configured, skipped", job_id)
     elif bridge_invocables:
