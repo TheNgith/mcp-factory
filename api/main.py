@@ -231,6 +231,31 @@ def health():
     return {"status": "ok", "version": "1.0.0"}
 
 
+@app.post("/api/check-cache")
+async def check_cache(body: dict[str, Any]):
+    """Pre-flight cache check: given a binary's SHA-256, report if a cached
+    discovery result exists in blob storage.
+    Body: {sha256: "<64 hex chars>"}.
+    """
+    sha = (body.get("sha256") or "").strip().lower()
+    if not sha or len(sha) != 64:
+        raise HTTPException(400, "sha256 is required (64 hex chars)")
+    blob_name = f"discovery-cache/{sha}/discovery_result.json"
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, blob_name)
+        data = json.loads(raw)
+        invocables = data.get("invocables", [])
+        return JSONResponse({
+            "cached": True,
+            "sha256": sha,
+            "invocable_count": len(invocables),
+            "cached_at": data.get("cached_at"),
+            "invocable_names": [inv.get("name", "") for inv in invocables[:30]],
+        })
+    except Exception:
+        return JSONResponse({"cached": False, "sha256": sha})
+
+
 @app.post("/api/analyze-path")
 async def analyze_path(body: dict[str, Any]):
     """Section 2.b: Analyze a file path already on the server's filesystem.
@@ -299,6 +324,7 @@ async def analyze(
     file: UploadFile = File(...),
     hints: str = Form(default=""),
     use_cases: str = Form(default=""),
+    skip_cache: str = Form(default=""),
 ):
     """Section 2-3: Upload a binary, start async discovery.
     Returns {job_id, status_url}; poll GET /api/jobs/{id}.
@@ -314,6 +340,7 @@ async def analyze(
     logger.info("[%s] STEP 1 \u2713  Received %s (%d bytes)", job_id, file.filename, len(content))
 
     original_name = Path(file.filename).name or f"upload{suffix}"
+    _skip = skip_cache.lower() in ("1", "true", "yes")
 
     blob_uploaded = False
     try:
@@ -341,7 +368,8 @@ async def analyze(
         logger.error("[%s] STEP 3 \u2717  Initial status failed to write to Blob", job_id)
 
     # Enqueue for durable processing; fall back to a direct thread if unavailable.
-    enqueued = blob_uploaded and _enqueue_analysis(job_id, blob_name, hints, original_name)
+    enqueued = blob_uploaded and _enqueue_analysis(job_id, blob_name, hints, original_name,
+                                                        skip_cache=_skip)
     if enqueued:
         logger.info("[%s] STEP 4 \u2713  Job enqueued to Storage Queue", job_id)
     else:
@@ -355,7 +383,7 @@ async def analyze(
         tmp_path.write_bytes(content)
         threading.Thread(
             target=_analyze_worker,
-            args=(job_id, tmp_path, hints, original_name, tmp_dir),
+            args=(job_id, tmp_path, hints, original_name, tmp_dir, _skip),
             daemon=True,
             name=f"worker-{job_id}",
         ).start()

@@ -548,7 +548,8 @@ def _queue_service_client():
         return None
 
 
-def _enqueue_analysis(job_id: str, blob_name: str, hints: str, original_name: str) -> bool:
+def _enqueue_analysis(job_id: str, blob_name: str, hints: str, original_name: str,
+                      *, skip_cache: bool = False) -> bool:
     """Push an analysis job onto the Storage Queue. Returns True on success."""
     svc = _queue_service_client()
     if not svc:
@@ -560,6 +561,7 @@ def _enqueue_analysis(job_id: str, blob_name: str, hints: str, original_name: st
             "blob_name":     blob_name,
             "hints":         hints,
             "original_name": original_name,
+            "skip_cache":    skip_cache,
         })
         qc.send_message(msg, visibility_timeout=0)
         logger.info("[%s] Enqueued analysis job.", job_id)

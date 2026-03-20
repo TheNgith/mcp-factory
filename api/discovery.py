@@ -7,6 +7,7 @@ _run_discovery:      run the discovery subprocess, merge results, call bridge.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -24,9 +25,48 @@ from api.config import (
     SRC_DISCOVERY_DIR,
     ARTIFACT_CONTAINER,
 )
-from api.storage import _upload_to_blob, _get_job_status, _persist_job_status
+from api.storage import _upload_to_blob, _download_blob, _get_job_status, _persist_job_status
 
 logger = logging.getLogger("mcp_factory.api")
+
+
+# ── Discovery result cache (blob-backed) ──────────────────────────────────────
+# Keyed by SHA-256 of the uploaded binary.  A cache hit skips the entire
+# discovery pipeline (subprocess + bridge) and returns the previously
+# computed invocables list.  The cache blob lives at:
+#   artifacts / discovery-cache / {sha256} / discovery_result.json
+# and a separate bridge-only cache at:
+#   artifacts / discovery-cache / {sha256} / bridge_result.json
+_DISCOVERY_CACHE_PREFIX = "discovery-cache"
+
+
+def _dll_sha256(binary_path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(binary_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):  # 1 MB chunks
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_cache_blob(sha: str, filename: str) -> dict | None:
+    """Try to read a JSON cache blob.  Returns None on miss."""
+    blob_name = f"{_DISCOVERY_CACHE_PREFIX}/{sha}/{filename}"
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, blob_name)
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _write_cache_blob(sha: str, filename: str, data: dict) -> None:
+    """Write a JSON cache blob (best-effort, never raises)."""
+    blob_name = f"{_DISCOVERY_CACHE_PREFIX}/{sha}/{filename}"
+    try:
+        _upload_to_blob(ARTIFACT_CONTAINER, blob_name, json.dumps(data).encode())
+        logger.info("Discovery cache written: %s", blob_name)
+    except Exception as exc:
+        logger.warning("Failed to write discovery cache blob %s: %s", blob_name, exc)
 
 
 def _persist_bridge_warning(job_id: str, message: str) -> None:
@@ -169,6 +209,18 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
         "types":   ["gui", "com", "cli", "registry", "ghidra"],
         "content": content_b64,   # None → bridge falls back to system-path lookup
     }
+    # ── Bridge blob cache check ────────────────────────────────────────────
+    _bridge_sha = _dll_sha256(binary_path)
+    if not skip_cache:
+        _cached_bridge = _read_cache_blob(_bridge_sha, "bridge_result.json")
+    else:
+        _cached_bridge = None
+    if _cached_bridge and isinstance(_cached_bridge.get("invocables"), list):
+        _bc = len(_cached_bridge["invocables"])
+        logger.info("[%s] BRIDGE CACHE HIT (%s) — %d invocables", job_id, _bridge_sha[:12], _bc)
+        print(f"[DIAG {job_id}] bridge blob cache hit sha={_bridge_sha[:12]}, {_bc} invocables", flush=True)
+        return _cached_bridge["invocables"]
+
     # Retry up to _BRIDGE_MAX_RETRIES times.  On a cold first upload the bridge
     # analysis can take 60-120 s; if the first HTTP connection times out or is
     # dropped by network infrastructure, the bridge will have finished and
@@ -237,6 +289,13 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
 
             logger.info("[%s] Bridge returned %d invocables (%d after normalization)",
                         job_id, len(raw_invocables), len(invocables))
+            # ── Write bridge blob cache ───────────────────────────────────
+            if invocables:
+                _write_cache_blob(_bridge_sha, "bridge_result.json", {
+                    "invocables": invocables,
+                    "cached_at": time.time(),
+                    "binary_sha256": _bridge_sha,
+                })
             return invocables
         except Exception as exc:
             _last_exc = exc
@@ -259,8 +318,27 @@ def _call_gui_bridge(binary_path: Path, job_id: str, hints: str = "") -> list[di
     return []
 
 
-def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
+def _run_discovery(binary_path: Path, job_id: str, hints: str = "",
+                   *, skip_cache: bool = False) -> dict:
     """Run the discovery pipeline on a local file path. Returns invocables list."""
+    # ── Discovery cache check ─────────────────────────────────────────────
+    _sha = _dll_sha256(binary_path)
+    if not skip_cache:
+        _cached_discovery = _read_cache_blob(_sha, "discovery_result.json")
+        if _cached_discovery and isinstance(_cached_discovery.get("invocables"), list):
+            _inv_count = len(_cached_discovery["invocables"])
+            logger.info("[%s] DISCOVERY CACHE HIT (%s) — %d invocables, skipping full pipeline",
+                        job_id, _sha[:12], _inv_count)
+            print(f"[DIAG {job_id}] discovery cache hit sha={_sha[:12]}, {_inv_count} invocables", flush=True)
+            return {
+                "job_id": job_id,
+                "artifact_blob": _cached_discovery.get("artifact_blob", f"{job_id}/cached"),
+                "invocables": _cached_discovery["invocables"],
+            }
+    else:
+        logger.info("[%s] skip_cache=True — bypassing discovery cache", job_id)
+    logger.info("[%s] Discovery cache miss (%s) — running full pipeline", job_id, _sha[:12])
+
     out_dir = Path(tempfile.mkdtemp(prefix=f"mcp_{job_id}_"))
     cmd = [
         sys.executable,
@@ -386,6 +464,14 @@ def _run_discovery(binary_path: Path, job_id: str, hints: str = "") -> dict:
         for name, inv in bridge_by_name.items():
             merged_invocables.append(inv)
             seen_names.add(name)
+
+    # ── Write discovery cache ─────────────────────────────────────────────
+    _write_cache_blob(_sha, "discovery_result.json", {
+        "invocables": merged_invocables,
+        "artifact_blob": primary_blob,
+        "cached_at": time.time(),
+        "binary_sha256": _sha,
+    })
 
     return {
         "job_id": job_id,

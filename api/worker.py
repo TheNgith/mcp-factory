@@ -32,6 +32,7 @@ def _analyze_worker(
     hints: str,
     original_name: str,
     cleanup_dir: Path | None = None,
+    skip_cache: bool = False,
 ) -> None:
     """Background worker — runs discovery and updates job status in Blob (P3)."""
     # Deferred import avoids a load-time cycle: worker → discovery → storage
@@ -64,7 +65,7 @@ def _analyze_worker(
         }, sync=True)
         print(f"[DIAG {job_id}] entering _run_discovery", flush=True)
         with _ai_span("analyze_async", job_id=job_id, filename=original_name, hints=hints):
-            result = _run_discovery(tmp_path, job_id, hints)
+            result = _run_discovery(tmp_path, job_id, hints, skip_cache=skip_cache)
         print(f"[DIAG {job_id}] _run_discovery returned {len(result.get('invocables',[]))} invocables", flush=True)
         # Re-read current status to pick up explore_phase/explore_questions written
         # by explore.py during the run, then layer the final fields on top.
@@ -155,6 +156,7 @@ def _queue_worker_loop() -> None:
                 blob_name     = data["blob_name"]
                 hints         = data.get("hints", "")
                 original_name = data.get("original_name", "upload.bin")
+                _skip_cache   = bool(data.get("skip_cache", False))
             except Exception as exc:
                 logger.error("Malformed queue message, discarding: %s", exc)
                 qc.delete_message(msg)
@@ -184,7 +186,7 @@ def _queue_worker_loop() -> None:
             # Run synchronously in this thread (one job at a time per worker).
             t = threading.Thread(
                 target=_analyze_worker,
-                args=(job_id, tmp_path, hints, original_name, tmp_dir),
+                args=(job_id, tmp_path, hints, original_name, tmp_dir, _skip_cache),
                 daemon=True,
                 name=f"queue-job-{job_id}",
             )

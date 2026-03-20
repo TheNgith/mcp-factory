@@ -479,6 +479,22 @@ _HTML = r"""<!DOCTYPE html>
 
       <div class="alert alert-error" id="upload-error"></div>
 
+      <!-- Discovery cache prompt -->
+      <div class="alert alert-info" id="cache-banner" style="display:none">
+        <div style="margin-bottom:8px">
+          <strong>📦 Cached discovery found!</strong> This binary was previously analyzed.
+        </div>
+        <div id="cache-details" style="font-size:.82rem;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" id="cache-reuse-btn" style="padding:5px 16px;font-size:.85rem">
+            ✅ Reuse Cached Results
+          </button>
+          <button class="btn btn-secondary" id="cache-fresh-btn" style="padding:5px 16px;font-size:.85rem">
+            🔄 Run Fresh Analysis
+          </button>
+        </div>
+      </div>
+
       <div class="btn-row">
         <button class="btn btn-primary" id="analyze-btn" disabled>
           Analyze Binary
@@ -1604,14 +1620,24 @@ async def _proxy_json(path: str, body: Any) -> JSONResponse:
 
 # ── Proxied endpoints ──────────────────────────────────────────────────────
 
+@app.post("/api/check-cache")
+async def proxy_check_cache(body: dict[str, Any]) -> JSONResponse:
+    """Proxy cache check to the pipeline /api/check-cache."""
+    return await _proxy_json("/api/check-cache", body)
+
+
 @app.post("/api/analyze")
-async def proxy_analyze(file: UploadFile = File(...), hints: str = Form(default=""), use_cases: str = Form(default="")):
+async def proxy_analyze(file: UploadFile = File(...), hints: str = Form(default=""),
+                        use_cases: str = Form(default=""), skip_cache: str = Form(default="")):
     """Proxy file upload to the pipeline /api/analyze."""
     content = await file.read()
     try:
+        form_data = {"hints": hints, "use_cases": use_cases}
+        if skip_cache:
+            form_data["skip_cache"] = skip_cache
         r = await _client().post(
             "/api/analyze",
-            data={"hints": hints, "use_cases": use_cases},
+            data=form_data,
             files={"file": (file.filename, content, file.content_type or "application/octet-stream")},
         )
         return JSONResponse(content=r.json(), status_code=r.status_code)
