@@ -24,7 +24,7 @@ from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool, _execute_tool_traced
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log, _register_invocables
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log, _register_invocables, _get_current_invocables
 from api.telemetry import _openai_client
 from api.explore_phases import (
     _SENTINEL_DEFAULTS, _CAP_PROFILE, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
@@ -732,7 +732,28 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 _run_deterministic_fallback("write function fallback coverage", 2)
 
             # ── Force record_finding if the LLM never called it ──────────────
-            if not _finding_recorded and not _observed_successes:
+            if not _finding_recorded and _observed_successes:
+                # D-8: Deterministic fallback got return=0 but the LLM never
+                # called record_finding.  Save a success finding so the
+                # function doesn't fall through the cracks.
+                try:
+                    _save_finding(job_id, {
+                        "function": fn_name,
+                        "status": "success",
+                        "finding": f"Deterministic fallback probe returned 0.",
+                        "working_call": _observed_successes[0],
+                        "notes": "Auto-recorded: deterministic fallback succeeded "
+                                 "but LLM never called record_finding.",
+                        "direct_target_tool_calls": _direct_target_tool_calls,
+                        "no_tool_call_rounds": _no_tool_call_rounds,
+                        "stop_reason": _policy_stop_reason,
+                    })
+                    _finding_recorded = True
+                    logger.info("[%s] explore_worker: D-8 forced record_finding(success) for %s — working_call=%s",
+                                job_id, fn_name, _observed_successes[0])
+                except Exception as _frf:
+                    logger.debug("[%s] D-8 forced record_finding failed for %s: %s", job_id, fn_name, _frf)
+            elif not _finding_recorded and not _observed_successes:
                 # Collect sentinel codes seen across all probes for this function
                 _seen_codes = set()
                 for _pe in _fn_probe_log:
@@ -1082,6 +1103,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         _report.encode("utf-8"),
                     )
                     logger.info("[%s] explore_worker: api_reference.md saved to blob", job_id)
+
+                    # Refresh invocables from the in-memory registry so that
+                    # backfill and gap resolution see discovery enrichments
+                    # instead of the stale snapshot taken at worker start.
+                    _refreshed = _get_current_invocables(job_id)
+                    if _refreshed:
+                        invocables = _refreshed
+                        inv_map = {iv["name"]: iv for iv in invocables}
 
                     # Layer 3: backfill schema descriptions from synthesis document.
                     # Uses the completed synthesis to enrich param descriptions with

@@ -462,24 +462,34 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
         # The backfill path supplies updated descriptions but keeps param_N names.
         for param in inv["parameters"]:
             old_name = param.get("name", "")
-            if _re.match(r'^param_\d+$', old_name) and param.get("description"):
-                _desc_lower = param["description"].lower()
-                _name_m = _re.search(
-                    r'\b(customer[_ ]?id|order[_ ]?id|account[_ ]?id|'
-                    r'payment[_ ]?amount|refund[_ ]?amount|amount|balance|'
-                    r'loyalty[_ ]?points|points|interest[_ ]?rate|rate|'
-                    r'principal|period|months|buffer[_ ]?size|buf[_ ]?size|'
-                    r'output[_ ]?buffer|result[_ ]?buffer|unlock[_ ]?code|'
-                    r'status[_ ]?code|error[_ ]?code|return[_ ]?code|'
-                    r'diagnostic[_ ]?buffer|diag[_ ]?buffer|'
-                    r'customer[_ ]?name|order[_ ]?status|'
-                    r'tier[_ ]?label|email|phone|address)',
-                    _desc_lower,
-                )
-                if _name_m:
-                    new_name = _name_m.group(0).replace(' ', '_').replace('-', '_')
-                    param["name"] = new_name
-                    renames.append(f"{old_name} → {new_name}")
+            desc = param.get("description", "")
+            if desc:
+                _desc_lower = desc.lower()
+                # D-5: auto-derive semantic name from description
+                if _re.match(r'^param_\d+$', old_name):
+                    _name_m = _re.search(
+                        r'\b(customer[_ ]?id|order[_ ]?id|account[_ ]?id|'
+                        r'payment[_ ]?amount|refund[_ ]?amount|amount|balance|'
+                        r'loyalty[_ ]?points|points|interest[_ ]?rate|rate|'
+                        r'principal|period|months|buffer[_ ]?size|buf[_ ]?size|'
+                        r'output[_ ]?buffer|result[_ ]?buffer|unlock[_ ]?code|'
+                        r'status[_ ]?code|error[_ ]?code|return[_ ]?code|'
+                        r'diagnostic[_ ]?buffer|diag[_ ]?buffer|'
+                        r'customer[_ ]?name|order[_ ]?status|'
+                        r'tier[_ ]?label|email|phone|address)',
+                        _desc_lower,
+                    )
+                    if _name_m:
+                        new_name = _name_m.group(0).replace(' ', '_').replace('-', '_')
+                        param["name"] = new_name
+                        renames.append(f"{old_name} → {new_name}")
+                # Direction inference: override Ghidra's raw direction
+                # (byte * defaults to "out" but most byte * params are
+                # input strings like customer IDs).
+                if _re.search(r"\boutput\b.*\bbuffer\b|\bbuffer\b.*\boutput\b|\bout\b.*\bpointer\b|\bauto.allocated\b", _desc_lower):
+                    param["direction"] = "out"
+                elif _re.search(r"\binput\b|\bprovide[sd]?\b|\bpass\b|\bspecif|\bidentif|\b[Ii][Dd]\b", _desc_lower):
+                    param["direction"] = "in"
 
     # Scalar fields from backfill/refinement
     if "criticality" in patch:
@@ -537,6 +547,19 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
     rename_str = (", ".join(renames)) if renames else "no param renames"
     logger.info("[%s] _patch_invocable: patched %s (%s)", job_id, function_name, rename_str)
     return f"Schema updated for {function_name}: {rename_str}."
+
+
+def _get_current_invocables(job_id: str) -> list[dict]:
+    """Return the current invocables list from the in-memory registry.
+
+    Used to refresh stale snapshots before backfill / gap resolution so that
+    enrichments applied during discovery are not discarded.
+    """
+    with _JOB_MAP_LOCK:
+        m = _JOB_INVOCABLE_MAPS.get(job_id)
+    if m:
+        return list(m.values())
+    return []
 
 
 def _get_invocable(job_id: str, name: str) -> dict | None:
