@@ -24,7 +24,7 @@ from typing import Any
 
 from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_API_KEY, OPENAI_EXPLORE_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool, _execute_tool_traced
-from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log
+from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log, _register_invocables
 from api.telemetry import _openai_client
 from api.explore_phases import (
     _SENTINEL_DEFAULTS, _CAP_PROFILE, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
@@ -41,6 +41,7 @@ from api.explore_helpers import (
     _GAP_RESOLUTION_ENABLED,
     _WRITE_FN_RE,
     _WRITE_RETRY_BUDGET_BY_CLASS,
+    _build_fallback_probe_args,
     _build_tool_schemas,
     _classify_result_text,
     _sentinel_class_from_classification,
@@ -68,6 +69,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     _max_tool_calls = int(_job_runtime.get("max_tool_calls") or _MAX_TOOL_CALLS_PER_FUNCTION)
     _gap_resolution_enabled = bool(_job_runtime.get("gap_resolution_enabled", _GAP_RESOLUTION_ENABLED))
     _clarification_enabled = bool(_job_runtime.get("clarification_questions_enabled", True))
+    _min_direct_probes = max(1, int(_job_runtime.get("min_direct_probes_per_function") or 1))
+    _skip_documented = bool(_job_runtime.get("skip_documented", True))
+    _deterministic_fallback_enabled = bool(_job_runtime.get("deterministic_fallback_enabled", True))
     _effective_cap_profile = str(_job_runtime.get("cap_profile") or _CAP_PROFILE)
     _run_started_at = float((_get_job_status(job_id) or {}).get("explore_started_at") or time.time())
 
@@ -87,6 +91,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     inv_map: dict[str, dict] = {}
     for inv in invocables:
         inv_map[inv["name"]] = inv
+
+    # COH-1: Register invocables so enrich_invocable / _patch_invocable can
+    # resolve function names during this explore session.
+    _register_invocables(job_id, invocables)
 
     # Inject synthetic tools into inv_map
     _enrich_inv = {
@@ -126,6 +134,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     "max_rounds_per_function": _max_rounds,
                     "max_tool_calls_per_function": _max_tool_calls,
                     "max_functions_per_session": _max_functions,
+                    "min_direct_probes_per_function": _min_direct_probes,
+                    "skip_documented": _skip_documented,
+                    "deterministic_fallback_enabled": _deterministic_fallback_enabled,
                     "gap_resolution_enabled": _gap_resolution_enabled,
                     "clarification_questions_enabled": _clarification_enabled,
                 },
@@ -350,7 +361,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             # Skip functions already documented in a previous session (thread-safe)
             _skip = False
             with _lock:
-                if fn_name in already_explored:
+                if _skip_documented and fn_name in already_explored:
                     _state["explored"] += 1
                     _skip = True
             if _skip:
@@ -386,6 +397,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
             _fn_probe_log: list[dict] = []  # accumulate probe entries for explore_probe_log.json
             _fn_tool_call_count = 0  # hard cap on tool calls per function
+            _direct_target_tool_calls = 0
+            _no_tool_call_rounds = 0
             _finding_recorded = False  # track whether LLM called record_finding
             _policy_stop_reason: str | None = None
             _policy_events: list[dict] = []
@@ -417,6 +430,28 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 msg = response.choices[0].message
 
                 if not msg.tool_calls:
+                    if _direct_target_tool_calls < _min_direct_probes:
+                        _no_tool_call_rounds += 1
+                        _fn_probe_log.append({
+                            "phase": "no_tool_call_round",
+                            "function": fn_name,
+                            "round": _round,
+                            "tool": None,
+                            "args": {},
+                            "result_excerpt": "assistant returned no tool calls before probe floor met",
+                            "trace": None,
+                            "classification": {"has_return": False},
+                            "policy": None,
+                        })
+                        conversation.append({
+                            "role": "user",
+                            "content": (
+                                f"You have not directly called '{fn_name}' enough times yet. "
+                                f"Make at least {_min_direct_probes} direct call(s) to {fn_name} now "
+                                "using concrete test values, then continue analysis."
+                            ),
+                        })
+                        continue
                     # Model finished — no more tool calls needed
                     break
 
@@ -586,6 +621,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
                     # Ground-truth tracking: record direct observations of return=0
                     if tc_name == fn_name:
+                        _direct_target_tool_calls += 1
                         _ret_m = _re.search(r"Returned:\s*(-?\d+)", tool_result or "")
                         if _ret_m and int(_ret_m.group(1)) == 0:
                             _out_bases = frozenset({
@@ -626,6 +662,74 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 job_id, fn_name, _policy_stop_reason)
                     break
 
+            def _run_deterministic_fallback(reason: str, max_attempts: int) -> None:
+                nonlocal _fn_tool_call_count, _direct_target_tool_calls, _best_raw_result
+                _is_floor_enforcement = reason.startswith("direct probe floor unmet")
+                if ((not _deterministic_fallback_enabled) and (not _is_floor_enforcement)) or max_attempts <= 0:
+                    return
+                for _attempt in range(max_attempts):
+                    if _fn_tool_call_count >= _max_tool_calls:
+                        break
+                    _fb_args = _build_fallback_probe_args(inv, _vocab_snap, attempt=_attempt)
+                    _policy_block = None
+                    if _is_write_fn:
+                        _ok, _reason, _detail = _write_policy_precheck(
+                            fn_name, _fb_args, _vocab_snap, unlock_result,
+                        )
+                        if not _ok:
+                            _policy_block = {
+                                "allowed": False,
+                                "stop_reason": _reason,
+                                "detail": _detail,
+                            }
+                    if _policy_block:
+                        _fn_probe_log.append({
+                            "phase": "deterministic_fallback",
+                            "function": fn_name,
+                            "round": _attempt,
+                            "reasoning": reason,
+                            "tool": fn_name,
+                            "args": _fb_args,
+                            "result_excerpt": f"Policy blocked fallback probe: {_policy_block['stop_reason']}",
+                            "trace": {"backend": "policy", "blocked": True},
+                            "classification": {"has_return": False},
+                            "policy": _policy_block,
+                        })
+                        continue
+                    _tc = _execute_tool_traced(inv_map[fn_name], _fb_args)
+                    _res = _tc["result_str"]
+                    _cls = _classify_result_text(str(_res))
+                    _fn_probe_log.append({
+                        "probe_id": f"{fn_name}:fb:{_attempt + 1}",
+                        "phase": "deterministic_fallback",
+                        "function": fn_name,
+                        "round": _attempt,
+                        "reasoning": reason,
+                        "tool": fn_name,
+                        "args": _fb_args,
+                        "result_excerpt": str(_res)[:200],
+                        "trace": _tc.get("trace"),
+                        "classification": _cls,
+                        "policy": None,
+                    })
+                    _fn_tool_call_count += 1
+                    _direct_target_tool_calls += 1
+                    _ret_m = _re.search(r"Returned:\s*(-?\d+)", _res or "")
+                    if _ret_m and int(_ret_m.group(1)) == 0:
+                        _observed_successes.append(_fb_args)
+                        _best_raw_result = _res
+                        break
+
+            _missing_direct_calls = max(0, _min_direct_probes - _direct_target_tool_calls)
+            if _missing_direct_calls > 0:
+                _run_deterministic_fallback(
+                    f"direct probe floor unmet ({_direct_target_tool_calls}/{_min_direct_probes})",
+                    _missing_direct_calls,
+                )
+
+            if _is_write_fn and not _observed_successes:
+                _run_deterministic_fallback("write function fallback coverage", 2)
+
             # ── Force record_finding if the LLM never called it ──────────────
             if not _finding_recorded and not _observed_successes:
                 # Collect sentinel codes seen across all probes for this function
@@ -650,6 +754,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         "working_call": None,
                         "notes": f"Auto-recorded: LLM exhausted {_fn_tool_call_count} tool calls "
                                  f"without calling record_finding.",
+                        "direct_target_tool_calls": _direct_target_tool_calls,
+                        "no_tool_call_rounds": _no_tool_call_rounds,
                         "stop_reason": _policy_stop_reason,
                         "write_policy_events": _policy_events,
                     })

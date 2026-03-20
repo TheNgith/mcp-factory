@@ -128,6 +128,9 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "max_rounds": _as_int(raw.get("max_rounds"), int(defaults["max_rounds"]), 1, 12),
         "max_tool_calls": _as_int(raw.get("max_tool_calls"), int(defaults["max_tool_calls"]), 1, 24),
         "max_functions": _as_int(raw.get("max_functions"), 50, 1, 500),
+        "min_direct_probes_per_function": _as_int(raw.get("min_direct_probes_per_function"), 1, 1, 5),
+        "skip_documented": _as_bool(raw.get("skip_documented"), True),
+        "deterministic_fallback_enabled": _as_bool(raw.get("deterministic_fallback_enabled"), True),
         "gap_resolution_enabled": _as_bool(raw.get("gap_resolution_enabled"), bool(defaults["gap_resolution_enabled"])),
         "clarification_questions_enabled": _as_bool(
             raw.get("clarification_questions_enabled"),

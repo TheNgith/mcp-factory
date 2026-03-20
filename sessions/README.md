@@ -232,4 +232,6 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-19 | `909f07e` | `cfd26cf5` | schema-checkpoint-smoke | contoso_cs - (fill in after testing) |
 | 2026-03-19 | `909f07e` | `44fb7051` | s1s2-discovery-only | contoso_cs - (fill in after testing) |
 | 2026-03-20 | `8211c70` | `1259f0e5` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
+| 2026-03-20 | `66d7077` | `dd66fb6a` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
+| 2026-03-20 | `66d7077` | `dd66fb6a` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 

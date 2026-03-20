@@ -211,8 +211,13 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
     prior = _load_findings(job_id) if job_id else []
     findings_block = ""
     if prior:
-        lines = []
+        # COH-3: Deduplicate to latest entry per function so the prompt
+        # reflects the most recent probe outcome, not stale early failures.
+        latest_by_fn: dict[str, dict] = {}
         for f in prior:
+            latest_by_fn[f.get("function", "?")] = f
+        lines = []
+        for f in latest_by_fn.values():
             fn   = f.get("function", "?")
             pm   = f.get("param", "")
             note = f.get("finding", "")

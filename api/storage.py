@@ -279,6 +279,11 @@ _JOB_FINDINGS_LOCK = threading.Lock()
 def _save_finding(job_id: str, entry: dict) -> None:
     """Append a single finding dict to in-memory cache and blob.
 
+    The findings list is **append-only by design** — consumers must
+    deduplicate to the latest entry per function (see chat.py COH-3).
+    Keeping the full history preserves the confidence back-fill logic
+    which derives attempt/success ratios across all past entries.
+
     Also tracks per-function attempt/success counts and derives a
     confidence label ("high" / "medium" / "low") from the history.
     """

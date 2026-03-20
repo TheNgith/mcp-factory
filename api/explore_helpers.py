@@ -4,6 +4,7 @@ import logging
 import os as _os
 import re as _re
 import time
+from typing import Any
 
 from api.config import ARTIFACT_CONTAINER
 from api.sentinel_codes import classify_common_result_code
@@ -64,6 +65,65 @@ def _parse_id_format_pattern(pattern: str) -> str:
         else:
             out.append(_re.escape(ch))
     return "^" + "".join(out) + "$"
+
+
+def _sample_id_from_vocab(id_formats: list[str], kind: str) -> str:
+    kind = (kind or "").lower()
+    for fmt in id_formats:
+        s = str(fmt or "").upper()
+        if kind == "order" and "ORD" in s:
+            return "ORD-20260315-0117"
+        if kind in {"customer", "account"} and ("CUST" in s or "ACCT" in s or "ACCOUNT" in s):
+            return "CUST-001"
+    if kind == "order":
+        return "ORD-20260315-0117"
+    return "CUST-001"
+
+
+def _default_scalar_value(param_name: str, json_type: str, description: str, vocab: dict, attempt: int = 0) -> Any:
+    name = (param_name or "").lower()
+    desc = (description or "").lower()
+    jtype = (json_type or "").lower()
+    id_formats = [str(x) for x in (vocab.get("id_formats") or []) if x]
+
+    if _re.search(r"order", name) or _re.search(r"order", desc):
+        return _sample_id_from_vocab(id_formats, "order")
+    if _re.search(r"customer|account", name) or _re.search(r"customer|account", desc):
+        return _sample_id_from_vocab(id_formats, "customer")
+    if _re.search(r"amount|cents|refund|payment|debit|credit", name) or _re.search(r"amount|cents", desc):
+        return 100 if attempt > 0 else 1000
+    if _re.search(r"points", name) or _re.search(r"points", desc):
+        return 100
+    if _re.search(r"size|count|length|len", name):
+        return 64
+    if _re.search(r"mode|flag|enable", name):
+        return 1
+
+    if jtype in {"integer", "number"}:
+        return 1
+    if jtype == "boolean":
+        return True
+    return "TEST"
+
+
+def _build_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> dict:
+    """Build deterministic fallback args for one probe attempt.
+
+    This is intentionally generic: it uses parameter names/types plus vocabulary
+    seeds rather than component-specific constants.
+    """
+    args: dict = {}
+    for p in (inv.get("parameters") or []):
+        if isinstance(p, str):
+            p = {"name": p, "json_type": "string"}
+        pname = str(p.get("name") or "")
+        direction = str(p.get("direction") or "in").lower()
+        if direction == "out":
+            continue
+        jtype = str(p.get("json_type") or "string")
+        pdesc = str(p.get("description") or p.get("type") or "")
+        args[pname] = _default_scalar_value(pname, jtype, pdesc, vocab, attempt=attempt)
+    return args
 
 
 def _classify_result_text(result_text: str) -> dict:

@@ -487,6 +487,7 @@ if (Test-Path $probePath) {
         $probeByPhase = @{}
         $probeFns     = [System.Collections.Generic.HashSet[string]]@()
         $probeFnCounts = @{}   # fn -> probe count (for distribution)
+        $directProbeCounts = @{} # fn -> direct probes where tool == function
         $verifyPass   = 0; $verifyFail = 0
         $sentinelsObserved = [System.Collections.Generic.HashSet[string]]@()
 
@@ -496,6 +497,9 @@ if (Test-Path $probePath) {
             if ($entry.function) {
                 [void]$probeFns.Add($entry.function)
                 $probeFnCounts[$entry.function] = [int]($probeFnCounts[$entry.function]) + 1
+                if ($entry.tool -and $entry.tool -eq $entry.function) {
+                    $directProbeCounts[$entry.function] = [int]($directProbeCounts[$entry.function]) + 1
+                }
             }
             # 2. Verify pass/fail
             if ($ph -eq "verify") {
@@ -549,6 +553,7 @@ if (Test-Path $probePath) {
             verify_pass        = $verifyPass
             verify_fail        = $verifyFail
             probe_distribution = $probeDist
+            direct_probes_per_function = [PSCustomObject]$directProbeCounts
             sentinels_observed = @($sentinelsObserved)
         }
         $unprobeColor = if ($unprobedFns.Count -gt 0) { "Yellow" } else { "Green" }
@@ -576,6 +581,38 @@ if (Test-Path $exploreConfigPath) {
             " max_functions=" + $exploreConfig.max_functions_per_session) -ForegroundColor Cyan
     } catch {
         Write-Host "  explore_config.json skipped" -ForegroundColor DarkYellow
+    }
+}
+
+# Add floor-compliance metrics once both probeSummary and exploreConfig are available.
+if ($null -ne $probeSummary) {
+    try {
+        $floor = 1
+        if ($null -ne $exploreConfig -and $exploreConfig.min_direct_probes_per_function) {
+            $floor = [int]$exploreConfig.min_direct_probes_per_function
+        }
+        $belowFloor = @()
+        if (Test-Path $invMapPath) {
+            $im3 = Get-Content $invMapPath -Raw | ConvertFrom-Json
+            foreach ($prop in $im3.PSObject.Properties) {
+                $fn = $prop.Name
+                $dpProp = $probeSummary.direct_probes_per_function.PSObject.Properties[$fn]
+                $direct = if ($dpProp) { [int]$dpProp.Value } else { 0 }
+                if ($direct -lt $floor) { $belowFloor += $fn }
+            }
+        }
+        $noToolCallRounds = 0
+        if ($probeSummary.by_phase -and $probeSummary.by_phase.no_tool_call_round) {
+            $noToolCallRounds = [int]$probeSummary.by_phase.no_tool_call_round
+        }
+        $probeSummary | Add-Member -NotePropertyName "direct_probe_floor" -NotePropertyValue $floor -Force
+        $probeSummary | Add-Member -NotePropertyName "functions_below_direct_probe_floor" -NotePropertyValue $belowFloor -Force
+        $probeSummary | Add-Member -NotePropertyName "no_tool_call_rounds" -NotePropertyValue $noToolCallRounds -Force
+        if ($belowFloor.Count -gt 0) {
+            Write-Host ("  direct-probe floor misses (<" + $floor + "): " + ($belowFloor -join ", ")) -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "  direct-probe floor metrics skipped" -ForegroundColor DarkYellow
     }
 }
 

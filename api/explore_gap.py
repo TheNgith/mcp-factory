@@ -22,6 +22,7 @@ from api.storage import (
     _get_job_status,
     _patch_finding,
     _persist_job_status,
+    _register_invocables,
     _upload_to_blob,
 )
 from api.telemetry import _openai_client
@@ -236,6 +237,11 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
         sentinels = _SENTINEL_DEFAULTS
 
         inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
+
+        # COH-2: Register invocables so enrich_invocable / _patch_invocable can
+        # resolve function names during gap mini-sessions.
+        _register_invocables(job_id, invocables)
+
         inv_map["enrich_invocable"] = {
             "name": "enrich_invocable", "source_type": "enrich", "_job_id": job_id,
             "execution": {"method": "enrich"}, "parameters": [],

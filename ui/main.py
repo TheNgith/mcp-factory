@@ -548,6 +548,17 @@ _HTML = r"""<!DOCTYPE html>
         <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
           <input id="toggle-clarify" type="checkbox" /> Clarify
         </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
+          Floor
+          <input id="probe-floor" type="number" min="1" max="5" value="1"
+            style="width:52px;padding:2px 5px;border:1px solid #94a3b8;border-radius:4px" />
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
+          <input id="toggle-skip-documented" type="checkbox" checked /> Skip documented
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
+          <input id="toggle-deterministic-fallback" type="checkbox" checked /> Deterministic fallback
+        </label>
         <button class="btn btn-secondary" id="discover-btn"
           style="white-space:nowrap;padding:7px 14px;font-size:.82rem">
           🔍 Discover
@@ -679,12 +690,12 @@ const state = {
 
 function _modeDefaults(mode) {
   if (mode === 'extended') {
-    return { gap: true, clarify: true };
+    return { gap: true, clarify: true, floor: 2, skipDocumented: true, deterministicFallback: true };
   }
   if (mode === 'normal') {
-    return { gap: true, clarify: true };
+    return { gap: true, clarify: true, floor: 1, skipDocumented: true, deterministicFallback: true };
   }
-  return { gap: false, clarify: false }; // dev
+  return { gap: false, clarify: false, floor: 1, skipDocumented: false, deterministicFallback: true }; // dev
 }
 
 function _syncModeBadge() {
@@ -700,6 +711,9 @@ function _syncExploreToggleDefaultsFromMode() {
   const d = _modeDefaults(mode);
   if ($('toggle-gap')) $('toggle-gap').checked = d.gap;
   if ($('toggle-clarify')) $('toggle-clarify').checked = d.clarify;
+  if ($('probe-floor')) $('probe-floor').value = String(d.floor);
+  if ($('toggle-skip-documented')) $('toggle-skip-documented').checked = d.skipDocumented;
+  if ($('toggle-deterministic-fallback')) $('toggle-deterministic-fallback').checked = d.deterministicFallback;
   _syncModeBadge();
 }
 
@@ -708,8 +722,14 @@ function _exploreSettingsPayload() {
   const defaults = _modeDefaults(mode);
   const gapEnabled = $('toggle-gap') ? $('toggle-gap').checked : defaults.gap;
   const clarifyEnabled = $('toggle-clarify') ? $('toggle-clarify').checked : defaults.clarify;
+  const probeFloor = $('probe-floor') ? Number($('probe-floor').value || defaults.floor) : defaults.floor;
+  const skipDocumented = $('toggle-skip-documented') ? $('toggle-skip-documented').checked : defaults.skipDocumented;
+  const deterministicFallback = $('toggle-deterministic-fallback') ? $('toggle-deterministic-fallback').checked : defaults.deterministicFallback;
   return {
     mode,
+    min_direct_probes_per_function: Math.max(1, Math.min(5, Number.isFinite(probeFloor) ? probeFloor : defaults.floor)),
+    skip_documented: !!skipDocumented,
+    deterministic_fallback_enabled: !!deterministicFallback,
     gap_resolution_enabled: !!gapEnabled,
     clarification_questions_enabled: !!clarifyEnabled,
   };

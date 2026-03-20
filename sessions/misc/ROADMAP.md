@@ -3,6 +3,45 @@
 > Priority-ordered work items derived from analysis of run `2026-03-17-33f9114-unknown-run2`.
 > Update this file as items are completed or re-prioritized.
 
+## 2026-03-20 Addendum — Probe Depth + Clarification Throughput
+
+### Immediate implementation (in progress)
+
+| ID | Item | Priority | Usefulness | Notes |
+|---|---|---|---|---|
+| ADD-1 | Enforce minimum direct probe floor per function | High | High | Prevents zero-call findings and improves evidence quality. |
+| ADD-2 | Reprompt on no-tool rounds before floor is met | High | High | Reduces premature assistant completion with no execution evidence. |
+| ADD-3 | Require at least one direct target call before completion | High | High | Guarantees per-function ground truth attempt. |
+| ADD-4 | Deterministic fallback probes for write functions | High | High | Adds stable bounded retries independent of model variance. |
+| ADD-5 | Runtime setting to disable skip-documented | High | Medium-High | Essential for focused diagnostics/revalidation runs. |
+| ADD-6 | Save-session floor metrics (`direct_probes_per_function`, `functions_below_floor`, `no_tool_call_rounds`) | High | High | Makes regressions observable and testable in one artifact. |
+| ADD-7 | UI diagnostics controls: probe floor, skip documented, deterministic fallback | High | High | Operator can tune depth without code or env edits. |
+
+### Design caution: deterministic fallback must remain generic
+
+- Deterministic fallback probes must be parameter-pattern and vocabulary driven.
+- No component-specific hardcoding (for example, contoso-only constants embedded in pipeline code).
+- Canonical values can be derived from `id_formats`, parameter names, and value semantics.
+
+### Deferred enhancement: generated fallback plan JSON
+
+| ID | Item | Priority | Usefulness | Notes |
+|---|---|---|---|---|
+| ADD-8 | Generate `deterministic_probe_plan.json` on the fly and persist as artifact | Medium | Medium-High | Useful for transparency, auditability, and reproducibility. Execution should still be deterministic code-side, not prompt-only. |
+
+### Deferred enhancement: Pass-B auto-answer clarifications (do not implement yet)
+
+| ID | Item | Priority | Usefulness | Notes |
+|---|---|---|---|---|
+| ADD-9 | `POST /api/jobs/{job_id}/auto-answer-gaps` draft suggestion pass | Medium | High | Best run after phase=`awaiting_clarification`; user must review/accept before submit. |
+| ADD-10 | UI `Suggest Answers` with confidence/evidence and risk flags | Medium | High | Reduces manual copy/paste burden while preserving human approval gate. |
+
+### Pass-B timing (usability)
+
+- Trigger window: after exploration/refinement ends in `awaiting_clarification`.
+- Default UX: user clicks `Suggest Answers`.
+- Optional future UX: auto-generate drafts once, then wait for explicit user approval.
+
 ---
 
 ## Product Shippability — Priority Order
@@ -1317,3 +1356,50 @@ The black-box DLL MVP is ready when it can:
 3. Validate a meaningful subset of functions 1:1 against direct DLL behavior
 4. Persist and resume the session state without rerunning discovery
 5. Present honest coverage labels for the remaining unsupported or inferred surfaces
+
+---
+
+## 2026-03-20 Addendum — Pipeline Cohesion Fixes
+
+> Analysis of runs `8211c70-run2` and `66d7077-run2-2` revealed inter-stage
+> data flow breaks that mask all downstream quality signals. These must be
+> fixed before probe depth or quality improvements have any observable effect.
+> Full analysis: `sessions/misc/PIPELINE-COHESION.md`
+> Diagnostic checklist: `sessions/misc/PIPELINE-DIAGNOSTIC-CHECKLIST.md`
+
+### Phase A — Plumbing fixes (prerequisite for everything below)
+
+| ID | Item | Priority | File | Status |
+|----|------|----------|------|--------|
+| COH-1 | Register invocables in `_explore_worker` at startup | **Critical** | `api/explore.py:~93` | OPEN |
+| COH-2 | Register invocables in `_run_gap_answer_mini_sessions` before loop | **Critical** | `api/explore_gap.py:~246` | OPEN |
+| COH-3 | Deduplicate findings to latest-per-function when injecting into chat | High | `api/chat.py:~218` | OPEN |
+| COH-4 | Deduplicate findings on save (or add authoritative-status helper) | High | `api/storage.py:~279` | OPEN |
+
+**Validation:** After fixing COH-1/2, run contoso_cs and verify `schema_evolution.json`
+shows at least one `changed: true` delta. After COH-3/4, verify `model_context.txt`
+findings block has no contradictory per-function entries.
+
+### Phase B — Run + measure (immediately after Phase A)
+
+- [ ] Schema evolution shows deltas at enrichment + discovery + mini-session
+- [ ] `invocables_map.json` has semantic param names for probed functions
+- [ ] `mini_session_transcript.txt` has no "not found in job" errors
+- [ ] `findings.json` has clean per-function final status
+- [ ] Gap resolution log reflects post-mini-session truth
+
+### Issue layers revealed by Phase B
+
+Once Phase A is validated, remaining failures sort into:
+
+| Layer | What it means | What to do |
+|-------|--------------|------------|
+| L2 — Probe quality | Functions probed but wrong/insufficient evidence | Tackle ADD-1 through ADD-4, P2-1, P2-2 |
+| L3 — Structural ceilings | Access violations, crypto guards, struct params | Tackle P4-1, P4-2, decompilation-guided probing |
+
+New issues identified during cohesion analysis:
+
+| ID | Item | Priority | Layer | Notes |
+|----|------|----------|-------|-------|
+| Q-5 | **State mutation across probes** — payment drains balance, later probes fail | Medium | L2 | Need state-reset strategy (re-init between write probes, or probe ordering) |
+| C-2 | **Crypto/XOR unlock codes** — CS_UnlockAccount requires XOR-fold to 0xa5, undiscoverable by probing | Low | L3 | Requires decompilation-guided hint injection or brute-force |

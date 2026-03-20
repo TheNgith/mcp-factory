@@ -846,5 +846,266 @@
                                 "CS_Initialize":  "success"
                             },
         "saved_at":  "2026-03-20T00:14:59.2758229-04:00"
+    },
+    {
+        "date":  "2026-03-20",
+        "commit":  "66d7077",
+        "commit_msg":  "Add dev/normal/extended explore modes with UI toggles and cancel flow",
+        "job_id":  "dd66fb6a",
+        "component":  "contoso_cs",
+        "note":  "contoso-cs-run2",
+        "folder":  "2026-03-20-66d7077-contoso-cs-run2",
+        "finding_counts":  {
+                               "success":  7,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  21
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  17,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  4
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  2,
+                                                         "avg":  1.3,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "Returned: 4294967294",
+                                                         "4294967294",
+                                                         "Returned: 4294967295",
+                                                         "4294967295"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFF":  "not found / invalid input"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  {
+                              "final_phase_suggestion":  "awaiting_clarification",
+                              "patched_count":  0,
+                              "open_questions":  5,
+                              "unanswered_questions":  5,
+                              "counts":  {
+                                             "success":  7,
+                                             "error":  14,
+                                             "other":  0
+                                         }
+                          },
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "error",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "error",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "error",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "error",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-20T11:19:54.2939038-04:00"
+    },
+    {
+        "date":  "2026-03-20",
+        "commit":  "66d7077",
+        "commit_msg":  "Add dev/normal/extended explore modes with UI toggles and cancel flow",
+        "job_id":  "dd66fb6a",
+        "component":  "contoso_cs",
+        "note":  "contoso-cs-run2",
+        "folder":  "2026-03-20-66d7077-contoso-cs-run2-2",
+        "finding_counts":  {
+                               "success":  10,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  30
+                           },
+        "gap_count":  4,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  27,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  23,
+                                               "explore":  4
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  4,
+                                                         "avg":  2.1,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_Initialize":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "Returned: 4294967294",
+                                                         "4294967294",
+                                                         "Returned: 4294967295",
+                                                         "4294967295"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_CalculateInterest",
+                                                                         "CS_GetAccountBalance",
+                                                                         "CS_GetDiagnostics",
+                                                                         "CS_GetLoyaltyPoints",
+                                                                         "CS_GetOrderStatus",
+                                                                         "CS_GetVersion",
+                                                                         "CS_LookupCustomer",
+                                                                         "CS_ProcessPayment",
+                                                                         "CS_ProcessRefund",
+                                                                         "CS_RedeemLoyaltyPoints",
+                                                                         "CS_UnlockAccount",
+                                                                         "entry"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument"
+                                                  }
+                                 },
+        "gap_resolution":  {
+                               "total":  1,
+                               "resolved":  0,
+                               "unresolved":  1
+                           },
+        "harmonization":  {
+                              "final_phase_suggestion":  "awaiting_clarification",
+                              "patched_count":  0,
+                              "open_questions":  4,
+                              "unanswered_questions":  4,
+                              "counts":  {
+                                             "success":  10,
+                                             "error":  15,
+                                             "other":  5
+                                         }
+                          },
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "error",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "error",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-20T11:56:11.6623458-04:00"
     }
 ]
