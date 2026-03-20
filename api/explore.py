@@ -838,12 +838,19 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 already_explored.add(fn_name)
             _set_explore_status(job_id, _state["explored"], total, f"Completed {fn_name}")
             if _observed_successes:
-                # Ground-truth override: we observed return=0 directly → force success
+                # Ground-truth override: we observed return=0 directly → force success.
+                # D-11: also rewrite the finding text so synthesis doesn't see
+                # "All N probes returned sentinel codes" for a function that actually works.
+                _gt_text = (
+                    f"Returns 0 on success when called with {_observed_successes[0]}. "
+                    f"Discovered via deterministic fallback (direct LLM probes: {_direct_target_tool_calls})."
+                )
                 try:
                     _patch_finding(job_id, fn_name, {
                         "working_call": _observed_successes[0],
                         "status": "success",
                         "stop_reason": "success",
+                        "finding": _gt_text,
                     })
                     logger.info(
                         "[%s] explore_worker: ground-truth override for %s working_call=%s",
