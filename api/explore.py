@@ -27,7 +27,7 @@ from api.executor import _execute_tool, _execute_tool_traced
 from api.storage import _persist_job_status, _get_job_status, _patch_invocable, _save_finding, _patch_finding, _upload_to_blob, _download_blob, _append_transcript, _append_executor_trace, _append_explore_probe_log
 from api.telemetry import _openai_client
 from api.explore_phases import (
-    _SENTINEL_DEFAULTS, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
+    _SENTINEL_DEFAULTS, _CAP_PROFILE, _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
     _calibrate_sentinels, _probe_write_unlock, _infer_param_desc,
 )
 from api.explore_vocab import (
@@ -256,6 +256,15 @@ def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
     return tool_schemas
 
 
+def _snapshot_schema_stage(job_id: str, stage_blob_name: str) -> None:
+    """Copy current mcp_schema.json to a stage-specific blob for diffing."""
+    try:
+        _raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/mcp_schema.json")
+        _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/{stage_blob_name}", _raw)
+    except Exception as _se:
+        logger.debug("[%s] schema snapshot failed (%s): %s", job_id, stage_blob_name, _se)
+
+
 def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     """Background worker: explore each invocable with the LLM and enrich the schema."""
     if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
@@ -303,6 +312,23 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     # When using direct OpenAI key, OPENAI_EXPLORE_MODEL controls this.
     # When using Azure, fall back to the reasoning deployment.
     model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/explore_config.json",
+            json.dumps(
+                {
+                    "cap_profile": _CAP_PROFILE,
+                    "max_rounds_per_function": _MAX_EXPLORE_ROUNDS_PER_FUNCTION,
+                    "max_tool_calls_per_function": _MAX_TOOL_CALLS_PER_FUNCTION,
+                    "max_functions_per_session": _MAX_FUNCTIONS_PER_SESSION,
+                },
+                indent=2,
+            ).encode(),
+        )
+    except Exception as _cfg_e:
+        logger.debug("[%s] explore_worker: explore_config upload failed: %s", job_id, _cfg_e)
 
     explored = 0
     try:
@@ -680,6 +706,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 )
 
                             _fn_probe_log.append({
+                                "probe_id": f"{fn_name}:{_round}:{_fn_tool_call_count + 1}:{tc_name}",
                                 "phase": "explore",
                                 "function": fn_name,
                                 "round": _round,
@@ -703,7 +730,13 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                         "confidence": classification.get("confidence"),
                                         "source": classification.get("source"),
                                         "meaning": classification.get("meaning") or "unknown",
+                                        "rationale_summary": (
+                                            f"{classification.get('format_guess')} from "
+                                            f"{classification.get('source')}; "
+                                            f"meaning={classification.get('meaning') or 'unknown'}"
+                                        ),
                                         "evidence_count": 0,
+                                        "evidence_refs": [],
                                         "functions": [],
                                         "arg_shapes": [],
                                         "phases": [],
@@ -717,10 +750,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                         _cat["arg_shapes"].append(_shape_s)
                                     if "explore" not in _cat["phases"]:
                                         _cat["phases"].append("explore")
-                                    _cat["provisional"] = not (
-                                        float(classification.get("confidence") or 0.0) >= 0.9
-                                        and int(_cat["evidence_count"]) >= 2
-                                    )
+                                    _probe_ref = f"{fn_name}:{_round}:{_fn_tool_call_count + 1}:{tc_name}"
+                                    if _probe_ref not in _cat["evidence_refs"]:
+                                        _cat["evidence_refs"].append(_probe_ref)
+                                    _conf_now = float(classification.get("confidence") or 0.0)
+                                    _src_now = str(classification.get("source") or "")
+                                    _strong_det = _src_now.startswith("deterministic.") and _conf_now >= 0.95
+                                    _stable = (_conf_now >= 0.85 and int(_cat["evidence_count"]) >= 2)
+                                    _cat["provisional"] = not (_strong_det or _stable)
                         except Exception as exc:
                             tool_result = f"Tool error: {exc}"
                             _llm_result = tool_result
@@ -1020,10 +1057,14 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             for _hex, _row in _sentinel_catalog.items():
                 _conf = float(_row.get("confidence") or 0.0)
                 _evi = int(_row.get("evidence_count") or 0)
+                _src = str(_row.get("source") or "")
                 _meaning = str(_row.get("meaning") or "unknown")
-                if _conf >= 0.9 and _evi >= 2 and _meaning and _meaning != "unknown":
+                _strong_det = _src.startswith("deterministic.") and _conf >= 0.95
+                _stable = _conf >= 0.85 and _evi >= 2
+                if (_strong_det or _stable) and _meaning and _meaning != "unknown":
                     vocab["error_codes"].setdefault(_hex, _meaning)
                     _row["provisional"] = False
+                    _row["promotion_reason"] = "deterministic_single" if _strong_det else "repeated_evidence"
                     _promoted += 1
 
             _upload_to_blob(
@@ -1073,6 +1114,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     except Exception as _bf_e:
                         logger.debug("[%s] explore_worker: backfill failed: %s", job_id, _bf_e)
 
+                    # Schema checkpoint after initial discovery/backfill but before
+                    # gap-resolution retries begin.
+                    _snapshot_schema_stage(job_id, "mcp_schema_post_discovery.json")
+                    _snapshot_schema_stage(job_id, "mcp_schema_pre_gap_resolution.json")
+
                     # Gap resolution pass: attempt one more focused round on functions
                     # that failed every probe in the main loop, using known-good IDs
                     # and explicit retry strategies.  Resolved functions won't appear
@@ -1087,6 +1133,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         )
                     except Exception as _gr_e:
                         logger.debug("[%s] explore_worker: gap resolution failed: %s", job_id, _gr_e)
+
+                    _snapshot_schema_stage(job_id, "mcp_schema_post_gap_resolution.json")
+                    _snapshot_schema_stage(job_id, "mcp_schema_pre_clarification.json")
 
                     # Self-assessment: generate confidence gap questions for the user.
                     # Runs AFTER gap resolution, so only genuinely unresolvable unknowns
@@ -1106,6 +1155,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         )
                     except Exception as _gap_e:
                         logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
+
+                    _snapshot_schema_stage(job_id, "mcp_schema_post_clarification.json")
 
                     # Behavioral spec: typed Python stub file capturing the API contract.
                     try:
@@ -1283,8 +1334,13 @@ def _attempt_gap_resolution(
 
         _observed_successes: list[dict] = []
         _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
+        _fn_tool_call_count = 0
 
         for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
+            if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                logger.info("[%s] gap_resolution: %s hit tool-call cap (%d)",
+                            job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                break
             try:
                 from typing import cast, Any as _Any
                 response = client.chat.completions.create(
@@ -1320,6 +1376,8 @@ def _attempt_gap_resolution(
             })
 
             for tc in msg.tool_calls:
+                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                    break
                 _fn = tc.function  # type: ignore[union-attr]
                 tc_name = _fn.name
                 try:
@@ -1329,6 +1387,7 @@ def _attempt_gap_resolution(
 
                 tc_inv = inv_map.get(tc_name)
                 tool_result = _execute_tool(tc_inv, tc_args) if tc_inv else f"Tool '{tc_name}' not found."
+                _fn_tool_call_count += 1
 
                 if tc_name == fn_name:
                     _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
@@ -1403,6 +1462,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
         if not targeted:
             logger.info("[%s] gap_mini_sessions: no function-specific answers — skipping", job_id)
             return
+
+        _snapshot_schema_stage(job_id, "mcp_schema_pre_mini_session.json")
 
         client = _openai_client()
         model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
@@ -1479,8 +1540,13 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             # Accumulate tool calls and traces for transcript + executor_trace.json
             _mini_tool_log: list[dict] = []
             _mini_traces: list[dict] = []
+            _fn_tool_call_count = 0
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
+                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                    logger.info("[%s] gap_mini_sessions: %s hit tool-call cap (%d)",
+                                job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                    break
                 try:
                     from typing import cast, Any as _Any
                     response = client.chat.completions.create(
@@ -1518,6 +1584,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                 _round_reasoning = (msg.content or "").strip()
                 _first_in_round = True
                 for tc in msg.tool_calls:
+                    if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                        break
                     _fn = tc.function  # type: ignore[union-attr]
                     tc_name = _fn.name
                     try:
@@ -1533,6 +1601,7 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     else:
                         tool_result = f"Tool '{tc_name}' not found."
                         _tc_trace = None
+                    _fn_tool_call_count += 1
 
                     # Accumulate for transcript and executor_trace.json
                     _mini_tool_log.append({
@@ -1657,6 +1726,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             logger.info("[%s] gap_mini_sessions: gap_resolution_log written (%d entries)", job_id, len(_grl))
         except Exception as _grl_e:
             logger.debug("[%s] gap_mini_sessions: gap_resolution_log upload failed: %s", job_id, _grl_e)
+
+        _snapshot_schema_stage(job_id, "mcp_schema_post_mini_session.json")
 
         _cur_status = _get_job_status(job_id) or {}
         _persist_job_status(

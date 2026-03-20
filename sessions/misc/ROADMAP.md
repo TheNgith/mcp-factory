@@ -1074,3 +1074,66 @@ Release gate for sentinel-table updates:
 2. No function can consume unbounded explore calls due to sentinel loops.
 3. Sentinel meanings are explainable from stored evidence (trace/static/user), not only model narration.
 4. Cross-DLL runs can attribute write failures to missing dependency state versus bad function args.
+
+---
+
+## MVP Persistence + UI Rehydration (Blob-backed)
+
+### Problem statement
+
+Refreshing the web UI can drop visible enriched state (schema/vocab/findings) from the user's view.
+For MVP, session state must be durable and resumable from Blob-backed artifacts, not browser memory.
+
+### Target behavior
+
+1. Reloading the UI resumes the exact job state (schema stage, findings, vocab, questions, traces).
+2. A user can open prior sessions and continue exploration/refinement without re-running discovery.
+3. Every meaningful state mutation updates durable storage first, then UI state.
+
+### Backend work (P1)
+
+1. Add `GET /api/jobs/{id}/state` aggregator endpoint returning a single rehydration payload:
+  - latest schema checkpoints
+  - findings/vocab
+  - explore status + questions
+  - metadata (`component`, timestamps, cap profile)
+2. Add per-job durable manifest blob (`job_state_manifest.json`):
+  - latest artifact pointers/versions
+  - stage progress
+  - updated_at
+3. Persist version IDs for key artifacts (`schema_version`, `vocab_version`, `findings_version`) to support rollback/diff.
+4. Ensure write order is durable-first:
+  - upload artifact
+  - update manifest pointer/version
+  - return response to UI
+
+### UI work (P1)
+
+1. On page load, always call `GET /api/jobs/{id}/state` and reconstruct screen state from response.
+2. Add explicit loading/resume states ("Rehydrating session…").
+3. Add session history panel:
+  - list jobs by component
+  - last updated
+  - status badge (exploring/refining/done/error)
+4. Persist edits (hints/use-cases/gap answers) immediately via API; avoid browser-only staging.
+
+### Persistence safety rules
+
+1. Blob artifacts are source of truth; in-memory state is cache only.
+2. No UI action should rely on unsaved local state after user leaves/refreshes.
+3. If manifest/artifact mismatch is detected, show recoverable warning and last good version.
+
+### Observability + acceptance checks
+
+Track and gate on:
+
+1. `resume_success_rate` (refresh -> state restored without manual rerun)
+2. `state_rehydrate_latency_ms`
+3. `manifest_artifact_mismatch_count`
+4. `rerun_without_need_count` (user forced to rerun despite existing state)
+
+MVP passes when:
+
+1. Refreshing UI restores schema/findings/vocab/questions for >=95% of sessions.
+2. Users can resume and continue from previous stage without rerunning discovery.
+3. Manifest/version trail supports clear stage-to-stage diff and rollback.

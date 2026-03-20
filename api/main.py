@@ -654,6 +654,13 @@ async def session_snapshot(job_id: str):
         for blob_name, zip_name in [
             (f"{job_id}/mcp_schema_t0.json",  "schema/01-pre-enrichment.json"),
             (f"{job_id}/mcp_schema.json",      "schema/02-post-enrichment.json"),
+            (f"{job_id}/mcp_schema_post_discovery.json",      "schema/03-post-discovery.json"),
+            (f"{job_id}/mcp_schema_pre_gap_resolution.json",  "schema/04-pre-gap-resolution.json"),
+            (f"{job_id}/mcp_schema_post_gap_resolution.json", "schema/05-post-gap-resolution.json"),
+            (f"{job_id}/mcp_schema_pre_clarification.json",   "schema/06-pre-clarification.json"),
+            (f"{job_id}/mcp_schema_post_clarification.json",  "schema/07-post-clarification.json"),
+            (f"{job_id}/mcp_schema_pre_mini_session.json",    "schema/08-pre-mini-session.json"),
+            (f"{job_id}/mcp_schema_post_mini_session.json",   "schema/09-post-mini-session.json"),
         ]:
             try:
                 zf.writestr(zip_name, _download_blob(ARTIFACT_CONTAINER, blob_name))
@@ -738,6 +745,13 @@ async def session_snapshot(job_id: str):
                         _download_blob(ARTIFACT_CONTAINER, f"{job_id}/explore_probe_log.json"))
         except Exception:
             pass  # not yet generated — silently omit
+
+        # ── Explore config (cap profile + limits used for this run) ─────
+        try:
+            zf.writestr("explore_config.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/explore_config.json"))
+        except Exception:
+            pass
 
         # ── Raw diagnosis records (one per chat message) ───────────────
         try:

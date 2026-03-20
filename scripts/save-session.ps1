@@ -126,6 +126,51 @@ if ($OutDir) {
 Write-Host "  Folder : $sessionDir"
 Write-Host ""
 
+# ── 7.5. schema evolution summary (checkpoint presence + content diffs) ─────
+$schemaDir = Join-Path $sessionDir "schema"
+$schemaEvolution = $null
+if (Test-Path $schemaDir) {
+    try {
+        $schemaFiles = @(Get-ChildItem $schemaDir -File -Filter "*.json" | Sort-Object Name)
+        $checkpoints = @()
+        foreach ($sf in $schemaFiles) {
+            $checkpoints += [PSCustomObject]@{
+                name = $sf.Name
+                size_bytes = $sf.Length
+            }
+        }
+
+        $deltas = @()
+        for ($i = 0; $i -lt ($schemaFiles.Count - 1); $i++) {
+            $a = $schemaFiles[$i]
+            $b = $schemaFiles[$i + 1]
+            $aRaw = Get-Content $a.FullName -Raw
+            $bRaw = Get-Content $b.FullName -Raw
+            $changed = $aRaw -ne $bRaw
+            $deltas += [PSCustomObject]@{
+                from = $a.Name
+                to = $b.Name
+                changed = $changed
+                size_delta_bytes = ($b.Length - $a.Length)
+            }
+        }
+
+        $schemaEvolution = [PSCustomObject]@{
+            checkpoint_count = $schemaFiles.Count
+            checkpoints = $checkpoints
+            deltas = $deltas
+        }
+        $schemaEvolution | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $sessionDir "schema_evolution.json") -Encoding UTF8
+        Write-Host ("  schema checkpoints: " + $schemaFiles.Count) -ForegroundColor Cyan
+        foreach ($d in $deltas) {
+            $col = if ($d.changed) { "Yellow" } else { "DarkGray" }
+            Write-Host ("    " + $d.from + " -> " + $d.to + " changed=" + $d.changed + " size_delta=" + $d.size_delta_bytes) -ForegroundColor $col
+        }
+    } catch {
+        Write-Host "  schema evolution summary skipped" -ForegroundColor DarkYellow
+    }
+}
+
 # ── 4-A. delta.md ────────────────────────────────────────────
 # Compare new session against the most recent previous one
 $prevSession = Get-ChildItem $SessionsRoot -Directory -ErrorAction SilentlyContinue |
@@ -519,6 +564,21 @@ if (Test-Path $probePath) {
     } catch { Write-Host "  explore_probe_log.json skipped" -ForegroundColor DarkYellow }
 }
 
+# ── 12.66. explore_config.json (cap profile + limits in this run) ─────────
+$exploreConfigPath = Join-Path $sessionDir "explore_config.json"
+$exploreConfig = $null
+if (Test-Path $exploreConfigPath) {
+    try {
+        $exploreConfig = Get-Content $exploreConfigPath -Raw | ConvertFrom-Json
+        Write-Host ("  explore caps: profile=" + $exploreConfig.cap_profile +
+            " rounds=" + $exploreConfig.max_rounds_per_function +
+            " tool_calls=" + $exploreConfig.max_tool_calls_per_function +
+            " max_functions=" + $exploreConfig.max_functions_per_session) -ForegroundColor Cyan
+    } catch {
+        Write-Host "  explore_config.json skipped" -ForegroundColor DarkYellow
+    }
+}
+
 # ── 12.7. Pre-parse diagnosis_raw.json (required before SUMMARY.md + DIAGNOSIS.json) ──
 $diagPath = Join-Path $sessionDir "diagnosis_raw.json"
 $diagRaw  = @(); $diagOut = $null
@@ -609,6 +669,8 @@ if (Test-Path $gapResPath) {
 try {
     $s1s2 = [PSCustomObject]@{
         generated_at         = (Get-Date -Format "o")
+        explore_config       = $exploreConfig
+        schema_evolution     = $schemaEvolution
         probe_summary        = $probeSummary
         sentinel_calibration = $sentCalibSummary
         sentinel_catalog     = $sentCatalogSummary

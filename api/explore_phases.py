@@ -18,13 +18,27 @@ from api.sentinel_codes import SENTINEL_DEFAULTS, classify_common_result_code
 logger = logging.getLogger("mcp_factory.api")
 
 # Tunable via env for development speed vs. quality tradeoff:
-#   EXPLORE_MAX_ROUNDS=1   → ~3x faster, shallower enrichment (good for dev)
-#   EXPLORE_MAX_ROUNDS=5   → default (5 LLM turns per function, up to 15 total DLL calls)
+#   EXPLORE_CAP_PROFILE=dev|stabilize|deploy (defaults to deploy)
+#   EXPLORE_MAX_ROUNDS=1   → explicit override
+#   EXPLORE_MAX_ROUNDS=5   → explicit override
 #   EXPLORE_MAX_TOOL_CALLS → hard cap on DLL probe calls per function (prevents one function
 #                             from starving the others; every function is guaranteed exploration)
 #   EXPLORE_MAX_FUNCTIONS=10 → cap number of functions probed
-_MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "5"))
-_MAX_TOOL_CALLS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_TOOL_CALLS", "15"))
+_CAP_PROFILES = {
+    "dev": {"rounds": 3, "tool_calls": 5},
+    "stabilize": {"rounds": 4, "tool_calls": 8},
+    "deploy": {"rounds": 5, "tool_calls": 10},
+}
+_CAP_PROFILE = _os.getenv("EXPLORE_CAP_PROFILE", "deploy").strip().lower()
+if _CAP_PROFILE not in _CAP_PROFILES:
+    _CAP_PROFILE = "deploy"
+
+_MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(
+    _os.getenv("EXPLORE_MAX_ROUNDS", str(_CAP_PROFILES[_CAP_PROFILE]["rounds"]))
+)
+_MAX_TOOL_CALLS_PER_FUNCTION = int(
+    _os.getenv("EXPLORE_MAX_TOOL_CALLS", str(_CAP_PROFILES[_CAP_PROFILE]["tool_calls"]))
+)
 _MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
 
 _SENTINEL_DEFAULTS = SENTINEL_DEFAULTS
@@ -69,10 +83,14 @@ def _calibrate_sentinels(
         except Exception as _fle:
             logger.debug("[%s] calibrate_sentinels probe flush failed: %s", job_id, _fle)
 
-    candidates = {
-        v: fns for v, fns in val_fns.items()
-        if v >= 0x80000000 and counts[v] >= 2
-    }
+    candidates = {}
+    for v, fns in val_fns.items():
+        if v < 0x80000000:
+            continue
+        _m = classify_common_result_code(v)
+        _strong_det = bool(_m and "-like" not in _m)
+        if counts[v] >= 2 or _strong_det:
+            candidates[v] = fns
     if not candidates:
         return _SENTINEL_DEFAULTS
 
