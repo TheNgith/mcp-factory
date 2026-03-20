@@ -579,6 +579,11 @@ if (Test-Path $exploreConfigPath) {
             " rounds=" + $exploreConfig.max_rounds_per_function +
             " tool_calls=" + $exploreConfig.max_tool_calls_per_function +
             " max_functions=" + $exploreConfig.max_functions_per_session) -ForegroundColor Cyan
+        Write-Host ("  explore opts: floor=" + $exploreConfig.min_direct_probes_per_function +
+            " skip_documented=" + $exploreConfig.skip_documented +
+            " deterministic_fallback=" + $exploreConfig.deterministic_fallback_enabled +
+            " gap=" + $exploreConfig.gap_resolution_enabled +
+            " clarify=" + $exploreConfig.clarification_questions_enabled) -ForegroundColor Cyan
     } catch {
         Write-Host "  explore_config.json skipped" -ForegroundColor DarkYellow
     }
