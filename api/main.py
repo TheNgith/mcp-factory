@@ -66,6 +66,75 @@ _GAP_RESOLUTION_ENABLED = _os.getenv("EXPLORE_ENABLE_GAP_RESOLUTION", "1").strip
     "0", "false", "no", "off"
 }
 
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _as_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str, Any]:
+    body = body or {}
+    raw = body.get("explore_settings") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    mode = str(raw.get("mode") or "normal").strip().lower()
+    if mode not in {"dev", "normal", "extended"}:
+        mode = "normal"
+
+    mode_defaults = {
+        "dev": {
+            "cap_profile": "dev",
+            "max_rounds": 2,
+            "max_tool_calls": 3,
+            "gap_resolution_enabled": False,
+            "clarification_questions_enabled": False,
+        },
+        "normal": {
+            "cap_profile": "deploy",
+            "max_rounds": 5,
+            "max_tool_calls": 10,
+            "gap_resolution_enabled": True,
+            "clarification_questions_enabled": True,
+        },
+        "extended": {
+            "cap_profile": "deploy",
+            "max_rounds": 7,
+            "max_tool_calls": 14,
+            "gap_resolution_enabled": True,
+            "clarification_questions_enabled": True,
+        },
+    }
+
+    defaults = mode_defaults[mode]
+    cap_profile = str(raw.get("cap_profile") or defaults["cap_profile"]).strip().lower()
+    if cap_profile not in {"dev", "stabilize", "deploy"}:
+        cap_profile = defaults["cap_profile"]
+
+    return {
+        "mode": mode,
+        "cap_profile": cap_profile,
+        "max_rounds": _as_int(raw.get("max_rounds"), int(defaults["max_rounds"]), 1, 12),
+        "max_tool_calls": _as_int(raw.get("max_tool_calls"), int(defaults["max_tool_calls"]), 1, 24),
+        "max_functions": _as_int(raw.get("max_functions"), 50, 1, 500),
+        "gap_resolution_enabled": _as_bool(raw.get("gap_resolution_enabled"), bool(defaults["gap_resolution_enabled"])),
+        "clarification_questions_enabled": _as_bool(
+            raw.get("clarification_questions_enabled"),
+            bool(defaults["clarification_questions_enabled"]),
+        ),
+    }
+
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(title="MCP Factory API", version="1.0.0")
 app.add_middleware(
@@ -404,6 +473,7 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
 
     body = body or {}
     invocables: list | None = body.get("invocables") if body else None
+    runtime_settings = _normalize_explore_runtime_settings(body)
 
     if not invocables:
         # Load from in-memory registry (populated by /api/generate)
@@ -439,6 +509,17 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
             "updated_at": time.time(),
         })
 
+    _persist_job_status(job_id, {
+        **(_get_job_status(job_id) or {}),
+        "explore_phase": "queued",
+        "explore_progress": "0/0",
+        "explore_message": "Exploration queued",
+        "explore_runtime": runtime_settings,
+        "explore_cancel_requested": False,
+        "explore_started_at": time.time(),
+        "updated_at": time.time(),
+    })
+
     t = threading.Thread(
         target=_explore_worker,
         args=(job_id, invocables),
@@ -449,7 +530,12 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
 
     logger.info("[%s] Exploration worker spawned for %d invocables", job_id, len(invocables))
     return JSONResponse(
-        {"job_id": job_id, "status": "exploring", "invocable_count": len(invocables)},
+        {
+            "job_id": job_id,
+            "status": "exploring",
+            "invocable_count": len(invocables),
+            "explore_runtime": runtime_settings,
+        },
         status_code=202,
     )
 
@@ -475,6 +561,7 @@ async def refine_job(job_id: str, body: dict[str, Any] = None):
     from api.storage import _JOB_INVOCABLE_MAPS, _patch_finding
 
     body = body or {}
+    runtime_settings = _normalize_explore_runtime_settings(body)
     corrections: str = (body.get("corrections") or "").strip()
     target_names: list[str] = body.get("target_functions") or []
     missing_desc: str = (body.get("missing") or "").strip()
@@ -522,6 +609,9 @@ async def refine_job(job_id: str, body: dict[str, Any] = None):
         "explore_phase": "queued",
         "explore_progress": "0/0",
         "explore_message": "Refinement queued…",
+        "explore_runtime": runtime_settings,
+        "explore_cancel_requested": False,
+        "explore_started_at": time.time(),
         "updated_at": time.time(),
     })
 
@@ -544,9 +634,34 @@ async def refine_job(job_id: str, body: dict[str, Any] = None):
             "target_functions": [inv["name"] for inv in target_invocables],
             "corrections_applied": bool(corrections),
             "missing_added": bool(missing_desc),
+            "explore_runtime": runtime_settings,
         },
         status_code=202,
     )
+
+
+@app.post("/api/jobs/{job_id}/explore-cancel")
+async def cancel_explore(job_id: str):
+    """Request cancellation of an active explore/refine run.
+
+    Cancellation is cooperative: the worker checks this flag between operations,
+    then finalizes and persists partial artifacts before exiting.
+    """
+    current = _get_job_status(job_id)
+    if current is None:
+        raise HTTPException(404, f"Job '{job_id}' not found")
+
+    _persist_job_status(
+        job_id,
+        {
+            **current,
+            "explore_cancel_requested": True,
+            "explore_phase": "cancel_requested",
+            "explore_message": "Cancellation requested — stopping after current step…",
+            "updated_at": time.time(),
+        },
+    )
+    return JSONResponse({"job_id": job_id, "status": "cancel_requested"}, status_code=202)
 
 
 @app.post("/api/jobs/{job_id}/answer-gaps")
@@ -565,12 +680,14 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     if not answers:
         raise HTTPException(400, "No answers provided.")
 
-    if not _GAP_RESOLUTION_ENABLED:
+    _cur_settings = (_get_job_status(job_id) or {}).get("explore_runtime") or {}
+    _gap_enabled = _as_bool(_cur_settings.get("gap_resolution_enabled"), _GAP_RESOLUTION_ENABLED)
+    if not _gap_enabled:
         return JSONResponse(
             {
                 "job_id": job_id,
                 "status": "gap_resolution_disabled",
-                "message": "Gap resolution/mini-sessions are disabled by EXPLORE_ENABLE_GAP_RESOLUTION=0.",
+                "message": "Gap resolution/mini-sessions are disabled for this run.",
             },
             status_code=202,
         )

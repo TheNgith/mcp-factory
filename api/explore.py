@@ -62,7 +62,20 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
     from api.storage import _load_findings
 
-    total = min(len(invocables), _MAX_FUNCTIONS_PER_SESSION)
+    _job_runtime = (_get_job_status(job_id) or {}).get("explore_runtime") or {}
+    _max_functions = int(_job_runtime.get("max_functions") or _MAX_FUNCTIONS_PER_SESSION)
+    _max_rounds = int(_job_runtime.get("max_rounds") or _MAX_EXPLORE_ROUNDS_PER_FUNCTION)
+    _max_tool_calls = int(_job_runtime.get("max_tool_calls") or _MAX_TOOL_CALLS_PER_FUNCTION)
+    _gap_resolution_enabled = bool(_job_runtime.get("gap_resolution_enabled", _GAP_RESOLUTION_ENABLED))
+    _clarification_enabled = bool(_job_runtime.get("clarification_questions_enabled", True))
+    _effective_cap_profile = str(_job_runtime.get("cap_profile") or _CAP_PROFILE)
+    _run_started_at = float((_get_job_status(job_id) or {}).get("explore_started_at") or time.time())
+
+    def _cancel_requested() -> bool:
+        _cur = _get_job_status(job_id) or {}
+        return bool(_cur.get("explore_cancel_requested"))
+
+    total = min(len(invocables), _max_functions)
     invocables = invocables[:total]
 
     logger.info("[%s] explore_worker: starting, %d functions to explore", job_id, total)
@@ -108,10 +121,13 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             f"{job_id}/explore_config.json",
             json.dumps(
                 {
-                    "cap_profile": _CAP_PROFILE,
-                    "max_rounds_per_function": _MAX_EXPLORE_ROUNDS_PER_FUNCTION,
-                    "max_tool_calls_per_function": _MAX_TOOL_CALLS_PER_FUNCTION,
-                    "max_functions_per_session": _MAX_FUNCTIONS_PER_SESSION,
+                    "mode": _job_runtime.get("mode") or "normal",
+                    "cap_profile": _effective_cap_profile,
+                    "max_rounds_per_function": _max_rounds,
+                    "max_tool_calls_per_function": _max_tool_calls,
+                    "max_functions_per_session": _max_functions,
+                    "gap_resolution_enabled": _gap_resolution_enabled,
+                    "clarification_questions_enabled": _clarification_enabled,
                 },
                 indent=2,
             ).encode(),
@@ -326,6 +342,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         _sentinel_catalog: dict[str, dict] = {}
 
         def _explore_one(inv: dict) -> None:
+            if _cancel_requested():
+                return
             fn_name = inv["name"]
             _vocab_snap = dict(vocab)
 
@@ -373,10 +391,12 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _policy_events: list[dict] = []
             _write_retry_counts: dict[str, int] = defaultdict(int)
 
-            for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
-                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+            for _round in range(_max_rounds):
+                if _cancel_requested():
+                    break
+                if _fn_tool_call_count >= _max_tool_calls:
                     logger.info("[%s] explore_worker: %s hit tool-call cap (%d), moving on",
-                                job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                                job_id, fn_name, _max_tool_calls)
                     break
                 try:
                     from typing import cast, Any as _Any
@@ -419,6 +439,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
                 # Execute each tool call
                 for tc in msg.tool_calls:
+                    if _cancel_requested():
+                        break
                     _fn = tc.function  # type: ignore[union-attr]
                     tc_name = _fn.name
                     try:
@@ -596,7 +618,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         break
 
                     # Break out of tool-call processing if we hit the per-function cap
-                    if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                    if _fn_tool_call_count >= _max_tool_calls:
                         break
 
                 if _policy_stop_reason in {"policy_exhausted", "dependency_missing", "schema_missing"}:
@@ -837,6 +859,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 list(_pool.map(_explore_one, invocables))
         else:
             for inv in invocables:
+                if _cancel_requested():
+                    break
                 _explore_one(inv)
 
         # ── AC-1: Post-loop probe-log reconciliation ─────────────────────
@@ -966,7 +990,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     _snapshot_schema_stage(job_id, "mcp_schema_post_discovery.json")
                     _snapshot_schema_stage(job_id, "mcp_schema_pre_gap_resolution.json")
 
-                    if _GAP_RESOLUTION_ENABLED:
+                    if _cancel_requested():
+                        logger.info("[%s] explore_worker: cancellation requested before gap/synthesis tail", job_id)
+                    elif _gap_resolution_enabled:
                         # Gap resolution pass: attempt one more focused round on functions
                         # that failed every probe in the main loop, using known-good IDs
                         # and explicit retry strategies.  Resolved functions won't appear
@@ -988,25 +1014,33 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         # Self-assessment: generate confidence gap questions for the user.
                         # Runs AFTER gap resolution, so only genuinely unresolvable unknowns
                         # (undocumented error codes, business rules) surface to the user.
-                        try:
-                            logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
-                            _set_explore_status(job_id, explored, total, "Generating clarification questions…")
-                            _gaps = _generate_confidence_gaps(client, model, _syn_findings, invocables)
-                            if _gaps:
-                                logger.info("[%s] explore_worker: %d confidence gaps generated", job_id, len(_gaps))
-                            # Always persist (even empty list) so UI knows the pass ran
+                        if _clarification_enabled:
+                            try:
+                                logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
+                                _set_explore_status(job_id, explored, total, "Generating clarification questions…")
+                                _gaps = _generate_confidence_gaps(client, model, _syn_findings, invocables)
+                                if _gaps:
+                                    logger.info("[%s] explore_worker: %d confidence gaps generated", job_id, len(_gaps))
+                                # Always persist (even empty list) so UI knows the pass ran
+                                _gap_current = _get_job_status(job_id) or {}
+                                _persist_job_status(
+                                    job_id,
+                                    {**_gap_current, "explore_questions": _gaps},
+                                    sync=True,
+                                )
+                            except Exception as _gap_e:
+                                logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
+                        else:
                             _gap_current = _get_job_status(job_id) or {}
                             _persist_job_status(
                                 job_id,
-                                {**_gap_current, "explore_questions": _gaps},
+                                {**_gap_current, "explore_questions": []},
                                 sync=True,
                             )
-                        except Exception as _gap_e:
-                            logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
 
                         _snapshot_schema_stage(job_id, "mcp_schema_post_clarification.json")
                     else:
-                        logger.info("[%s] explore_worker: gap resolution disabled by EXPLORE_ENABLE_GAP_RESOLUTION=0", job_id)
+                        logger.info("[%s] explore_worker: gap resolution disabled for this run", job_id)
                         _gap_current = _get_job_status(job_id) or {}
                         _persist_job_status(
                             job_id,
@@ -1015,22 +1049,23 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         )
 
                     # Behavioral spec: typed Python stub file capturing the API contract.
-                    try:
-                        logger.info("[%s] explore_worker: generating behavioral spec…", job_id)
-                        _set_explore_status(job_id, explored, total, "Generating behavioral specification…")
-                        _component = (_get_job_status(job_id) or {}).get("component_name", "DLLComponent")
-                        _spec_py = _generate_behavioral_spec(
-                            client, model, _syn_findings, invocables, _component, _report
-                        )
-                        if _spec_py:
-                            _upload_to_blob(
-                                ARTIFACT_CONTAINER,
-                                f"{job_id}/behavioral_spec.py",
-                                _spec_py.encode("utf-8"),
+                    if not _cancel_requested():
+                        try:
+                            logger.info("[%s] explore_worker: generating behavioral spec…", job_id)
+                            _set_explore_status(job_id, explored, total, "Generating behavioral specification…")
+                            _component = (_get_job_status(job_id) or {}).get("component_name", "DLLComponent")
+                            _spec_py = _generate_behavioral_spec(
+                                client, model, _syn_findings, invocables, _component, _report
                             )
-                            logger.info("[%s] explore_worker: behavioral_spec.py saved to blob", job_id)
-                    except Exception as _spec_e:
-                        logger.debug("[%s] explore_worker: behavioral spec failed: %s", job_id, _spec_e)
+                            if _spec_py:
+                                _upload_to_blob(
+                                    ARTIFACT_CONTAINER,
+                                    f"{job_id}/behavioral_spec.py",
+                                    _spec_py.encode("utf-8"),
+                                )
+                                logger.info("[%s] explore_worker: behavioral_spec.py saved to blob", job_id)
+                        except Exception as _spec_e:
+                            logger.debug("[%s] explore_worker: behavioral spec failed: %s", job_id, _spec_e)
         except Exception as _syn_e:
             logger.debug("[%s] explore_worker: synthesis failed: %s", job_id, _syn_e)
 
@@ -1177,13 +1212,19 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             and not (bool(q.get("answered")) or bool(str(q.get("answer") or "").strip()))
             for q in _open_questions
         )
-        _final_phase = "awaiting_clarification" if _has_unanswered else "done"
+        _elapsed_s = max(0.0, time.time() - _run_started_at)
+        _was_canceled = _cancel_requested()
+        if _was_canceled:
+            _final_phase = "canceled"
+        else:
+            _final_phase = "awaiting_clarification" if _has_unanswered else "done"
         _persist_job_status(
             job_id,
             {
                 **current,
                 "explore_phase": _final_phase,
                 "explore_progress": f"{explored}/{total}",
+                "explore_last_run_seconds": round(_elapsed_s, 2),
                 "updated_at": time.time(),
             },
             sync=True,

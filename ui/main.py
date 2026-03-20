@@ -532,12 +532,29 @@ _HTML = r"""<!DOCTYPE html>
       <!-- Discover recommendation bar (shown when schema has only generic param names) -->
       <div class="explore-bar" id="discover-bar" style="display:none">
         <span class="amber-badge">⚠ Recommended</span>
+        <span class="status-badge" id="mode-badge" style="display:none;background:#dcfce7;color:#166534">Mode: dev</span>
         <span class="explore-progress" id="discover-bar-msg">
           Schema has limited information — run Discover to learn parameter semantics automatically.
         </span>
+        <span id="last-run-time" style="display:none;font-size:.78rem;color:#334155"></span>
+        <select id="explore-mode" class="input" style="max-width:125px;padding:4px 8px;font-size:.8rem">
+          <option value="dev" selected>Dev</option>
+          <option value="normal">Normal</option>
+          <option value="extended">Extended</option>
+        </select>
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
+          <input id="toggle-gap" type="checkbox" /> Gap
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
+          <input id="toggle-clarify" type="checkbox" /> Clarify
+        </label>
         <button class="btn btn-secondary" id="discover-btn"
           style="white-space:nowrap;padding:7px 14px;font-size:.82rem">
           🔍 Discover
+        </button>
+        <button class="btn btn-secondary" id="cancel-explore-btn"
+          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem;background:#dc2626;color:#fff;border-color:#dc2626">
+          ⏹ Cancel
         </button>
         <button class="btn btn-secondary" id="download-doc-btn"
           style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
@@ -659,6 +676,44 @@ const state = {
   schemaBlob: null,
   messages: [],        // chat history [{role, content}]
 };
+
+function _modeDefaults(mode) {
+  if (mode === 'extended') {
+    return { gap: true, clarify: true };
+  }
+  if (mode === 'normal') {
+    return { gap: true, clarify: true };
+  }
+  return { gap: false, clarify: false }; // dev
+}
+
+function _syncModeBadge() {
+  const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
+  const badge = $('mode-badge');
+  if (!badge) return;
+  badge.style.display = 'inline-flex';
+  badge.textContent = `Mode: ${mode}`;
+}
+
+function _syncExploreToggleDefaultsFromMode() {
+  const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
+  const d = _modeDefaults(mode);
+  if ($('toggle-gap')) $('toggle-gap').checked = d.gap;
+  if ($('toggle-clarify')) $('toggle-clarify').checked = d.clarify;
+  _syncModeBadge();
+}
+
+function _exploreSettingsPayload() {
+  const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
+  const defaults = _modeDefaults(mode);
+  const gapEnabled = $('toggle-gap') ? $('toggle-gap').checked : defaults.gap;
+  const clarifyEnabled = $('toggle-clarify') ? $('toggle-clarify').checked : defaults.clarify;
+  return {
+    mode,
+    gap_resolution_enabled: !!gapEnabled,
+    clarification_questions_enabled: !!clarifyEnabled,
+  };
+}
 
 // ── DOM refs ─────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -982,12 +1037,28 @@ async function _maybeShowDownloadDoc() {
 
 let _explorePoller = null;
 
+_syncExploreToggleDefaultsFromMode();
+$('explore-mode').addEventListener('change', _syncExploreToggleDefaultsFromMode);
+
+$('cancel-explore-btn').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  try {
+    await fetch(`/api/jobs/${state.jobId}/explore-cancel`, { method: 'POST' });
+    $('discover-bar-msg').textContent = 'Cancellation requested — finalizing partial results…';
+  } catch (_e) {
+    $('discover-bar-msg').textContent = 'Cancel request failed. Try again.';
+  }
+});
+
 $('discover-btn').addEventListener('click', async () => {
   if (!state.jobId) return;
   const btn = $('discover-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Discovering…';
+  $('cancel-explore-btn').style.display = 'inline-flex';
+  $('last-run-time').style.display = 'none';
   $('discover-bar-msg').textContent = 'Starting exploration…';
+  _syncModeBadge();
 
   try {
     const checkedBoxes = [...document.querySelectorAll('#inv-list input[type=checkbox]:checked')];
@@ -997,7 +1068,10 @@ $('discover-btn').addEventListener('click', async () => {
     const res = await fetch(`/api/jobs/${state.jobId}/explore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invocables: selectedInvocables }),
+      body: JSON.stringify({
+        invocables: selectedInvocables,
+        explore_settings: _exploreSettingsPayload(),
+      }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
 
@@ -1010,21 +1084,34 @@ $('discover-btn').addEventListener('click', async () => {
         const phase = s.explore_phase;
         const progress = s.explore_progress ?? '';
         const msg = s.explore_message ?? '';
+        const runtime = s.explore_runtime || {};
+        if (runtime.mode) {
+          $('mode-badge').textContent = `Mode: ${runtime.mode}`;
+          $('mode-badge').style.display = 'inline-flex';
+        }
 
-        if (phase === 'exploring') {
+        if (phase === 'exploring' || phase === 'cancel_requested') {
           $('discover-bar-msg').textContent =
             `Exploring functions… (${progress})${msg ? ' — ' + msg : ''}`;
-        } else if (phase === 'done' || phase === 'awaiting_clarification') {
+        } else if (phase === 'done' || phase === 'awaiting_clarification' || phase === 'canceled') {
           clearInterval(_explorePoller);
           if (phase === 'awaiting_clarification') {
             $('discover-bar-msg').textContent =
               `✓ Discovery complete (${progress}) — clarification questions pending`;
+          } else if (phase === 'canceled') {
+            $('discover-bar-msg').textContent =
+              `⚠ Discovery canceled (${progress}) — partial data preserved`;
           } else {
             $('discover-bar-msg').textContent =
               `✓ Discovery complete (${progress} functions documented)`;
           }
+          if (s.explore_last_run_seconds != null) {
+            $('last-run-time').textContent = `Last run: ${Number(s.explore_last_run_seconds).toFixed(1)}s`;
+            $('last-run-time').style.display = 'inline';
+          }
           btn.disabled = false;
           btn.innerHTML = '🔍 Discover';
+          $('cancel-explore-btn').style.display = 'none';
           $('download-doc-btn').style.display = 'inline-flex';
           // Refresh schema preview
           try {
@@ -1052,6 +1139,7 @@ $('discover-btn').addEventListener('click', async () => {
           $('discover-bar-msg').textContent = `Discovery error: ${s.explore_error ?? 'unknown'}`;
           btn.disabled = false;
           btn.innerHTML = '🔍 Discover';
+          $('cancel-explore-btn').style.display = 'none';
         }
       } catch(_e) { /* poll failures are non-fatal */ }
     }, 3000);
@@ -1060,6 +1148,7 @@ $('discover-btn').addEventListener('click', async () => {
     $('discover-bar-msg').textContent = `Discovery failed: ${e.message}`;
     btn.disabled = false;
     btn.innerHTML = '🔍 Discover';
+    $('cancel-explore-btn').style.display = 'none';
   }
 });
 
@@ -1142,12 +1231,16 @@ $('submit-gap-answers-btn').addEventListener('click', async () => {
     const refineRes = await fetch(`/api/jobs/${state.jobId}/refine`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_functions: targetFns }),
+      body: JSON.stringify({
+        target_functions: targetFns,
+        explore_settings: _exploreSettingsPayload(),
+      }),
     });
     if (refineRes.ok) {
       $('gap-answers-msg').textContent = `✓ Answers saved — refining ${targetFns.length || 'all'} function(s)…`;
       $('discover-bar-msg').textContent = 'Refining with your answers…';
       $('discover-bar').style.display = 'flex';
+      $('cancel-explore-btn').style.display = 'inline-flex';
       // Reuse explore poller
       if (_explorePoller) clearInterval(_explorePoller);
       _explorePoller = setInterval(async () => {
@@ -1155,16 +1248,19 @@ $('submit-gap-answers-btn').addEventListener('click', async () => {
           const pr = await fetch(`/api/jobs/${state.jobId}`);
           if (!pr.ok) return;
           const s = await pr.json();
-          if (s.explore_phase === 'exploring') {
+          if (s.explore_phase === 'exploring' || s.explore_phase === 'cancel_requested') {
             $('discover-bar-msg').textContent = `Refining… (${s.explore_progress ?? ''}) — ${s.explore_message ?? ''}`;
-          } else if (s.explore_phase === 'done' || s.explore_phase === 'awaiting_clarification') {
+          } else if (s.explore_phase === 'done' || s.explore_phase === 'awaiting_clarification' || s.explore_phase === 'canceled') {
             clearInterval(_explorePoller);
             if (s.explore_phase === 'awaiting_clarification') {
               $('discover-bar-msg').textContent = `✓ Refinement complete — clarification questions pending`;
+            } else if (s.explore_phase === 'canceled') {
+              $('discover-bar-msg').textContent = `⚠ Refinement canceled — partial updates preserved`;
             } else {
               $('discover-bar-msg').textContent = `✓ Refinement complete — schema updated`;
             }
             $('submit-gap-answers-btn').disabled = false;
+            $('cancel-explore-btn').style.display = 'none';
             const newGaps = s.explore_questions || [];
             if (newGaps.length > 0) {
               $('gap-answers-msg').textContent = `✓ Done — ${newGaps.length} new question(s) need your input.`;
@@ -1215,13 +1311,19 @@ $('refine-btn').addEventListener('click', async () => {
     const res = await fetch(`/api/jobs/${state.jobId}/refine`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ corrections, missing, target_functions: targets }),
+      body: JSON.stringify({
+        corrections,
+        missing,
+        target_functions: targets,
+        explore_settings: _exploreSettingsPayload(),
+      }),
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
 
     $('refine-msg').textContent = 'Refinement started — watch the progress bar above.';
     // Re-use the same explore poller to watch progress
     $('discover-bar-msg').textContent = 'Refining…';
+    $('cancel-explore-btn').style.display = 'inline-flex';
     _explorePoller = setInterval(async () => {
       try {
         const pr = await fetch(`/api/jobs/${state.jobId}`);
@@ -1229,17 +1331,20 @@ $('refine-btn').addEventListener('click', async () => {
         const s = await pr.json();
         const phase = s.explore_phase;
         const progress = s.explore_progress ?? '';
-        if (phase === 'exploring') {
+        if (phase === 'exploring' || phase === 'cancel_requested') {
           $('discover-bar-msg').textContent = `Refining… (${progress}) — ${s.explore_message ?? ''}`;
-        } else if (phase === 'done' || phase === 'awaiting_clarification') {
+        } else if (phase === 'done' || phase === 'awaiting_clarification' || phase === 'canceled') {
           clearInterval(_explorePoller);
           if (phase === 'awaiting_clarification') {
             $('discover-bar-msg').textContent = `✓ Refinement complete (${progress}) — clarification questions pending`;
+          } else if (phase === 'canceled') {
+            $('discover-bar-msg').textContent = `⚠ Refinement canceled (${progress})`;
           } else {
             $('discover-bar-msg').textContent = `✓ Refinement complete (${progress})`;
           }
           btn.disabled = false;
           btn.textContent = '🔄 Run Refinement';
+          $('cancel-explore-btn').style.display = 'none';
           // Re-render updated gap questions
           const newGaps = s.explore_questions || [];
           if (newGaps.length > 0) {
@@ -1262,6 +1367,7 @@ $('refine-btn').addEventListener('click', async () => {
           $('discover-bar-msg').textContent = `Refinement error: ${s.explore_error ?? 'unknown'}`;
           btn.disabled = false;
           btn.textContent = '🔄 Run Refinement';
+          $('cancel-explore-btn').style.display = 'none';
         }
       } catch(_e) {}
     }, 3000);
@@ -1269,6 +1375,7 @@ $('refine-btn').addEventListener('click', async () => {
     $('refine-msg').textContent = `Refinement failed: ${e.message}`;
     btn.disabled = false;
     btn.textContent = '🔄 Run Refinement';
+    $('cancel-explore-btn').style.display = 'none';
   }
 });
 
@@ -1561,6 +1668,12 @@ async def proxy_refine(job_id: str, body: dict[str, Any]) -> JSONResponse:
 async def proxy_answer_gaps(job_id: str, body: dict[str, Any]) -> JSONResponse:
     """Proxy gap answers to the pipeline POST /api/jobs/{job_id}/answer-gaps."""
     return await _proxy_json(f"/api/jobs/{job_id}/answer-gaps", body)
+
+
+@app.post("/api/jobs/{job_id}/explore-cancel")
+async def proxy_explore_cancel(job_id: str) -> JSONResponse:
+    """Proxy cooperative cancellation for explore/refine to the pipeline."""
+    return await _proxy_json(f"/api/jobs/{job_id}/explore-cancel", {})
 
 
 @app.get("/api/jobs/{job_id}/session-snapshot")
