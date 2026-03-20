@@ -1014,10 +1014,15 @@ $('discover-btn').addEventListener('click', async () => {
         if (phase === 'exploring') {
           $('discover-bar-msg').textContent =
             `Exploring functions… (${progress})${msg ? ' — ' + msg : ''}`;
-        } else if (phase === 'done') {
+        } else if (phase === 'done' || phase === 'awaiting_clarification') {
           clearInterval(_explorePoller);
-          $('discover-bar-msg').textContent =
-            `✓ Discovery complete (${progress} functions documented)`;
+          if (phase === 'awaiting_clarification') {
+            $('discover-bar-msg').textContent =
+              `✓ Discovery complete (${progress}) — clarification questions pending`;
+          } else {
+            $('discover-bar-msg').textContent =
+              `✓ Discovery complete (${progress} functions documented)`;
+          }
           btn.disabled = false;
           btn.innerHTML = '🔍 Discover';
           $('download-doc-btn').style.display = 'inline-flex';
@@ -1152,9 +1157,13 @@ $('submit-gap-answers-btn').addEventListener('click', async () => {
           const s = await pr.json();
           if (s.explore_phase === 'exploring') {
             $('discover-bar-msg').textContent = `Refining… (${s.explore_progress ?? ''}) — ${s.explore_message ?? ''}`;
-          } else if (s.explore_phase === 'done') {
+          } else if (s.explore_phase === 'done' || s.explore_phase === 'awaiting_clarification') {
             clearInterval(_explorePoller);
-            $('discover-bar-msg').textContent = `✓ Refinement complete — schema updated`;
+            if (s.explore_phase === 'awaiting_clarification') {
+              $('discover-bar-msg').textContent = `✓ Refinement complete — clarification questions pending`;
+            } else {
+              $('discover-bar-msg').textContent = `✓ Refinement complete — schema updated`;
+            }
             $('submit-gap-answers-btn').disabled = false;
             const newGaps = s.explore_questions || [];
             if (newGaps.length > 0) {
@@ -1222,9 +1231,13 @@ $('refine-btn').addEventListener('click', async () => {
         const progress = s.explore_progress ?? '';
         if (phase === 'exploring') {
           $('discover-bar-msg').textContent = `Refining… (${progress}) — ${s.explore_message ?? ''}`;
-        } else if (phase === 'done') {
+        } else if (phase === 'done' || phase === 'awaiting_clarification') {
           clearInterval(_explorePoller);
-          $('discover-bar-msg').textContent = `✓ Refinement complete (${progress})`;
+          if (phase === 'awaiting_clarification') {
+            $('discover-bar-msg').textContent = `✓ Refinement complete (${progress}) — clarification questions pending`;
+          } else {
+            $('discover-bar-msg').textContent = `✓ Refinement complete (${progress})`;
+          }
           btn.disabled = false;
           btn.textContent = '🔄 Run Refinement';
           // Re-render updated gap questions

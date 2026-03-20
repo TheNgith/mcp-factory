@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 import secrets as _secrets
 import sys
 import tempfile
@@ -60,6 +61,10 @@ if not logger.handlers:
 # Serialize analyze-path requests so concurrent calls don't compete on the
 # bridge's cancel-and-replace logic (_active_kill_event / _active_target_stem).
 _analyze_path_lock = threading.Lock()
+
+_GAP_RESOLUTION_ENABLED = _os.getenv("EXPLORE_ENABLE_GAP_RESOLUTION", "1").strip().lower() not in {
+    "0", "false", "no", "off"
+}
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(title="MCP Factory API", version="1.0.0")
@@ -560,6 +565,16 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     if not answers:
         raise HTTPException(400, "No answers provided.")
 
+    if not _GAP_RESOLUTION_ENABLED:
+        return JSONResponse(
+            {
+                "job_id": job_id,
+                "status": "gap_resolution_disabled",
+                "message": "Gap resolution/mini-sessions are disabled by EXPLORE_ENABLE_GAP_RESOLUTION=0.",
+            },
+            status_code=202,
+        )
+
     # Merge into vocab.json
     vocab: dict = {}
     try:
@@ -585,13 +600,38 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     current = _get_job_status(job_id) or {}
     existing_hints = current.get("hints", "")
     new_parts = [existing_hints] if existing_hints else []
+    _answers_by_fn: dict[str, str] = {}
     for a in answers:
         fn = a.get("function") or "general"
         ans_text = (a.get("answer") or "").strip()
         if ans_text:
             new_parts.append(f"DOMAIN ANSWER ({fn}): {ans_text}")
+            _answers_by_fn[fn] = ans_text
     combined = " | ".join(new_parts)
-    _persist_job_status(job_id, {**current, "hints": combined, "updated_at": time.time()})
+
+    # Mark matching clarification questions as answered so phase closure can
+    # deterministically transition to done when applicable.
+    _updated_questions = []
+    for _q in (current.get("explore_questions") or []):
+        if not isinstance(_q, dict):
+            _updated_questions.append(_q)
+            continue
+        _fn = _q.get("function") or "general"
+        _ans = _answers_by_fn.get(_fn)
+        if _ans:
+            _updated_questions.append({**_q, "answered": True, "answer": _ans})
+        else:
+            _updated_questions.append(_q)
+
+    _persist_job_status(
+        job_id,
+        {
+            **current,
+            "hints": combined,
+            "explore_questions": _updated_questions,
+            "updated_at": time.time(),
+        },
+    )
 
     logger.info("[%s] answer-gaps: stored %d answers", job_id, len([a for a in answers if a.get("answer", "").strip()]))
 
@@ -778,6 +818,13 @@ async def session_snapshot(job_id: str):
         try:
             zf.writestr("gap_resolution_log.json",
                         _download_blob(ARTIFACT_CONTAINER, f"{job_id}/gap_resolution_log.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
+
+        # ── Final deterministic harmonization summary ───────────────────
+        try:
+            zf.writestr("harmonization_report.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/harmonization_report.json"))
         except Exception:
             pass  # not yet generated — silently omit
 

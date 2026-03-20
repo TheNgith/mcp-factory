@@ -932,6 +932,57 @@ Surface `verdict` and any misses in `SUMMARY.md` under a new "Static Analysis Ve
 | "MANDATORY ERROR RECORDING" prompt rule | _(none)_ | Stop after ≤10 probes, call `record_finding(status='error')`, critical violation if omitted | `api/explore_prompts.py` |
 
 The two-constraint system works as follows:
+
+---
+
+## Architecture Coherency Improvements (2026-03-20)
+
+> Root cause: the pipeline has 8+ LLM decision points, each seeing a frozen snapshot
+> of partial data. No stage sees what the others concluded. The code-level
+> reconciliation layer can only enforce one direction (downgrade success→error,
+> never upgrade error→success from probe evidence). Result: contradictory final
+> state (e.g. successful probe in log but finding says "error"), sentinel code
+> loss across runs, unanswered clarifications not gating "done."
+
+### AC-1 — Post-loop probe-log reconciliation (explore.py)
+**Problem:** If the LLM calls `record_finding(status='error')` but the probe log
+contains a `Returned: 0` for that same function, there is no code path to upgrade
+the finding. The ground-truth override only fires when `_observed_successes` is
+non-empty, and the force-save only fires when `_finding_recorded` is False.
+**Fix:** After all per-function exploration completes (after `_explore_one` loop,
+before synthesis), scan the full `explore_probe_log.json`. For every function
+with `status=error` where any probe entry has `classification.signed == 0`,
+override to `status=success` with the working call args from that probe.
+**Impact:** Directly eliminates the "successful probe but final error" class.
+
+### AC-2 — Sticky sentinel baseline (explore_phases.py)
+**Problem:** `_calibrate_sentinels` is a one-shot with no memory. If fewer
+functions return repeatable high-bit values in a given run (runtime variability),
+calibrated codes drop. Newer run lost 60% of codes (5→2).
+**Fix:** Before falling back to `_SENTINEL_DEFAULTS`, try loading
+`sentinel_calibration.json` from blob (prior session). Merge current-run
+candidates with prior-session calibrated codes. Only remove a prior code if
+the current run has explicit contradictory evidence (code observed as return=0).
+**Impact:** Sentinel knowledge persists across runs unless actively disproven.
+
+### AC-3 — Enrich synthesis LLM context (explore_prompts.py)
+**Problem:** `_synthesize()` only sees `findings` JSON. It cannot see vocab
+(cross-function patterns, error codes, hypotheses) or sentinel calibration.
+Synthesis LLM reasons with a keyhole view.
+**Fix:** Add `vocab` and `sentinels` parameters to `_synthesize()`. Include
+vocab summary and sentinel table in the user message alongside findings.
+**Impact:** Synthesis document is more accurate; backfill patches downstream
+inherit better semantics.
+
+### AC-4 — Clarification closure gate (explore.py)
+**Problem:** Pipeline marks `explore_phase: "done"` even when
+`explore_questions` contains unanswered entries. Callers assume "done" means
+complete, but unresolved clarifications affect status/unit semantics.
+**Fix:** After persisting `explore_questions`, check if any remain. If so,
+set `explore_phase: "awaiting_clarification"` instead of "done". Transition
+to "done" only when clarifications are answered or explicitly dismissed.
+**Impact:** External consumers can distinguish "complete" from "complete but
+has open questions."
 - **Rounds** = number of LLM turns per function (5). Limits conversational back-and-forth.
 - **Tool calls** = number of actual DLL probe calls per function (15). Hard cap enforced inside the round loop; breaks immediately when hit. Guarantees budget sharing across all functions regardless of LLM batching behavior.
 
@@ -1137,3 +1188,132 @@ MVP passes when:
 1. Refreshing UI restores schema/findings/vocab/questions for >=95% of sessions.
 2. Users can resume and continue from previous stage without rerunning discovery.
 3. Manifest/version trail supports clear stage-to-stage diff and rollback.
+
+---
+
+## Black-Box DLL MVP Additions (1995-2015 Windows)
+
+### Goal
+
+Close the remaining gaps between the current reverse-engineering pipeline and a sellable product that can generate a 1:1 validated integration surface for undocumented legacy DLLs.
+
+### Deliverable definition
+
+The MVP customer deliverable is three artifacts:
+
+1. **Enriched schema JSON** with verified/inferred/unprobeable coverage labels
+2. **Generated Python wrapper** (`client.py`) exposing the DLL through a modern typed interface
+3. **Backwards-compatibility validation report** comparing direct ctypes calls versus wrapper calls on known-working inputs
+
+### Capability gaps to add
+
+#### 1. Runtime coverage expansion (P1)
+
+Required to support real legacy DLL call shapes beyond simple scalar params.
+
+Add:
+
+1. Output buffer support as first-class schema + executor behavior
+2. Struct and nested-struct input support
+3. Pointer ownership/allocation rules
+4. Calling convention validation (`cdecl` vs `stdcall`)
+5. ANSI/Unicode string path handling
+6. 32-bit / 64-bit compatibility execution strategy
+7. Handle/token lifecycle tracking (`returns_handle`, `consumes_handle`)
+
+#### 2. Stateful workflow execution (P1)
+
+Required for black-box business DLLs where correctness depends on call order.
+
+Add:
+
+1. Durable init/session state model
+2. Function dependency graph (`depends_on`, `requires_init`, `requires_active_state`)
+3. Open/use/close lifecycle enforcement
+4. Stronger write-policy coverage beyond current contoso-only heuristics
+5. Multi-DLL orchestration for producer/consumer dependency chains
+
+#### 3. Hard-function discovery honesty (P1)
+
+The product must distinguish verified behavior from unsupported surfaces.
+
+Add:
+
+1. Boundary probing for numeric parameters
+2. Multi-record probing for per-entity variance
+3. Safer write-path testing under policy
+4. Explicit labels:
+  - `verified`
+  - `inferred`
+  - `unprobeable_current_executor`
+  - `unsupported_current_runtime`
+5. Coverage report generated directly from findings + schema checkpoints
+
+#### 4. Wrapper generation + validation (P1)
+
+This is the commercial core of the MVP.
+
+Add:
+
+1. Python wrapper generator from enriched schema
+2. Direct ctypes vs wrapper comparison harness
+3. Function-by-function validation report with exact input/result match status
+4. Example usage generation based on known-working calls
+
+Release gate:
+
+1. No function may be marked `verified_1to1` unless direct and wrapper outputs match on stored working inputs.
+
+#### 5. Persistence + resume (P1)
+
+Required so the system behaves like a product instead of a stateless demo.
+
+Add:
+
+1. Blob-backed session manifest and artifact version pointers
+2. UI rehydration endpoint (`GET /api/jobs/{id}/state`)
+3. Resume-from-prior-session workflow
+4. Session history by component/project
+5. Schema/version diff view in UI
+
+#### 6. Production learning mode (P2)
+
+Required so integrations improve through real usage instead of repeated full rediscovery.
+
+Add:
+
+1. Redacted wrapper usage telemetry
+2. Return-code frequency and drift tracking
+3. Controlled rule promotion pipeline
+4. Human review queue for medium-confidence schema/vocab proposals
+5. Safe rollback when learned rules are wrong
+
+### Product quality bar
+
+For a black-box DLL MVP, the system must be able to say, per function:
+
+1. what was proven,
+2. what was inferred,
+3. what could not be tested yet,
+4. what wrapper behavior is verified 1:1,
+5. what prerequisite state/dependency is required.
+
+### Priority order
+
+1. Wrapper generator
+2. Backwards-compatibility validator
+3. Output buffer / pointer support
+4. Persistence + UI rehydration
+5. Coverage reporting (`verified` / `inferred` / `unprobeable`)
+6. Multi-DLL dependency handling
+7. Production learning mode
+
+### Exit criteria for MVP
+
+The black-box DLL MVP is ready when it can:
+
+1. Discover and enrich a target DLL into a reusable schema
+2. Generate a Python wrapper from that schema
+3. Validate a meaningful subset of functions 1:1 against direct DLL behavior
+4. Persist and resume the session state without rerunning discovery
+5. Present honest coverage labels for the remaining unsupported or inferred surfaces

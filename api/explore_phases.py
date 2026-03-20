@@ -24,6 +24,8 @@ logger = logging.getLogger("mcp_factory.api")
 #   EXPLORE_MAX_TOOL_CALLS → hard cap on DLL probe calls per function (prevents one function
 #                             from starving the others; every function is guaranteed exploration)
 #   EXPLORE_MAX_FUNCTIONS=10 → cap number of functions probed
+#   EXPLORE_ENABLE_GAP_RESOLUTION=0|1 → controls expensive post-discovery gap retries
+#                                       and answer-gaps mini-sessions (wired in explore.py)
 _CAP_PROFILES = {
     "dev": {"rounds": 3, "tool_calls": 5},
     "stabilize": {"rounds": 4, "tool_calls": 8},
@@ -40,6 +42,9 @@ _MAX_TOOL_CALLS_PER_FUNCTION = int(
     _os.getenv("EXPLORE_MAX_TOOL_CALLS", str(_CAP_PROFILES[_CAP_PROFILE]["tool_calls"]))
 )
 _MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
+_ENABLE_STICKY_SENTINEL_BASELINE = _os.getenv(
+    "EXPLORE_ENABLE_STICKY_SENTINEL_BASELINE", "0"
+).strip().lower() not in {"0", "false", "no", "off"}
 
 _SENTINEL_DEFAULTS = SENTINEL_DEFAULTS
 
@@ -91,8 +96,33 @@ def _calibrate_sentinels(
         _strong_det = bool(_m and "-like" not in _m)
         if counts[v] >= 2 or _strong_det:
             candidates[v] = fns
+
+    # Sticky sentinel baseline (deferred by default): can be enabled for
+    # development diagnostics, but stays disabled until component-scoped
+    # storage behavior is fully validated.
+    _prior_sentinels: dict[int, str] = {}
+    if _ENABLE_STICKY_SENTINEL_BASELINE and job_id:
+        try:
+            from api.storage import _download_blob as _dl_blob
+            from api.config import ARTIFACT_CONTAINER as _AC
+            _prior_raw = json.loads(_dl_blob(_AC, f"{job_id}/sentinel_calibration.json"))
+            for _hk, _mv in _prior_raw.items():
+                try:
+                    _prior_sentinels[int(_hk, 16)] = str(_mv)
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass  # no prior calibration — normal on first run
+
+    if _prior_sentinels:
+        # Values that returned 0 (success) in this run contradict sentinel role.
+        _success_values = {v for v, c in counts.items() if v == 0} | {0}
+        for _pv, _pm in _prior_sentinels.items():
+            if _pv not in candidates and _pv not in _success_values and _pv >= 0x80000000:
+                candidates[_pv] = [f"(prior-session: {_pm})"]
+
     if not candidates:
-        return _SENTINEL_DEFAULTS
+        return _prior_sentinels or _SENTINEL_DEFAULTS
 
     resolved: dict[int, str] = {}
     unresolved: dict[int, list[str]] = {}

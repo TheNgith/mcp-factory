@@ -63,6 +63,7 @@ YYYY-MM-DD-{commit}-{note}/
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ SUMMARY.md                   Ã¢â€ Â AI quick-scan: commit, findings counts, working calls, gap questions
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ code-changes.md              Ã¢â€ Â full git log + git diff of api/ ui/ scripts/ at snapshot time
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ session-meta.json            Ã¢â€ Â job_id, component, commit, finding/gap counts, timestamps
+Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ harmonization_report.json    Ã¢â€ Â final deterministic reconciliation (errorâ†’success patches, open clarification count)
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ hints.txt                    Ã¢â€ Â verbatim hints + use_cases you provided
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ clarification-questions.md   Ã¢â€ Â gap questions, technical detail, and submitted answers
 Ã¢â€Å“Ã¢â€â‚¬Ã¢â€â‚¬ chat-transcript.md           Ã¢â€ Â fill this in after testing (auto-created as template)
@@ -227,4 +228,8 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-19 | `d564334` | `206a77f8` | contoso-baseline | contoso_cs - (fill in after testing) |
 | 2026-03-19 | `d564334` | `206a77f8` | contoso-baseline | contoso_cs - (fill in after testing) |
 | 2026-03-19 | `32ccf0e` | `cfd26cf5` | manual-insert | contoso_cs - (fill in after testing) |
+| 2026-03-19 | `909f07e` | `cfd26cf5` | s1s2-smoke | contoso_cs - (fill in after testing) |
+| 2026-03-19 | `909f07e` | `cfd26cf5` | schema-checkpoint-smoke | contoso_cs - (fill in after testing) |
+| 2026-03-19 | `909f07e` | `44fb7051` | s1s2-discovery-only | contoso_cs - (fill in after testing) |
+| 2026-03-20 | `8211c70` | `1259f0e5` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 

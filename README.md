@@ -200,6 +200,24 @@ py -3 scripts/demo_all_capabilities.py
 
 ## Quick Start
 
+## Discovery Reconciliation Notes
+
+- The exploration pipeline now runs a deterministic, non-LLM harmonization pass
+  before writing final phase status. This pass reconciles probe evidence,
+  findings, and clarification state into a single coherent final view and writes
+  `harmonization_report.json` as an artifact.
+- Clarification-aware terminal states are used:
+  - `done` = no unanswered clarification questions remain
+  - `awaiting_clarification` = one or more clarification questions still open
+
+### Deferred Feature: Sticky Sentinel Baseline (AC-2)
+
+- Sticky sentinel baseline is intentionally disabled for now to avoid accidental
+  coupling to job-scoped blob paths.
+- Runtime switch: `EXPLORE_ENABLE_STICKY_SENTINEL_BASELINE` (default `0`).
+- Use case (future): preserve calibrated sentinel maps across runs for the same
+  component and only evict codes when contradiction evidence is collected.
+
 ### 1. Capabilities Demo ⚡ (The "It Works" Demo)
 
 **What you'll see:**

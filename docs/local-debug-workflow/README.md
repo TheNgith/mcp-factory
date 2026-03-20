@@ -159,6 +159,33 @@ Open `http://localhost:8080` and upload the DLL.
 
 ---
 
+## Explore Runtime Switches
+
+Use these environment variables to trade speed vs depth during discovery:
+
+```powershell
+$env:EXPLORE_CAP_PROFILE = "dev"   # dev | stabilize | deploy
+$env:EXPLORE_ENABLE_GAP_RESOLUTION = "0"   # 0 for fast iteration, 1 for full refinement
+$env:EXPLORE_ENABLE_STICKY_SENTINEL_BASELINE = "0"   # deferred; keep 0 unless explicitly testing baseline carry-forward
+```
+
+Optional hard overrides:
+
+```powershell
+$env:EXPLORE_MAX_ROUNDS = "3"
+$env:EXPLORE_MAX_TOOL_CALLS = "5"
+$env:EXPLORE_MAX_FUNCTIONS = "50"
+```
+
+Behavior notes:
+- `EXPLORE_ENABLE_GAP_RESOLUTION=0` skips the post-discovery gap resolution pass.
+- `EXPLORE_ENABLE_GAP_RESOLUTION=0` also disables `/api/jobs/{job_id}/answer-gaps` mini-sessions.
+- `EXPLORE_ENABLE_STICKY_SENTINEL_BASELINE=0` keeps sticky baseline disabled (current default).
+- Sticky baseline remains a deferred feature until component-scoped baseline storage is wired.
+- Keep gap resolution enabled for release-quality validation runs.
+
+---
+
 ## Known Issues & Fixes
 
 ### `dll_path` mismatch

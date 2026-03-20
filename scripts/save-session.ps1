@@ -665,6 +665,31 @@ if (Test-Path $gapResPath) {
     } catch { Write-Host "  gap_resolution_log.json skipped" -ForegroundColor DarkYellow }
 }
 
+# ── 12.96. harmonization_report.json (final non-LLM reconciliation) ─────────
+$harmPath    = Join-Path $sessionDir "harmonization_report.json"
+$harmSummary = $null
+if (Test-Path $harmPath) {
+    try {
+        $hr = Get-Content $harmPath -Raw | ConvertFrom-Json
+        $up = @($hr.patched_error_to_success).Count
+        $harmSummary = [PSCustomObject]@{
+            final_phase_suggestion = $hr.final_phase_suggestion
+            patched_count          = $up
+            open_questions         = [int]$hr.open_questions
+            unanswered_questions   = [int]$hr.unanswered_questions
+            counts                 = $hr.counts
+        }
+        $hColor = if ($up -gt 0 -or [int]$hr.unanswered_questions -gt 0) { "Yellow" } else { "Green" }
+        Write-Host (
+            "  harmonization_report.json: phase=" + $hr.final_phase_suggestion +
+            " patched=" + $up +
+            " unanswered=" + [int]$hr.unanswered_questions
+        ) -ForegroundColor $hColor
+    } catch {
+        Write-Host "  harmonization_report.json skipped" -ForegroundColor DarkYellow
+    }
+}
+
 # ── 12.97. Consolidated S1/S2 diagnostics artifact ─────────────────────────
 try {
     $s1s2 = [PSCustomObject]@{
@@ -676,6 +701,7 @@ try {
         sentinel_catalog     = $sentCatalogSummary
         executor_trace       = $execTraceSummary
         gap_resolution       = $gapResSummary
+        harmonization        = $harmSummary
         diagnosis            = $diagOut
     }
     $s1s2 | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $sessionDir "s1_s2_diagnostics.json") -Encoding UTF8
@@ -881,6 +907,7 @@ $entry = [PSCustomObject]@{
     param_desc_quality      = $paramDescQuality
     sentinel_calibration    = $sentCalibSummary
     gap_resolution          = $gapResSummary
+    harmonization           = $harmSummary
     function_status         = if ($functionStatus.Count -gt 0) { [PSCustomObject]$functionStatus } else { $null }
     saved_at                = (Get-Date -Format "o")
 }

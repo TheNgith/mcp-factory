@@ -37,232 +37,21 @@ from api.explore_vocab import (
 from api.explore_prompts import (
     _build_explore_system_message, _generate_behavioral_spec, _synthesize, _generate_confidence_gaps,
 )
-from api.sentinel_codes import classify_common_result_code
+from api.explore_helpers import (
+    _GAP_RESOLUTION_ENABLED,
+    _WRITE_FN_RE,
+    _WRITE_RETRY_BUDGET_BY_CLASS,
+    _build_tool_schemas,
+    _classify_result_text,
+    _sentinel_class_from_classification,
+    _set_explore_status,
+    _snapshot_schema_stage,
+    _write_policy_precheck,
+)
+from api.explore_gap import _attempt_gap_resolution, _run_gap_answer_mini_sessions
 
 logger = logging.getLogger("mcp_factory.api")
 
-_WRITE_FN_RE = _re.compile(r"(pay|refund|redeem|unlock|process|write|commit|transfer|debit|credit)", _re.I)
-
-_WRITE_POLICY_RULES: dict[str, dict] = {
-    "CS_ProcessPayment": {
-        "required_any": ["customer_id", "order_id", "account_id", "param_1"],
-        "amount_keys": ["amount_cents", "amount", "param_2", "param_3"],
-    },
-    "CS_ProcessRefund": {
-        "required_any": ["customer_id", "order_id", "account_id", "param_1"],
-        "amount_keys": ["amount_cents", "amount", "param_2", "param_3"],
-    },
-    "CS_RedeemLoyaltyPoints": {
-        "required_any": ["customer_id", "account_id", "param_1"],
-        "amount_keys": ["points", "amount", "param_2"],
-    },
-    "CS_UnlockAccount": {
-        "required_any": ["customer_id", "account_id", "param_1"],
-        "amount_keys": [],
-    },
-}
-
-_WRITE_RETRY_BUDGET_BY_CLASS: dict[str, int] = {
-    "write_denied": 2,
-    "not_initialized": 2,
-    "account_locked": 1,
-    "invalid_input": 2,
-    "unknown": 1,
-}
-
-
-def _parse_id_format_pattern(pattern: str) -> str:
-    out = []
-    for ch in str(pattern):
-        if ch == "N":
-            out.append(r"\d")
-        elif ch == "A":
-            out.append(r"[A-Z]")
-        elif ch == "X":
-            out.append(r"[A-Z0-9]")
-        elif ch == "*":
-            out.append(r"[A-Z0-9_-]+")
-        elif ch in "-_":
-            out.append(_re.escape(ch))
-        else:
-            out.append(_re.escape(ch))
-    return "^" + "".join(out) + "$"
-
-
-def _classify_result_text(result_text: str) -> dict:
-    m = _re.search(r"Returned:\s*(-?\d+)", result_text or "")
-    if not m:
-        return {
-            "has_return": False,
-            "format_guess": "no_return_detected",
-            "confidence": 0.0,
-            "source": "none",
-        }
-    signed = int(m.group(1))
-    unsigned = signed & 0xFFFFFFFF
-    meaning = classify_common_result_code(unsigned)
-
-    if signed == 0:
-        fmt = "bool_style_success"
-        conf = 1.0
-        src = "deterministic.zero"
-    elif meaning:
-        if meaning.startswith("HRESULT") or meaning.startswith("HRESULT_FROM_WIN32"):
-            fmt = "hresult_like"
-            conf = 0.98
-            src = "deterministic.common_hresult"
-        elif meaning.startswith("NTSTATUS"):
-            fmt = "ntstatus_like"
-            conf = 0.98
-            src = "deterministic.common_ntstatus"
-        elif meaning.startswith("Win32"):
-            fmt = "win32_error"
-            conf = 0.95
-            src = "deterministic.common_win32"
-        elif "-like" in meaning:
-            fmt = "high_bit_failure_family"
-            conf = 0.75
-            src = "heuristic.high_bit_family"
-        else:
-            fmt = "custom_signed_negative"
-            conf = 0.9
-            src = "deterministic.default_sentinel"
-    elif signed < 0:
-        fmt = "custom_signed_negative"
-        conf = 0.7
-        src = "heuristic.signed_negative"
-    elif unsigned >= 0x80000000:
-        fmt = "high_bit_unknown"
-        conf = 0.45
-        src = "heuristic.high_bit"
-    elif signed > 0:
-        fmt = "custom_positive_status_or_data"
-        conf = 0.65
-        src = "heuristic.custom_positive"
-    else:
-        fmt = "domain_or_non_sentinel"
-        conf = 0.3
-        src = "heuristic.low_value"
-
-    return {
-        "has_return": True,
-        "signed": signed,
-        "unsigned": unsigned,
-        "hex": f"0x{unsigned:08X}",
-        "format_guess": fmt,
-        "confidence": conf,
-        "source": src,
-        "meaning": meaning,
-    }
-
-
-def _sentinel_class_from_classification(classification: dict) -> str:
-    meaning = (classification.get("meaning") or "").lower()
-    if "write" in meaning and "denied" in meaning:
-        return "write_denied"
-    if "not initialized" in meaning:
-        return "not_initialized"
-    if "locked" in meaning:
-        return "account_locked"
-    if "invalid" in meaning or "not found" in meaning or "null" in meaning:
-        return "invalid_input"
-    return "unknown"
-
-
-def _write_policy_precheck(
-    fn_name: str,
-    args: dict,
-    vocab: dict,
-    unlock_result: dict | None,
-) -> tuple[bool, str | None, str | None]:
-    if not _WRITE_FN_RE.search(fn_name):
-        return True, None, None
-
-    if unlock_result is not None and not unlock_result.get("unlocked"):
-        return False, "dependency_missing", "write path requires initialization/unlock sequence"
-
-    rule = _WRITE_POLICY_RULES.get(fn_name, {})
-    required_any = rule.get("required_any", [])
-    if required_any and not any(k in args and str(args.get(k, "")).strip() for k in required_any):
-        return False, "schema_missing", "missing required ID/account argument for write function"
-
-    amount_keys = set(rule.get("amount_keys", []))
-    if not amount_keys:
-        amount_keys = {k for k in args if _re.search(r"amount|points|cents|value", k, _re.I)}
-    for k in amount_keys:
-        if k not in args:
-            continue
-        try:
-            v = int(args[k])
-        except (ValueError, TypeError):
-            return False, "schema_missing", f"{k} must be numeric"
-        if v <= 0 or v > 1_000_000_000:
-            return False, "policy_exhausted", f"{k}={v} outside bounded write-policy range"
-
-    id_patterns = [str(x) for x in (vocab.get("id_formats") or []) if x]
-    id_like_args = {
-        k: str(v) for k, v in args.items()
-        if v is not None and _re.search(r"id|account|order|customer", k, _re.I)
-    }
-    if id_patterns and id_like_args:
-        compiled = []
-        for p in id_patterns:
-            try:
-                compiled.append(_re.compile(_parse_id_format_pattern(p), _re.I))
-            except Exception:
-                continue
-        if compiled:
-            for k, v in id_like_args.items():
-                if not any(rx.match(v) for rx in compiled):
-                    return False, "policy_exhausted", f"{k}='{v}' failed ID format normalization"
-
-    return True, None, None
-
-
-def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
-    """Build OpenAI tool call schemas from a list of invocable dicts."""
-    from api.chat import _RECORD_FINDING_TOOL, _ENRICH_INVOCABLE_TOOL  # type: ignore
-    tool_schemas: list[dict] = []
-    for inv in invocables:
-        props: dict = {}
-        required: list = []
-        for p in (inv.get("parameters") or []):
-            if isinstance(p, str):
-                p = {"name": p, "type": "string"}
-            pname = p.get("name", "arg")
-            json_type = p.get("json_type") or "string"
-            props[pname] = {
-                "type": json_type,
-                "description": p.get("description") or p.get("type", "string"),
-            }
-            if p.get("direction", "in") != "out":
-                required.append(pname)
-        safe_name = _re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
-        desc = inv.get("doc") or inv.get("description") or inv.get("signature") or inv["name"]
-        tool_schemas.append({
-            "type": "function",
-            "function": {
-                "name": safe_name,
-                "description": desc,
-                "parameters": {
-                    "type": "object",
-                    "properties": props,
-                    "required": required,
-                },
-            },
-        })
-    tool_schemas.append(_RECORD_FINDING_TOOL)
-    tool_schemas.append(_ENRICH_INVOCABLE_TOOL)
-    return tool_schemas
-
-
-def _snapshot_schema_stage(job_id: str, stage_blob_name: str) -> None:
-    """Copy current mcp_schema.json to a stage-specific blob for diffing."""
-    try:
-        _raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/mcp_schema.json")
-        _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/{stage_blob_name}", _raw)
-    except Exception as _se:
-        logger.debug("[%s] schema snapshot failed (%s): %s", job_id, stage_blob_name, _se)
 
 
 def _explore_worker(job_id: str, invocables: list[dict]) -> None:
@@ -1050,6 +839,64 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             for inv in invocables:
                 _explore_one(inv)
 
+        # ── AC-1: Post-loop probe-log reconciliation ─────────────────────
+        # Scan the full probe log for functions marked error that actually had
+        # a successful probe (return=0).  Override those to success so the
+        # findings reflect ground-truth before synthesis sees them.
+        try:
+            _set_explore_status(job_id, explored, total, "Reconciling probe evidence…")
+            _recon_findings = _load_findings(job_id)
+            _recon_probe_log: list[dict] = []
+            try:
+                _recon_probe_raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/explore_probe_log.json")
+                _recon_probe_log = json.loads(_recon_probe_raw)
+            except Exception:
+                pass
+
+            if _recon_probe_log:
+                # Build map: function -> direct self-call probes where return was 0.
+                # This prevents false upgrades from prerequisite calls such as CS_Initialize.
+                _success_probes: dict[str, list[dict]] = defaultdict(list)
+                for _pe in _recon_probe_log:
+                    _clf = _pe.get("classification") or {}
+                    _fn = _pe.get("function") or ""
+                    _tool = _pe.get("tool") or ""
+                    _phase = str(_pe.get("phase") or "")
+                    if not (_fn and _tool and _fn == _tool):
+                        continue
+                    if _phase not in {"explore", "cross_validate"}:
+                        continue
+                    if _clf.get("has_return") and int(_clf.get("signed", -1)) == 0:
+                        _success_probes[_fn].append(_pe)
+
+                _recon_patched = 0
+                for _f in _recon_findings:
+                    _fn = _f.get("function", "")
+                    if _f.get("status") == "error" and _fn in _success_probes:
+                        _best_pe = max(
+                            _success_probes[_fn],
+                            key=lambda _p: len(_p.get("args") or {}),
+                        )
+                        _wc = _best_pe.get("args") or {}
+                        _patch_finding(job_id, _fn, {
+                            "status": "success",
+                            "working_call": _wc,
+                            "stop_reason": "reconciled_from_probe_log",
+                            "notes": (
+                                f"AC-1 reconciliation: probe "
+                                f"{_best_pe.get('probe_id', '?')} returned 0 "
+                                f"but finding was error. Overridden to success."
+                            ),
+                        })
+                        _recon_patched += 1
+                if _recon_patched:
+                    logger.info(
+                        "[%s] explore_worker: AC-1 reconciliation patched %d functions from error→success",
+                        job_id, _recon_patched,
+                    )
+        except Exception as _recon_e:
+            logger.debug("[%s] explore_worker: AC-1 reconciliation failed: %s", job_id, _recon_e)
+
         # Persist S1 sentinel evidence catalog for save-session diagnostics.
         try:
             _promoted = 0
@@ -1095,7 +942,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 logger.info("[%s] explore_worker: synthesizing API reference (%d fns)…",
                             job_id, len(_syn_findings))
                 _set_explore_status(job_id, explored, total, "Synthesizing API reference…")
-                _report = _synthesize(client, model, _syn_findings)
+                _report = _synthesize(client, model, _syn_findings, vocab=vocab, sentinels=sentinels)
                 if _report:
                     _upload_to_blob(
                         ARTIFACT_CONTAINER,
@@ -1119,44 +966,53 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     _snapshot_schema_stage(job_id, "mcp_schema_post_discovery.json")
                     _snapshot_schema_stage(job_id, "mcp_schema_pre_gap_resolution.json")
 
-                    # Gap resolution pass: attempt one more focused round on functions
-                    # that failed every probe in the main loop, using known-good IDs
-                    # and explicit retry strategies.  Resolved functions won't appear
-                    # in the gap questions that reach the user.
-                    try:
-                        logger.info("[%s] explore_worker: gap resolution pass…", job_id)
-                        _set_explore_status(job_id, explored, total, "Retrying failed functions…")
-                        _attempt_gap_resolution(
-                            job_id, invocables, client, model,
-                            sentinels, vocab, _use_cases_text,
-                            inv_map, tool_schemas,
-                        )
-                    except Exception as _gr_e:
-                        logger.debug("[%s] explore_worker: gap resolution failed: %s", job_id, _gr_e)
+                    if _GAP_RESOLUTION_ENABLED:
+                        # Gap resolution pass: attempt one more focused round on functions
+                        # that failed every probe in the main loop, using known-good IDs
+                        # and explicit retry strategies.  Resolved functions won't appear
+                        # in the gap questions that reach the user.
+                        try:
+                            logger.info("[%s] explore_worker: gap resolution pass…", job_id)
+                            _set_explore_status(job_id, explored, total, "Retrying failed functions…")
+                            _attempt_gap_resolution(
+                                job_id, invocables, client, model,
+                                sentinels, vocab, _use_cases_text,
+                                inv_map, tool_schemas,
+                            )
+                        except Exception as _gr_e:
+                            logger.debug("[%s] explore_worker: gap resolution failed: %s", job_id, _gr_e)
 
-                    _snapshot_schema_stage(job_id, "mcp_schema_post_gap_resolution.json")
-                    _snapshot_schema_stage(job_id, "mcp_schema_pre_clarification.json")
+                        _snapshot_schema_stage(job_id, "mcp_schema_post_gap_resolution.json")
+                        _snapshot_schema_stage(job_id, "mcp_schema_pre_clarification.json")
 
-                    # Self-assessment: generate confidence gap questions for the user.
-                    # Runs AFTER gap resolution, so only genuinely unresolvable unknowns
-                    # (undocumented error codes, business rules) surface to the user.
-                    try:
-                        logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
-                        _set_explore_status(job_id, explored, total, "Generating clarification questions…")
-                        _gaps = _generate_confidence_gaps(client, model, _syn_findings, invocables)
-                        if _gaps:
-                            logger.info("[%s] explore_worker: %d confidence gaps generated", job_id, len(_gaps))
-                        # Always persist (even empty list) so UI knows the pass ran
+                        # Self-assessment: generate confidence gap questions for the user.
+                        # Runs AFTER gap resolution, so only genuinely unresolvable unknowns
+                        # (undocumented error codes, business rules) surface to the user.
+                        try:
+                            logger.info("[%s] explore_worker: generating confidence gaps…", job_id)
+                            _set_explore_status(job_id, explored, total, "Generating clarification questions…")
+                            _gaps = _generate_confidence_gaps(client, model, _syn_findings, invocables)
+                            if _gaps:
+                                logger.info("[%s] explore_worker: %d confidence gaps generated", job_id, len(_gaps))
+                            # Always persist (even empty list) so UI knows the pass ran
+                            _gap_current = _get_job_status(job_id) or {}
+                            _persist_job_status(
+                                job_id,
+                                {**_gap_current, "explore_questions": _gaps},
+                                sync=True,
+                            )
+                        except Exception as _gap_e:
+                            logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
+
+                        _snapshot_schema_stage(job_id, "mcp_schema_post_clarification.json")
+                    else:
+                        logger.info("[%s] explore_worker: gap resolution disabled by EXPLORE_ENABLE_GAP_RESOLUTION=0", job_id)
                         _gap_current = _get_job_status(job_id) or {}
                         _persist_job_status(
                             job_id,
-                            {**_gap_current, "explore_questions": _gaps},
+                            {**_gap_current, "explore_questions": []},
                             sync=True,
                         )
-                    except Exception as _gap_e:
-                        logger.debug("[%s] explore_worker: confidence gaps failed: %s", job_id, _gap_e)
-
-                    _snapshot_schema_stage(job_id, "mcp_schema_post_clarification.json")
 
                     # Behavioral spec: typed Python stub file capturing the API contract.
                     try:
@@ -1221,20 +1077,118 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             except Exception as _vfin_e:
                 logger.debug("[%s] explore_worker: final vocab persist failed: %s", job_id, _vfin_e)
 
-        # Mark exploration done — update job status back to previous terminal state
-        # or set a new "explore_done" sub-status so the UI knows it finished.
+        # Final deterministic harmonization pass (non-LLM): enforce a single
+        # coherent state from probe evidence + findings + clarification status.
+        try:
+            _set_explore_status(job_id, explored, total, "Finalizing harmonized state…")
+            _hm_findings = _load_findings(job_id)
+            _hm_probe_log: list[dict] = []
+            try:
+                _hm_raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/explore_probe_log.json")
+                _hm_probe_log = json.loads(_hm_raw)
+            except Exception:
+                pass
+
+            _direct_successes: dict[str, list[dict]] = defaultdict(list)
+            for _pe in _hm_probe_log:
+                _fn = _pe.get("function") or ""
+                _tool = _pe.get("tool") or ""
+                _phase = str(_pe.get("phase") or "")
+                _clf = _pe.get("classification") or {}
+                if not (_fn and _tool and _fn == _tool):
+                    continue
+                if _phase not in {"explore", "cross_validate"}:
+                    continue
+                if _clf.get("has_return") and int(_clf.get("signed", -1)) == 0:
+                    _direct_successes[_fn].append(_pe)
+
+            _upgrades: list[dict] = []
+            for _f in _hm_findings:
+                _fn = _f.get("function") or ""
+                if _f.get("status") == "error" and _fn in _direct_successes:
+                    _best = max(
+                        _direct_successes[_fn],
+                        key=lambda _p: len(_p.get("args") or {}),
+                    )
+                    _patch_finding(
+                        job_id,
+                        _fn,
+                        {
+                            "status": "success",
+                            "working_call": _best.get("args") or {},
+                            "stop_reason": "harmonized_direct_probe_success",
+                            "notes": (
+                                f"Final harmonization: direct probe {_best.get('probe_id', '?')} "
+                                "returned 0; status forced to success."
+                            ),
+                        },
+                    )
+                    _upgrades.append({
+                        "function": _fn,
+                        "probe_id": _best.get("probe_id"),
+                        "args": _best.get("args") or {},
+                    })
+
+            _post_hm_findings = _load_findings(job_id)
+            _status_counts = {
+                "success": sum(1 for _f in _post_hm_findings if _f.get("status") == "success"),
+                "error": sum(1 for _f in _post_hm_findings if _f.get("status") == "error"),
+                "other": sum(1 for _f in _post_hm_findings if _f.get("status") not in {"success", "error"}),
+            }
+
+            _cur = _get_job_status(job_id) or {}
+            _open_questions = _cur.get("explore_questions") or []
+            _unanswered_questions = []
+            for _q in _open_questions:
+                if not isinstance(_q, dict):
+                    continue
+                _answered = bool(_q.get("answered")) or bool(str(_q.get("answer") or "").strip())
+                if not _answered:
+                    _unanswered_questions.append(_q)
+
+            _harmonization = {
+                "job_id": job_id,
+                "final_phase_suggestion": "awaiting_clarification" if _unanswered_questions else "done",
+                "patched_error_to_success": _upgrades,
+                "counts": _status_counts,
+                "open_questions": len(_open_questions),
+                "unanswered_questions": len(_unanswered_questions),
+            }
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{job_id}/harmonization_report.json",
+                json.dumps(_harmonization, indent=2).encode(),
+            )
+            logger.info(
+                "[%s] explore_worker: harmonization complete (%d upgrades, %d unanswered)",
+                job_id, len(_upgrades), len(_unanswered_questions),
+            )
+        except Exception as _hm_e:
+            logger.debug("[%s] explore_worker: harmonization failed: %s", job_id, _hm_e)
+
+        # ── AC-4: Clarification closure gate ────────────────────────────
+        # If there are unanswered clarification questions, mark the phase as
+        # "awaiting_clarification" instead of "done".  External consumers can
+        # then distinguish "complete" from "complete with open questions."
         current = _get_job_status(job_id) or {}
+        _open_questions = current.get("explore_questions") or []
+        _has_unanswered = any(
+            isinstance(q, dict)
+            and not (bool(q.get("answered")) or bool(str(q.get("answer") or "").strip()))
+            for q in _open_questions
+        )
+        _final_phase = "awaiting_clarification" if _has_unanswered else "done"
         _persist_job_status(
             job_id,
             {
                 **current,
-                "explore_phase": "done",
+                "explore_phase": _final_phase,
                 "explore_progress": f"{explored}/{total}",
                 "updated_at": time.time(),
             },
             sync=True,
         )
-        logger.info("[%s] explore_worker: finished %d/%d functions", job_id, explored, total)
+        logger.info("[%s] explore_worker: finished %d/%d functions (phase=%s)", job_id, explored, total, _final_phase)
 
     except Exception as exc:
         logger.error("[%s] explore_worker: fatal error: %s", job_id, exc)
@@ -1251,505 +1205,4 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         )
 
 
-def _attempt_gap_resolution(
-    job_id: str,
-    invocables: list[dict],
-    client,
-    model: str,
-    sentinels: dict,
-    vocab: dict,
-    use_cases_text: str,
-    inv_map: dict,
-    tool_schemas: list[dict],
-) -> None:
-    """Targeted second-pass re-probe of functions that failed every probe in the main loop.
 
-    Runs before gap questions are generated so questions that the system CAN answer
-    automatically never reach the user.  A bounded conversation with explicit retry
-    strategies (re-init, known-good IDs, parameter permutation) is run for each
-    failed function.  Findings are updated in-place via _patch_finding so that the
-    subsequent _generate_confidence_gaps() call sees the resolved results.
-    """
-    from api.storage import _load_findings
-
-    all_findings = _load_findings(job_id)
-
-    failed_invs = [
-        inv for inv in invocables
-        if not any(
-            f.get("function") == inv["name"] and f.get("status") == "success"
-            for f in all_findings
-        )
-    ]
-    if not failed_invs:
-        logger.info("[%s] gap_resolution: no failed functions — skipping", job_id)
-        return
-
-    fn_list = [inv["name"] for inv in failed_invs]
-    logger.info("[%s] gap_resolution: targeted retry of %d function(s): %s", job_id, len(failed_invs), fn_list)
-
-    # Build a concise "known-good" block from successful findings so the LLM can
-    # reuse proven IDs and argument shapes from sibling functions.
-    successful_findings = [f for f in all_findings if f.get("status") == "success" and f.get("working_call")]
-    kb_lines = [f"  - {sf['function']}({sf['working_call']})" for sf in successful_findings[:6]]
-    kb_block = (
-        "\nKNOWN-GOOD CALLS (reuse these IDs/values as inputs):\n" + "\n".join(kb_lines) + "\n"
-    ) if kb_lines else ""
-
-    for i, inv in enumerate(failed_invs):
-        fn_name = inv["name"]
-        _set_explore_status(job_id, i, len(failed_invs), f"Gap resolution: retrying {fn_name}…")
-
-        prev_finding = next((f for f in reversed(all_findings) if f.get("function") == fn_name), None)
-        prev_ctx = (
-            f"Previous attempt: {prev_finding.get('finding', 'no finding')}.\n"
-            if prev_finding else ""
-        )
-
-        sys_msg = _build_explore_system_message(
-            invocables, _load_findings(job_id),
-            sentinels=sentinels, vocab=vocab, use_cases=use_cases_text,
-        )
-        conversation = [
-            sys_msg,
-            {
-                "role": "user",
-                "content": (
-                    f"SECOND-PASS RETRY for '{fn_name}'.\n"
-                    f"{prev_ctx}"
-                    f"{kb_block}\n"
-                    "This function failed every probe in the first pass. "
-                    "Try these strategies in order:\n"
-                    "1. Call the init function first (even if called before), then call this function.\n"
-                    "2. Use the customer/order IDs from the KNOWN-GOOD CALLS above.\n"
-                    "3. Permute numeric parameters: try 0, 1, 100, 1000, 10000.\n"
-                    "4. For string params: try empty string, then each known-good ID format.\n"
-                    "Goal: find ANY call that returns 0. Once found, call record_finding with "
-                    "status='success' and working_call set to the exact args that worked.\n"
-                    "If still failing after all strategies, call record_finding with "
-                    "status='error' and note the exact error code(s) observed."
-                ),
-            },
-        ]
-
-        _observed_successes: list[dict] = []
-        _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
-        _fn_tool_call_count = 0
-
-        for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
-            if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
-                logger.info("[%s] gap_resolution: %s hit tool-call cap (%d)",
-                            job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
-                break
-            try:
-                from typing import cast, Any as _Any
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=conversation,
-                    tools=cast(_Any, tool_schemas),
-                    tool_choice="auto",
-                    temperature=0,
-                )
-            except Exception as exc:
-                logger.warning("[%s] gap_resolution: OpenAI call failed for %s round %d: %s",
-                               job_id, fn_name, _round, exc)
-                break
-
-            msg = response.choices[0].message
-            if not msg.tool_calls:
-                break
-
-            conversation.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,  # type: ignore[union-attr]
-                            "arguments": tc.function.arguments,  # type: ignore[union-attr]
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
-
-            for tc in msg.tool_calls:
-                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
-                    break
-                _fn = tc.function  # type: ignore[union-attr]
-                tc_name = _fn.name
-                try:
-                    tc_args = json.loads(_fn.arguments)
-                except json.JSONDecodeError:
-                    tc_args = {}
-
-                tc_inv = inv_map.get(tc_name)
-                tool_result = _execute_tool(tc_inv, tc_args) if tc_inv else f"Tool '{tc_name}' not found."
-                _fn_tool_call_count += 1
-
-                if tc_name == fn_name:
-                    _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
-                    if _ret_m and int(_ret_m.group(1)) == 0:
-                        _out_bases = frozenset({
-                            "undefined", "undefined2", "undefined4", "undefined8",
-                            "uint", "uint32_t", "int", "int32_t", "dword",
-                            "ulong", "uint4", "uint8", "long", "ulong32",
-                        })
-                        _clean: dict = {}
-                        for _k, _v in tc_args.items():
-                            _p = _p_lookup.get(_k, {})
-                            _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
-                            _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                            if not _is_out and _p.get("direction", "in") != "out":
-                                _clean[_k] = _v
-                        _observed_successes.append(_clean)
-
-                logger.info("[%s] gap_resolution: tool=%s result=%s", job_id, tc_name, str(tool_result)[:120])
-                conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
-
-        # Consistency enforcement — same logic as main loop
-        if _observed_successes:
-            _patch_finding(job_id, fn_name, {"working_call": _observed_successes[0], "status": "success"})
-            logger.info("[%s] gap_resolution: resolved %s → success %s", job_id, fn_name, _observed_successes[0])
-        else:
-            # Verify any working_call the LLM may have claimed
-            _cur = _load_findings(job_id)
-            _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
-            if _ff and _ff.get("working_call") is not None:
-                _vi = inv_map.get(fn_name)
-                if _vi:
-                    try:
-                        _vr = _execute_tool(_vi, _ff["working_call"])
-                        _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
-                        if _vm:
-                            _vret = int(_vm.group(1))
-                            if _vret not in sentinels and _vret <= 0xFFFFFFF0:
-                                _patch_finding(job_id, fn_name, {"status": "success"})
-                                logger.info("[%s] gap_resolution: resolved %s via verification", job_id, fn_name)
-                            else:
-                                _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
-                    except Exception as _ve:
-                        logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
-
-
-def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
-    """Targeted mini-sessions driven by user gap answers.
-
-    For each function that has an answer in vocab.gap_answers, fires a focused
-    LLM session with the domain expert answer injected as opening context.
-    After all mini-sessions complete, re-runs confidence gap generation so the
-    UI reflects the updated understanding (Task 3 — re-discovery loop).
-    """
-    from api.storage import _load_findings
-
-    if not OPENAI_ENDPOINT and not OPENAI_API_KEY:
-        return
-
-    try:
-        # Load vocab to get gap_answers
-        vocab: dict = {}
-        try:
-            raw = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json")
-            vocab = json.loads(raw)
-        except Exception:
-            pass
-
-        gap_answers: dict = vocab.get("gap_answers") or {}
-        # Only retry specific functions — skip 'general' answers (they feed hints only)
-        targeted = {fn: ans for fn, ans in gap_answers.items() if fn != "general" and (ans or "").strip()}
-        if not targeted:
-            logger.info("[%s] gap_mini_sessions: no function-specific answers — skipping", job_id)
-            return
-
-        _snapshot_schema_stage(job_id, "mcp_schema_pre_mini_session.json")
-
-        client = _openai_client()
-        model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
-
-        _job_meta = _get_job_status(job_id) or {}
-        _use_cases_text = _job_meta.get("use_cases", "")
-        sentinels = _SENTINEL_DEFAULTS
-
-        inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
-        inv_map["enrich_invocable"] = {
-            "name": "enrich_invocable", "source_type": "enrich", "_job_id": job_id,
-            "execution": {"method": "enrich"}, "parameters": [],
-        }
-        inv_map["record_finding"] = {
-            "name": "record_finding", "source_type": "findings", "_job_id": job_id,
-            "execution": {"method": "findings"}, "parameters": [],
-        }
-        tool_schemas = _build_tool_schemas(invocables)
-
-        explore_questions = _job_meta.get("explore_questions") or []
-
-        logger.info("[%s] gap_mini_sessions: %d answered function(s) to retry: %s",
-                    job_id, len(targeted), list(targeted))
-
-        for i, (fn_name, answer_text) in enumerate(targeted.items()):
-            inv = inv_map.get(fn_name)
-            if not inv:
-                logger.debug("[%s] gap_mini_sessions: no invocable for %s — skipping", job_id, fn_name)
-                continue
-
-            _set_explore_status(job_id, i, len(targeted), f"Gap mini-session: {fn_name}\u2026")
-            logger.info("[%s] gap_mini_sessions: starting mini-session for %s", job_id, fn_name)
-
-            all_findings = _load_findings(job_id)
-            prev_finding = next((f for f in reversed(all_findings) if f.get("function") == fn_name), None)
-            prev_ctx = (
-                f"Previous attempt: {prev_finding.get('finding', 'no finding')}.\n"
-                if prev_finding else ""
-            )
-
-            # Inject the technical_question from the gap if available — gives the mini-session
-            # a specific action-oriented goal derived from the original gap generation.
-            fn_gap = next((g for g in explore_questions if g.get("function") == fn_name), {})
-            technical_q = fn_gap.get("technical_question", "")
-            technical_ctx = f"Technical context: {technical_q}\n" if technical_q else ""
-
-            sys_msg = _build_explore_system_message(
-                invocables, all_findings,
-                sentinels=sentinels, vocab=vocab, use_cases=_use_cases_text,
-            )
-            conversation = [
-                sys_msg,
-                {
-                    "role": "user",
-                    "content": (
-                        f"DOMAIN EXPERT ANSWER for '{fn_name}'.\n"
-                        f"{technical_ctx}"
-                        f"{prev_ctx}"
-                        f"A domain expert answered: {answer_text!r}\n\n"
-                        f"Use this information to re-probe '{fn_name}' now. "
-                        "Apply the expert's answer to determine the correct prerequisite calls, "
-                        "argument formats, or conditions needed for a successful call. "
-                        "Goal: find a call that returns 0 (success). "
-                        "When done, call enrich_invocable and record_finding with what you found. "
-                        "If every probe still fails after applying the answer, call "
-                        "record_finding(status='error') with exact codes seen."
-                    ),
-                },
-            ]
-
-            _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
-            _observed_successes: list[dict] = []
-            _enrich_called = False
-            # Accumulate tool calls and traces for transcript + executor_trace.json
-            _mini_tool_log: list[dict] = []
-            _mini_traces: list[dict] = []
-            _fn_tool_call_count = 0
-
-            for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
-                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
-                    logger.info("[%s] gap_mini_sessions: %s hit tool-call cap (%d)",
-                                job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
-                    break
-                try:
-                    from typing import cast, Any as _Any
-                    response = client.chat.completions.create(
-                        model=model,
-                        messages=conversation,
-                        tools=cast(_Any, tool_schemas),
-                        tool_choice="auto",
-                        temperature=0,
-                    )
-                except Exception as exc:
-                    logger.warning("[%s] gap_mini_sessions: OpenAI call failed for %s round %d: %s",
-                                   job_id, fn_name, _round, exc)
-                    break
-
-                msg = response.choices[0].message
-                if not msg.tool_calls:
-                    break
-
-                conversation.append({
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,  # type: ignore[union-attr]
-                                "arguments": tc.function.arguments,  # type: ignore[union-attr]
-                            },
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                })
-
-                _round_reasoning = (msg.content or "").strip()
-                _first_in_round = True
-                for tc in msg.tool_calls:
-                    if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
-                        break
-                    _fn = tc.function  # type: ignore[union-attr]
-                    tc_name = _fn.name
-                    try:
-                        tc_args = json.loads(_fn.arguments)
-                    except json.JSONDecodeError:
-                        tc_args = {}
-
-                    tc_inv = inv_map.get(tc_name)
-                    if tc_inv:
-                        _traced = _execute_tool_traced(tc_inv, tc_args)
-                        tool_result = _traced["result_str"]
-                        _tc_trace = _traced.get("trace")
-                    else:
-                        tool_result = f"Tool '{tc_name}' not found."
-                        _tc_trace = None
-                    _fn_tool_call_count += 1
-
-                    # Accumulate for transcript and executor_trace.json
-                    _mini_tool_log.append({
-                        "call": tc_name,
-                        "args": tc_args,
-                        "result": tool_result,
-                        "trace": _tc_trace,
-                        "reasoning": _round_reasoning if _first_in_round else None,
-                    })
-                    if _tc_trace:
-                        _mini_traces.append(_tc_trace)
-                    _first_in_round = False
-
-                    if tc_name == "enrich_invocable":
-                        _enrich_called = True
-
-                    if tc_name == fn_name:
-                        _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
-                        if _ret_m and int(_ret_m.group(1)) == 0:
-                            _out_bases = frozenset({
-                                "undefined", "undefined2", "undefined4", "undefined8",
-                                "uint", "uint32_t", "int", "int32_t", "dword",
-                                "ulong", "uint4", "uint8", "long", "ulong32",
-                            })
-                            _clean: dict = {}
-                            for _k, _v in tc_args.items():
-                                _p = _p_lookup.get(_k, {})
-                                _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
-                                _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                                if not _is_out and _p.get("direction", "in") != "out":
-                                    _clean[_k] = _v
-                            _observed_successes.append(_clean)
-
-                    logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
-                                job_id, tc_name, str(tool_result)[:120])
-                    conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
-
-            # Persist this mini-session to chat_transcript.txt and executor_trace.json
-            # so it's visible in the session snapshot alongside the main chat sessions.
-            try:
-                _mini_user_msg = (
-                    f"[GAP MINI-SESSION: {fn_name}]\n"
-                    f"Domain expert answer: {answer_text!r}\n"
-                    f"{technical_ctx}"
-                    f"{prev_ctx}"
-                )
-                _mini_final = "(mini-session complete)"
-                # Pick up the last assistant text turn if any
-                for _turn in reversed(conversation):
-                    if _turn.get("role") == "assistant" and _turn.get("content"):
-                        _mini_final = _turn["content"]
-                        break
-                _append_transcript(job_id, _mini_user_msg, _mini_final, _mini_tool_log,
-                                   transcript_blob="mini_session_transcript.txt")
-                if _mini_traces:
-                    _append_executor_trace(job_id, _mini_traces)
-            except Exception as _tr_e:
-                logger.debug("[%s] gap_mini_sessions: transcript write failed for %s: %s",
-                              job_id, fn_name, _tr_e)
-
-            # Ground-truth consistency enforcement — same logic as main explore loop
-            if _observed_successes:
-                _patch_finding(job_id, fn_name, {"working_call": _observed_successes[0], "status": "success"})
-                logger.info("[%s] gap_mini_sessions: resolved %s \u2192 success %s",
-                            job_id, fn_name, _observed_successes[0])
-            else:
-                _cur = _load_findings(job_id)
-                _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
-                if _ff and _ff.get("working_call") is not None:
-                    _vi = inv_map.get(fn_name)
-                    if _vi:
-                        try:
-                            _vr = _execute_tool(_vi, _ff["working_call"])
-                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
-                            if _vm:
-                                _vret = int(_vm.group(1))
-                                if _vret not in sentinels and _vret <= 0xFFFFFFF0:
-                                    _patch_finding(job_id, fn_name, {"status": "success"})
-                                else:
-                                    _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
-                        except Exception as _ve:
-                            logger.debug("[%s] gap_mini_sessions: verify failed for %s: %s",
-                                         job_id, fn_name, _ve)
-
-        # Task 3 — Re-discovery loop: re-run confidence gap generation after all mini-sessions
-        # so the UI reflects the updated understanding. Gaps for resolved functions are dropped.
-        try:
-            logger.info("[%s] gap_mini_sessions: re-generating confidence gaps after mini-sessions\u2026", job_id)
-            _set_explore_status(job_id, len(targeted), len(targeted), "Re-assessing gaps\u2026")
-            updated_findings = _load_findings(job_id)
-            new_gaps = _generate_confidence_gaps(client, model, updated_findings, invocables)
-            resolved = {f.get("function") for f in updated_findings if f.get("status") == "success"}
-            new_gaps = [g for g in new_gaps if g.get("function") not in resolved]
-            _gap_current = _get_job_status(job_id) or {}
-            _persist_job_status(job_id, {**_gap_current, "explore_questions": new_gaps}, sync=True)
-            logger.info("[%s] gap_mini_sessions: %d gap(s) remain after re-assessment", job_id, len(new_gaps))
-        except Exception as _re_e:
-            logger.debug("[%s] gap_mini_sessions: re-gap generation failed: %s", job_id, _re_e)
-
-        # Write gap resolution log artifact so session snapshots can report
-        # what changed (resolved vs. still-open) across the mini-session run.
-        try:
-            _targeted_fns = {inv.get("name") for inv in targeted}
-            _grl_findings = _load_findings(job_id)
-            _grl = [
-                {
-                    "function":    f.get("function"),
-                    "status":      f.get("status"),
-                    "working_call": f.get("working_call"),
-                    "confidence":  f.get("confidence"),
-                    "successes":   f.get("successes", 0),
-                    "attempts":    f.get("attempts", 0),
-                }
-                for f in _grl_findings
-                if f.get("function") in _targeted_fns
-            ]
-            _upload_to_blob(
-                ARTIFACT_CONTAINER,
-                f"{job_id}/gap_resolution_log.json",
-                json.dumps(_grl, indent=2).encode(),
-            )
-            logger.info("[%s] gap_mini_sessions: gap_resolution_log written (%d entries)", job_id, len(_grl))
-        except Exception as _grl_e:
-            logger.debug("[%s] gap_mini_sessions: gap_resolution_log upload failed: %s", job_id, _grl_e)
-
-        _snapshot_schema_stage(job_id, "mcp_schema_post_mini_session.json")
-
-        _cur_status = _get_job_status(job_id) or {}
-        _persist_job_status(
-            job_id,
-            {**_cur_status, "explore_phase": "done", "updated_at": time.time()},
-            sync=True,
-        )
-        logger.info("[%s] gap_mini_sessions: complete", job_id)
-
-    except Exception as exc:
-        logger.error("[%s] gap_mini_sessions: fatal error: %s", job_id, exc)
-
-
-def _set_explore_status(job_id: str, explored: int, total: int, message: str) -> None:
-    current = _get_job_status(job_id) or {}
-    _persist_job_status(
-        job_id,
-        {
-            **current,
-            "explore_phase": "exploring",
-            "explore_progress": f"{explored}/{total}",
-            "explore_message": message,
-            "updated_at": time.time(),
-        },
-    )

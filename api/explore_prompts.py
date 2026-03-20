@@ -313,13 +313,36 @@ def _generate_behavioral_spec(
         return ""
 
 
-def _synthesize(client, model: str, findings: list[dict]) -> str:
+def _synthesize(
+    client,
+    model: str,
+    findings: list[dict],
+    vocab: dict | None = None,
+    sentinels: dict[int, str] | None = None,
+) -> str:
     """Generate a full API reference Markdown document from completed findings.
 
     Port of run_local.py's _synthesize() — same prompt, same section structure.
     Result is uploaded to blob as api_reference.md after exploration completes.
+
+    AC-3: Now also receives vocab and sentinels so the synthesis LLM can
+    cross-reference error codes, ID formats, and value semantics — not just
+    the raw findings.
     """
     findings_json = json.dumps(findings, indent=2, ensure_ascii=False)
+
+    # AC-3: Build supplementary context blocks
+    _extra_context = ""
+    if vocab:
+        _vb = _vocab_block(vocab)
+        if _vb:
+            _extra_context += f"\n\nCross-function vocabulary (shared patterns):\n{_vb}"
+    if sentinels:
+        _sent_lines = "\n".join(
+            f"  0x{k:08X} = {v}" for k, v in sorted(sentinels.items(), reverse=True)
+        )
+        _extra_context += f"\n\nCalibrated sentinel error codes:\n{_sent_lines}"
+
     system_msg = (
         "You are a senior technical writer. Given structured reverse-engineering findings "
         "for an undocumented Windows DLL, produce a complete API reference document in Markdown.\n\n"
@@ -353,7 +376,8 @@ def _synthesize(client, model: str, findings: list[dict]) -> str:
                     "role": "user",
                     "content": (
                         f"Here are the reverse-engineering findings for this DLL:\n\n"
-                        f"```json\n{findings_json}\n```\n\n"
+                        f"```json\n{findings_json}\n```"
+                        f"{_extra_context}\n\n"
                         "Produce the full API reference document now."
                     ),
                 },

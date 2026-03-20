@@ -404,5 +404,447 @@
                                 "CS_Initialize":  "success"
                             },
         "saved_at":  "2026-03-19T19:38:56.1459039-04:00"
+    },
+    {
+        "date":  "2026-03-19",
+        "commit":  "909f07e",
+        "commit_msg":  "Update session artifacts and roadmap state",
+        "job_id":  "cfd26cf5",
+        "component":  "contoso_cs",
+        "note":  "s1s2-smoke",
+        "folder":  "2026-03-19-909f07e-s1s2-smoke",
+        "finding_counts":  {
+                               "success":  12,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  27
+                           },
+        "gap_count":  3,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  44,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  21,
+                                               "explore":  22,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  13,
+                                                         "avg":  3.4,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  23,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  5,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFD":  "not initialized",
+                                                      "0xFFFFFFFC":  "account locked or suspended",
+                                                      "0xFFFFFFFB":  "write operation denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "pending_refinement",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "pending_refinement",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-19T22:13:49.0348580-04:00"
+    },
+    {
+        "date":  "2026-03-19",
+        "commit":  "909f07e",
+        "commit_msg":  "Update session artifacts and roadmap state",
+        "job_id":  "cfd26cf5",
+        "component":  "contoso_cs",
+        "note":  "schema-checkpoint-smoke",
+        "folder":  "2026-03-19-909f07e-schema-checkpoint-smoke",
+        "finding_counts":  {
+                               "success":  12,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  27
+                           },
+        "gap_count":  3,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  44,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  21,
+                                               "explore":  22,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  13,
+                                                         "avg":  3.4,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  23,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  5,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFD":  "not initialized",
+                                                      "0xFFFFFFFC":  "account locked or suspended",
+                                                      "0xFFFFFFFB":  "write operation denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "pending_refinement",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "pending_refinement",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-19T22:44:28.9236099-04:00"
+    },
+    {
+        "date":  "2026-03-19",
+        "commit":  "909f07e",
+        "commit_msg":  "Update session artifacts and roadmap state",
+        "job_id":  "44fb7051",
+        "component":  "contoso_cs",
+        "note":  "s1s2-discovery-only",
+        "folder":  "2026-03-19-909f07e-s1s2-discovery-only",
+        "finding_counts":  {
+                               "success":  11,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  23
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  20,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  7
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  5,
+                                                         "avg":  1.5,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  1,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "success",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-19T22:50:25.4408599-04:00"
+    },
+    {
+        "date":  "2026-03-20",
+        "commit":  "8211c70",
+        "commit_msg":  "Add schema checkpoints and tune sentinel promotion",
+        "job_id":  "1259f0e5",
+        "component":  "contoso_cs",
+        "note":  "contoso-cs-run2",
+        "folder":  "2026-03-20-8211c70-contoso-cs-run2",
+        "finding_counts":  {
+                               "success":  11,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  22
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  33,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  19,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  7,
+                                                         "avg":  2.5,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "success",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "error",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "success",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-20T00:14:59.2758229-04:00"
     }
 ]
