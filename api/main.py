@@ -97,9 +97,9 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "dev": {
             "cap_profile": "dev",
             "max_rounds": 2,
-            "max_tool_calls": 3,
+            "max_tool_calls": 5,
             "gap_resolution_enabled": False,
-            "clarification_questions_enabled": False,
+            "clarification_questions_enabled": True,
         },
         "normal": {
             "cap_profile": "deploy",
@@ -962,6 +962,16 @@ async def session_snapshot(job_id: str):
             p.strip() for p in _raw_hints.split(" | ")
             if p.strip() and not p.strip().startswith("DOMAIN ANSWER")
         )
+        # D-7: gap_count should reflect unresolved functions (error status in
+        # latest findings), not clarification question count.  This gives an
+        # accurate signal of how many functions still need work.
+        _all_findings_for_meta = _load_findings(job_id)
+        _fn_latest: dict[str, str] = {}
+        for _f in _all_findings_for_meta:
+            _fn_name = _f.get("function")
+            if _fn_name:
+                _fn_latest[_fn_name] = _f.get("status", "error")
+        _unresolved_count = sum(1 for _s in _fn_latest.values() if _s != "success")
         meta = {
             "job_id":        job_id,
             "component":     status.get("component_name", "unknown"),
@@ -970,8 +980,9 @@ async def session_snapshot(job_id: str):
             "use_cases":     status.get("use_cases", ""),
             "created_at":    status.get("created_at"),
             "updated_at":    status.get("updated_at"),
-            "gap_count":     len(gaps),
-            "finding_count": len(_load_findings(job_id)),
+            "gap_count":     _unresolved_count,
+            "finding_count": len(_all_findings_for_meta),
+            "question_count": len(gaps),
         }
         zf.writestr("session-meta.json", json.dumps(meta, indent=2))
 

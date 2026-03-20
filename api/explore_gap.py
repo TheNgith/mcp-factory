@@ -44,6 +44,12 @@ def _attempt_gap_resolution(
     """Targeted second-pass re-probe of functions that failed every probe in the main loop."""
     from api.storage import _load_findings
 
+    # Inherit runtime settings from the explore job so gap resolution respects
+    # the same floor / max-rounds / max-tool-calls the user configured in the UI.
+    _job_runtime = (_get_job_status(job_id) or {}).get("explore_runtime") or {}
+    _max_rounds = int(_job_runtime.get("max_rounds") or _MAX_EXPLORE_ROUNDS_PER_FUNCTION)
+    _max_tool_calls = int(_job_runtime.get("max_tool_calls") or _MAX_TOOL_CALLS_PER_FUNCTION)
+
     all_findings = _load_findings(job_id)
 
     failed_invs = [
@@ -106,10 +112,10 @@ def _attempt_gap_resolution(
         _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
         _fn_tool_call_count = 0
 
-        for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
-            if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+        for _round in range(_max_rounds):
+            if _fn_tool_call_count >= _max_tool_calls:
                 logger.info("[%s] gap_resolution: %s hit tool-call cap (%d)",
-                            job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                            job_id, fn_name, _max_tool_calls)
                 break
             try:
                 from typing import cast, Any as _Any
@@ -147,7 +153,7 @@ def _attempt_gap_resolution(
             })
 
             for tc in msg.tool_calls:
-                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                if _fn_tool_call_count >= _max_tool_calls:
                     break
                 _fn = tc.function  # type: ignore[union-attr]
                 tc_name = _fn.name
@@ -202,6 +208,33 @@ def _attempt_gap_resolution(
                     except Exception as _ve:
                         logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
 
+    # D-6: Write gap_resolution_log.json so auto gap-resolution outcomes are
+    # observable in session snapshots (previously only _run_gap_answer_mini_sessions
+    # wrote this artifact).
+    try:
+        _grl_findings = _load_findings(job_id)
+        _targeted_names = {inv["name"] for inv in failed_invs}
+        _grl = [
+            {
+                "function": f.get("function"),
+                "status": f.get("status"),
+                "working_call": f.get("working_call"),
+                "confidence": f.get("confidence"),
+                "successes": f.get("successes", 0),
+                "attempts": f.get("attempts", 0),
+            }
+            for f in _grl_findings
+            if f.get("function") in _targeted_names
+        ]
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/gap_resolution_log.json",
+            json.dumps(_grl, indent=2).encode(),
+        )
+        logger.info("[%s] gap_resolution: gap_resolution_log written (%d entries)", job_id, len(_grl))
+    except Exception as _grl_e:
+        logger.debug("[%s] gap_resolution: gap_resolution_log write failed: %s", job_id, _grl_e)
+
 
 def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
     """Targeted mini-sessions driven by user gap answers."""
@@ -236,6 +269,11 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
         _job_meta = _get_job_status(job_id) or {}
         _use_cases_text = _job_meta.get("use_cases", "")
         sentinels = _SENTINEL_DEFAULTS
+
+        # Inherit runtime settings so mini-sessions respect the same caps the user set.
+        _job_runtime = _job_meta.get("explore_runtime") or {}
+        _max_rounds = int(_job_runtime.get("max_rounds") or _MAX_EXPLORE_ROUNDS_PER_FUNCTION)
+        _max_tool_calls = int(_job_runtime.get("max_tool_calls") or _MAX_TOOL_CALLS_PER_FUNCTION)
 
         inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
 
@@ -308,10 +346,10 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             _mini_traces: list[dict] = []
             _fn_tool_call_count = 0
 
-            for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
-                if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+            for _round in range(_max_rounds):
+                if _fn_tool_call_count >= _max_tool_calls:
                     logger.info("[%s] gap_mini_sessions: %s hit tool-call cap (%d)",
-                                job_id, fn_name, _MAX_TOOL_CALLS_PER_FUNCTION)
+                                job_id, fn_name, _max_tool_calls)
                     break
                 try:
                     from typing import cast, Any as _Any
@@ -351,7 +389,7 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                 _round_reasoning = (msg.content or "").strip()
                 _first_in_round = True
                 for tc in msg.tool_calls:
-                    if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
+                    if _fn_tool_call_count >= _max_tool_calls:
                         break
                     _fn = tc.function  # type: ignore[union-attr]
                     tc_name = _fn.name

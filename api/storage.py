@@ -1,4 +1,4 @@
-﻿"""api/storage.py â€“ Azure Blob Storage, Storage Queue, and job-status helpers.
+"""api/storage.py â€“ Azure Blob Storage, Storage Queue, and job-status helpers.
 
 State:
   _JOB_STATUS          â€“ in-memory job-status cache (backed by Blob).
@@ -415,6 +415,29 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
         if old_name in patch and isinstance(patch[old_name], dict):
             p_patch = patch[old_name]
             new_name = p_patch.get("name") or p_patch.get("semantic_name")
+            # D-5: Auto-derive a semantic name from the description when the
+            # LLM provides a description but omits the 'name' key.  Only
+            # applies to generic param_N names — never overwrites already-
+            # enriched names.
+            if (not new_name
+                    and _re.match(r'^param_\d+$', old_name)
+                    and "description" in p_patch):
+                _desc_lower = p_patch["description"].lower()
+                # Extract a name from common patterns in the description
+                _name_m = _re.search(
+                    r'\b(customer[_ ]?id|order[_ ]?id|account[_ ]?id|'
+                    r'payment[_ ]?amount|refund[_ ]?amount|amount|balance|'
+                    r'loyalty[_ ]?points|points|interest[_ ]?rate|rate|'
+                    r'principal|period|months|buffer[_ ]?size|buf[_ ]?size|'
+                    r'output[_ ]?buffer|result[_ ]?buffer|unlock[_ ]?code|'
+                    r'status[_ ]?code|error[_ ]?code|return[_ ]?code|'
+                    r'diagnostic[_ ]?buffer|diag[_ ]?buffer|'
+                    r'customer[_ ]?name|order[_ ]?status|'
+                    r'tier[_ ]?label|email|phone|address)',
+                    _desc_lower,
+                )
+                if _name_m:
+                    new_name = _name_m.group(0).replace(' ', '_').replace('-', '_')
             if new_name and new_name != old_name:
                 param["name"] = new_name
                 renames.append(f"{old_name} → {new_name}")
