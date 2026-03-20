@@ -419,6 +419,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         tools=cast(_Any, tool_schemas),
                         tool_choice="auto",
                         temperature=0,
+                        timeout=90.0,
                     )
                 except Exception as exc:
                     logger.warning(
@@ -794,6 +795,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         tools=cast(_Any, tool_schemas),
                         tool_choice={"type": "function", "function": {"name": "enrich_invocable"}},
                         temperature=0,
+                        timeout=90.0,
                     )
                     _em = _enrich_resp.choices[0].message
                     if _em.tool_calls:
@@ -1199,6 +1201,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     messages=[{"role": "user", "content": _desc_prompt}],
                     temperature=0,
                     max_tokens=60,
+                    timeout=90.0,
                 )
                 _desc_text = (_desc_resp.choices[0].message.content or "").strip().strip('"')
                 if _desc_text:

@@ -94,7 +94,7 @@ def _openai_client():
             with _CLIENT_LOCK:
                 if _cached_client is None:
                     from openai import OpenAI
-                    _cached_client = OpenAI(api_key=OPENAI_API_KEY)
+                    _cached_client = OpenAI(api_key=OPENAI_API_KEY, timeout=120.0)
                     logger.info("[telemetry] Using direct OpenAI client (model: %s)", OPENAI_MODEL)
         return _cached_client
 

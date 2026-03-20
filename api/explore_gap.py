@@ -119,6 +119,7 @@ def _attempt_gap_resolution(
                     tools=cast(_Any, tool_schemas),
                     tool_choice="auto",
                     temperature=0,
+                    timeout=90.0,
                 )
             except Exception as exc:
                 logger.warning("[%s] gap_resolution: OpenAI call failed for %s round %d: %s",
@@ -320,6 +321,7 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                         tools=cast(_Any, tool_schemas),
                         tool_choice="auto",
                         temperature=0,
+                        timeout=90.0,
                     )
                 except Exception as exc:
                     logger.warning("[%s] gap_mini_sessions: OpenAI call failed for %s round %d: %s",
