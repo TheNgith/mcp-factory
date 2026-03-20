@@ -458,6 +458,28 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
     # current list wholesale, direction already set by the caller.
     if "parameters" in patch and isinstance(patch["parameters"], list):
         inv["parameters"] = patch["parameters"]
+        # D-5: apply semantic name derivation to the wholesale replacement too.
+        # The backfill path supplies updated descriptions but keeps param_N names.
+        for param in inv["parameters"]:
+            old_name = param.get("name", "")
+            if _re.match(r'^param_\d+$', old_name) and param.get("description"):
+                _desc_lower = param["description"].lower()
+                _name_m = _re.search(
+                    r'\b(customer[_ ]?id|order[_ ]?id|account[_ ]?id|'
+                    r'payment[_ ]?amount|refund[_ ]?amount|amount|balance|'
+                    r'loyalty[_ ]?points|points|interest[_ ]?rate|rate|'
+                    r'principal|period|months|buffer[_ ]?size|buf[_ ]?size|'
+                    r'output[_ ]?buffer|result[_ ]?buffer|unlock[_ ]?code|'
+                    r'status[_ ]?code|error[_ ]?code|return[_ ]?code|'
+                    r'diagnostic[_ ]?buffer|diag[_ ]?buffer|'
+                    r'customer[_ ]?name|order[_ ]?status|'
+                    r'tier[_ ]?label|email|phone|address)',
+                    _desc_lower,
+                )
+                if _name_m:
+                    new_name = _name_m.group(0).replace(' ', '_').replace('-', '_')
+                    param["name"] = new_name
+                    renames.append(f"{old_name} → {new_name}")
 
     # Scalar fields from backfill/refinement
     if "criticality" in patch:
@@ -469,13 +491,15 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
         existing_desc = (inv.get("description") or inv.get("doc") or "").strip()
         # Guard: only overwrite if the existing description is blank or is a raw
         # Ghidra type-signature (e.g. "undefined8 CS_Foo(byte * param_1, ...)").
+        # or the standard "Recovered by Ghidra static analysis" boilerplate.
         # This prevents backfill from downgrading a human-readable enriched description
         # back to a Ghidra annotation when the synthesis doc has incomplete coverage.
         _is_ghidra_sig = bool(_re.match(
             r"^(undefined\d*|void|int\d*|uint\d*|char|byte|BOOL|HRESULT|HANDLE|DWORD|LONG)\b",
             existing_desc, _re.I,
         ))
-        if not existing_desc or _is_ghidra_sig:
+        _is_ghidra_boilerplate = existing_desc.lower().startswith("recovered by ghidra")
+        if not existing_desc or _is_ghidra_sig or _is_ghidra_boilerplate:
             inv["description"] = new_desc
             inv["doc"] = new_desc
 
