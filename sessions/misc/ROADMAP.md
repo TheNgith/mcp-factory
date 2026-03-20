@@ -913,3 +913,164 @@ Surface `verdict` and any misses in `SUMMARY.md` under a new "Static Analysis Ve
 > **Note on G10:** `save-session.ps1` step 14.9 reads `static_analysis.json`, cross-checks sentinels→vocab, binary IDs→findings, IAT no-network claim→findings text. Writes `static_verification.json` with PASS/WARN/FAIL verdict.
 
 > **Note on 0-A:** Root cause was `api/worker.py` not `api/main.py`. `main.py` wrote `component_name` correctly at job creation, but `_analyze_worker` overwrote the entire status dict on every progress update, stripping it out. Fix: import `_get_job_status`, snapshot `_init` at the start of the worker, spread `{**_init, ...}` into all four `_persist_job_status` calls. Final-payload call re-reads current status after explore completes to also preserve `explore_phase`/`explore_questions`.
+
+---
+
+## Explore Loop Architecture — Decisions & Deferred Work
+
+### Decision log (commits `79c3a8e`, `32ccf0e`)
+
+**Root cause (job 206a77f8):** `_MAX_EXPLORE_ROUNDS_PER_FUNCTION = 3` was a *turn cap*, not a *tool-call cap*. The LLM batched 24 DLL calls in a single round, making the turn cap meaningless. CS_UnlockAccount consumed 37 of 46 total explore tool calls across 3 rounds (1 + 24 + 12). Result: 6 of 13 functions were never probed; `finding_count = 0` because the LLM never called `record_finding`.
+
+**Implemented fixes:**
+
+| Constant / mechanism | Old value | New value | File |
+|---|---|---|---|
+| `_MAX_EXPLORE_ROUNDS_PER_FUNCTION` | 3 | 5 | `api/explore_phases.py` |
+| `_MAX_TOOL_CALLS_PER_FUNCTION` | _(did not exist)_ | 15 (env: `EXPLORE_MAX_TOOL_CALLS`) | `api/explore_phases.py` |
+| Forced `record_finding` fallback | _(none)_ | Emitted automatically after loop if LLM never called it | `api/explore.py` |
+| "MANDATORY ERROR RECORDING" prompt rule | _(none)_ | Stop after ≤10 probes, call `record_finding(status='error')`, critical violation if omitted | `api/explore_prompts.py` |
+
+The two-constraint system works as follows:
+- **Rounds** = number of LLM turns per function (5). Limits conversational back-and-forth.
+- **Tool calls** = number of actual DLL probe calls per function (15). Hard cap enforced inside the round loop; breaks immediately when hit. Guarantees budget sharing across all functions regardless of LLM batching behavior.
+
+### Round-robin scheduling — analysed, rejected for single-DLL, deferred to multi-DLL
+
+**What was considered:** Interleave function scheduling so the explore loop does N calls on F1, then N on F2, then N on F3, cycling back to F1. This would prevent any single function from monopolising the session budget.
+
+**Why it was rejected for single-DLL (contoso_cs.dll):**
+
+1. **Vocab already flows forward.** The accumulated `vocab` dict (error codes, ID formats, status tokens) is shared across all functions in a session. Each new function's system message already includes everything learned from prior functions. There is no information benefit to interleaving — cross-function context is already present.
+
+2. **No inter-function handle dependencies.** `contoso_cs.dll` is a pure in-process library. `CS_Initialize` sets a global flag; no function returns a handle or token that another function needs as an input argument. Sequential ordering has identical semantics to interleaved ordering.
+
+3. **Root cause was the missing tool-call cap, not ordering.** The per-function cap (`_MAX_TOOL_CALLS_PER_FUNCTION = 15`) directly addresses the starvation problem without the added complexity of a scheduler. With the cap in place, worst-case budget consumption per function is bounded regardless of scheduling order.
+
+**When round-robin IS the right pattern — multi-DLL interweaving:**
+
+Round-robin scheduling becomes architecturally correct when DLL A and DLL B have cross-DLL data dependencies. Example:
+
+```
+DLL A: OpenSession() -> session_handle (opaque integer)
+DLL B: LookupRecord(session_handle, record_id) -> data   # needs DLL A's output
+DLL A: CloseSession(session_handle)
+```
+
+In this scenario sequential scheduling is semantically wrong — you cannot exhaust all of DLL A before starting DLL B, because DLL B's probing requires a live handle that only DLL A can provide. Interleaved scheduling (round-robin across functions from both DLLs) is the only correct approach.
+
+**Deferred to multi-DLL interweaving phase.** The scheduler should be built at that point, driven by the dependency graph extracted from IAT imports + invocable schemas (the `returns_handle` / `takes_handle` schema fields that P4-1 output buffer work will introduce). Round-robin without a dependency graph is the wrong primitive; scheduler slots should be ordered by the dependency DAG, not arbitrary rotation.
+
+---
+
+## Sentinel Meaning Table Hardening (MVP: Windows DLLs 1995-2015)
+
+### Goal
+
+Create a production-safe sentinel interpretation process that is:
+- versioned per DLL,
+- overrideable per function,
+- evidence-gated (never hardcode global meanings without proof), and
+- robust for write-heavy operations and multi-DLL dependency chains.
+
+### Priority formats (deterministic fallback order)
+
+For MVP, implement deterministic pre-classification for the top three practical formats, then let the model confirm/refine with context:
+
+1. **HRESULT-like values**
+2. **Custom signed-negative integer style** (e.g. `0xFFFFFFFB` -> `-5`)
+3. **BOOL-style return with Win32 last-error context**
+
+Keep NTSTATUS support as P2 fallback. Do not treat any classifier output as truth by itself; classifier yields a hypothesis + confidence.
+
+### Non-negotiable production rule
+
+Sentinel semantics must be stored as:
+- **DLL-level default map** (coarse behavior), plus
+- **function-level override map** (authoritative when present), plus
+- **evidence source and confidence** (trace-derived, static-derived, user-confirmed).
+
+If evidence conflicts, downgrade confidence and raise a gap question instead of silently rewriting mappings.
+
+### Data model additions (P1)
+
+Add to invocable/session schema:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `writes_state` | bool | Marks mutating functions |
+| `requires_init` | bool | Precondition for safe execution |
+| `requires_active_state` | enum(`active`,`locked`,`any`) | Account/state precondition |
+| `id_constraints` | object | Regex + canonical formatter per ID arg |
+| `amount_constraints` | object | Min/max/unit metadata (cents/points/etc.) |
+| `sentinel_map` | object | code -> class -> action -> confidence |
+| `retry_policy` | object | max attempts + allowed argument variations |
+| `returns_handle` | bool | Produces dependency token/handle |
+| `consumes_handle` | bool | Requires token/handle from another function/DLL |
+| `evidence_refs` | array | Trace/static/user evidence supporting mapping |
+
+### Write-control execution policy (P1)
+
+On any write sentinel (for example write denied class), executor/explore loop must run deterministic triage in this order:
+
+1. Verify init/state prerequisite
+2. Verify ID normalization against `id_constraints`
+3. Verify amount units/range (`amount_constraints`)
+4. Verify account/order state preconditions
+5. Execute only policy-allowed corrective probes (`retry_policy`)
+6. If unresolved: emit structured `record_finding(status='error')` and stop
+
+Never brute-force arbitrary parameter permutations after policy budget is exhausted.
+
+### Contoso function-level write policy (P1 reference implementation)
+
+Use `contoso_cs.dll` as the reference write-policy template:
+
+| Function | Required preconditions | Sentinel handling policy |
+|---|---|---|
+| `CS_ProcessPayment` | initialized, valid `CUST-NNN`, active account, cents amount in range | On `0xFFFFFFFB`: check lock state then amount bounds before retry |
+| `CS_ProcessRefund` | initialized, valid customer + order IDs, cents units, refundable state | On write failure: verify ownership/state and amount constraints |
+| `CS_RedeemLoyaltyPoints` | initialized, active account, integer points, sufficient balance | On `0xFFFFFFFB`: branch as insufficient points or locked/denied |
+| `CS_UnlockAccount` | initialized, valid customer ID, account currently locked | On `0xFFFFFFFC`: treat as no-op/not-found branch; avoid brute-force retries |
+
+### Interweaving DLL dependencies (P2)
+
+For multi-DLL workflows, write handling must be dependency-aware:
+
+1. Build producer/consumer dependency graph (`returns_handle` -> `consumes_handle`)
+2. Schedule by dependency readiness (DAG), not naive round-robin
+3. Persist handles/tokens in shared typed context with lifetime rules
+4. Enforce open/use/close ordering with partial-failure rollback semantics
+5. Attribute write failures to dependency stage in diagnostics
+
+### Observability and quality gates (P1)
+
+Require per-session artifacts:
+
+| Metric | Why it matters |
+|---|---|
+| Sentinel histogram by function | Surfaces hot failure modes quickly |
+| Retry count by sentinel class | Detects probe thrashing |
+| Structured stop reason (`success`, `policy_exhausted`, `dependency_missing`, `schema_missing`) | Makes failures actionable |
+| Confidence and source per sentinel meaning | Prevents silent bad mappings |
+| Drift detector across sessions | Flags inconsistent meaning for same code/function |
+
+Release gate for sentinel-table updates:
+- No promotion of new sentinel meaning to DLL-level default unless observed in >=2 sessions or confirmed by user/static evidence.
+- Function-level override may be promoted earlier, but must remain low confidence until cross-session confirmation.
+
+### Implementation phases
+
+| Phase | Scope | Effort | Exit criteria |
+|---|---|---|---|
+| S1 | Deterministic sentinel pre-classifier + confidence + evidence refs | ~1 day | Every probe result gets `classification.format`, `classification.confidence`, `classification.source` |
+| S2 | Write triage policy engine (`requires_*`, constraints, bounded retries) | ~1-2 days | Write functions stop thrashing; every failed write has structured stop reason |
+| S3 | Sentinel catalog versioning (DLL default + function override) | ~1 day | Meanings are versioned and conflict-aware; no global hardcode without evidence |
+| S4 | Multi-DLL dependency-aware write orchestration | ~2-3 days | Handles/tokens tracked; dependency-stage attribution in diagnostics |
+
+### MVP acceptance criteria
+
+1. Any write-heavy function either succeeds under policy or exits with a deterministic, structured failure reason in <= configured retry budget.
+2. No function can consume unbounded explore calls due to sentinel loops.
+3. Sentinel meanings are explainable from stored evidence (trace/static/user), not only model narration.
+4. Cross-DLL runs can attribute write failures to missing dependency state versus bad function args.

@@ -292,5 +292,117 @@
         "gap_resolution":  null,
         "function_status":  null,
         "saved_at":  "2026-03-19T18:29:44.5077239-04:00"
+    },
+    {
+        "date":  "2026-03-19",
+        "commit":  "32ccf0e",
+        "commit_msg":  "feat: raise EXPLORE_MAX_ROUNDS 3-\u003e5 (5 LLM turns per fn, 15 DLL call hard cap)",
+        "job_id":  "cfd26cf5",
+        "component":  "contoso_cs",
+        "note":  "manual-insert",
+        "folder":  "cfd26cf5_manual_insert",
+        "finding_counts":  {
+                               "success":  11,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  26
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  44,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  21,
+                                               "explore":  22,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  13,
+                                                         "avg":  3.4,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ]
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  23,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  5,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFD":  "not initialized",
+                                                      "0xFFFFFFFC":  "account locked or suspended",
+                                                      "0xFFFFFFFB":  "write operation denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "pending_refinement",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "pending_refinement",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-19T19:38:56.1459039-04:00"
     }
 ]
