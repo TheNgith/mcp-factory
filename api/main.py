@@ -753,6 +753,13 @@ async def session_snapshot(job_id: str):
         except Exception:
             pass  # not yet generated — silently omit
 
+        # ── Sentinel evidence catalog (S1 classifications + confidence) ─
+        try:
+            zf.writestr("sentinel_catalog.json",
+                        _download_blob(ARTIFACT_CONTAINER, f"{job_id}/sentinel_catalog.json"))
+        except Exception:
+            pass  # not yet generated — silently omit
+
         # ── Gap resolution log (mini-session outcomes per function) ─────
         try:
             zf.writestr("gap_resolution_log.json",

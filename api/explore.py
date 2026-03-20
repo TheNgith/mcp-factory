@@ -18,6 +18,7 @@ import os as _os
 import re as _re
 import threading as _threading
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor as _TPE
 from typing import Any
 
@@ -36,8 +37,186 @@ from api.explore_vocab import (
 from api.explore_prompts import (
     _build_explore_system_message, _generate_behavioral_spec, _synthesize, _generate_confidence_gaps,
 )
+from api.sentinel_codes import classify_common_result_code
 
 logger = logging.getLogger("mcp_factory.api")
+
+_WRITE_FN_RE = _re.compile(r"(pay|refund|redeem|unlock|process|write|commit|transfer|debit|credit)", _re.I)
+
+_WRITE_POLICY_RULES: dict[str, dict] = {
+    "CS_ProcessPayment": {
+        "required_any": ["customer_id", "order_id", "account_id", "param_1"],
+        "amount_keys": ["amount_cents", "amount", "param_2", "param_3"],
+    },
+    "CS_ProcessRefund": {
+        "required_any": ["customer_id", "order_id", "account_id", "param_1"],
+        "amount_keys": ["amount_cents", "amount", "param_2", "param_3"],
+    },
+    "CS_RedeemLoyaltyPoints": {
+        "required_any": ["customer_id", "account_id", "param_1"],
+        "amount_keys": ["points", "amount", "param_2"],
+    },
+    "CS_UnlockAccount": {
+        "required_any": ["customer_id", "account_id", "param_1"],
+        "amount_keys": [],
+    },
+}
+
+_WRITE_RETRY_BUDGET_BY_CLASS: dict[str, int] = {
+    "write_denied": 2,
+    "not_initialized": 2,
+    "account_locked": 1,
+    "invalid_input": 2,
+    "unknown": 1,
+}
+
+
+def _parse_id_format_pattern(pattern: str) -> str:
+    out = []
+    for ch in str(pattern):
+        if ch == "N":
+            out.append(r"\d")
+        elif ch == "A":
+            out.append(r"[A-Z]")
+        elif ch == "X":
+            out.append(r"[A-Z0-9]")
+        elif ch == "*":
+            out.append(r"[A-Z0-9_-]+")
+        elif ch in "-_":
+            out.append(_re.escape(ch))
+        else:
+            out.append(_re.escape(ch))
+    return "^" + "".join(out) + "$"
+
+
+def _classify_result_text(result_text: str) -> dict:
+    m = _re.search(r"Returned:\s*(-?\d+)", result_text or "")
+    if not m:
+        return {
+            "has_return": False,
+            "format_guess": "no_return_detected",
+            "confidence": 0.0,
+            "source": "none",
+        }
+    signed = int(m.group(1))
+    unsigned = signed & 0xFFFFFFFF
+    meaning = classify_common_result_code(unsigned)
+
+    if signed == 0:
+        fmt = "bool_style_success"
+        conf = 1.0
+        src = "deterministic.zero"
+    elif meaning:
+        if meaning.startswith("HRESULT") or meaning.startswith("HRESULT_FROM_WIN32"):
+            fmt = "hresult_like"
+            conf = 0.98
+            src = "deterministic.common_hresult"
+        elif meaning.startswith("NTSTATUS"):
+            fmt = "ntstatus_like"
+            conf = 0.98
+            src = "deterministic.common_ntstatus"
+        elif meaning.startswith("Win32"):
+            fmt = "win32_error"
+            conf = 0.95
+            src = "deterministic.common_win32"
+        elif "-like" in meaning:
+            fmt = "high_bit_failure_family"
+            conf = 0.75
+            src = "heuristic.high_bit_family"
+        else:
+            fmt = "custom_signed_negative"
+            conf = 0.9
+            src = "deterministic.default_sentinel"
+    elif signed < 0:
+        fmt = "custom_signed_negative"
+        conf = 0.7
+        src = "heuristic.signed_negative"
+    elif unsigned >= 0x80000000:
+        fmt = "high_bit_unknown"
+        conf = 0.45
+        src = "heuristic.high_bit"
+    elif signed > 0:
+        fmt = "custom_positive_status_or_data"
+        conf = 0.65
+        src = "heuristic.custom_positive"
+    else:
+        fmt = "domain_or_non_sentinel"
+        conf = 0.3
+        src = "heuristic.low_value"
+
+    return {
+        "has_return": True,
+        "signed": signed,
+        "unsigned": unsigned,
+        "hex": f"0x{unsigned:08X}",
+        "format_guess": fmt,
+        "confidence": conf,
+        "source": src,
+        "meaning": meaning,
+    }
+
+
+def _sentinel_class_from_classification(classification: dict) -> str:
+    meaning = (classification.get("meaning") or "").lower()
+    if "write" in meaning and "denied" in meaning:
+        return "write_denied"
+    if "not initialized" in meaning:
+        return "not_initialized"
+    if "locked" in meaning:
+        return "account_locked"
+    if "invalid" in meaning or "not found" in meaning or "null" in meaning:
+        return "invalid_input"
+    return "unknown"
+
+
+def _write_policy_precheck(
+    fn_name: str,
+    args: dict,
+    vocab: dict,
+    unlock_result: dict | None,
+) -> tuple[bool, str | None, str | None]:
+    if not _WRITE_FN_RE.search(fn_name):
+        return True, None, None
+
+    if unlock_result is not None and not unlock_result.get("unlocked"):
+        return False, "dependency_missing", "write path requires initialization/unlock sequence"
+
+    rule = _WRITE_POLICY_RULES.get(fn_name, {})
+    required_any = rule.get("required_any", [])
+    if required_any and not any(k in args and str(args.get(k, "")).strip() for k in required_any):
+        return False, "schema_missing", "missing required ID/account argument for write function"
+
+    amount_keys = set(rule.get("amount_keys", []))
+    if not amount_keys:
+        amount_keys = {k for k in args if _re.search(r"amount|points|cents|value", k, _re.I)}
+    for k in amount_keys:
+        if k not in args:
+            continue
+        try:
+            v = int(args[k])
+        except (ValueError, TypeError):
+            return False, "schema_missing", f"{k} must be numeric"
+        if v <= 0 or v > 1_000_000_000:
+            return False, "policy_exhausted", f"{k}={v} outside bounded write-policy range"
+
+    id_patterns = [str(x) for x in (vocab.get("id_formats") or []) if x]
+    id_like_args = {
+        k: str(v) for k, v in args.items()
+        if v is not None and _re.search(r"id|account|order|customer", k, _re.I)
+    }
+    if id_patterns and id_like_args:
+        compiled = []
+        for p in id_patterns:
+            try:
+                compiled.append(_re.compile(_parse_id_format_pattern(p), _re.I))
+            except Exception:
+                continue
+        if compiled:
+            for k, v in id_like_args.items():
+                if not any(rx.match(v) for rx in compiled):
+                    return False, "policy_exhausted", f"{k}='{v}' failed ID format normalization"
+
+    return True, None, None
 
 
 def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
@@ -231,13 +410,13 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             # Windows bridge VM path that doesn't exist on the Linux API container.
             if _data is None:
                 try:
-                    from api.storage import _download_blob
+                    from api.storage import _download_blob as _dl_blob
                     from api.config import UPLOAD_CONTAINER
                     # The upload worker stores the file as {job_id}/input<suffix>
                     # Try common DLL/EXE extensions, then any blob starting with input
                     for _ext in (".dll", ".exe", ".bin", ""):
                         try:
-                            _data = _download_blob(UPLOAD_CONTAINER, f"{job_id}/input{_ext}")
+                            _data = _dl_blob(UPLOAD_CONTAINER, f"{job_id}/input{_ext}")
                             break
                         except Exception:
                             pass
@@ -295,6 +474,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
         # Phase 1: write-unlock probe — mirror of run_local.py --write-probe logic
         write_unlock_block = ""
+        unlock_result: dict = {"unlocked": False, "sequence": [], "notes": "not attempted"}
         try:
             logger.info("[%s] explore_worker: phase1 write-unlock probe…", job_id)
             _set_explore_status(job_id, 0, total, "Testing write-mode unlock…")
@@ -328,9 +508,11 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         _CONCURRENCY = int(_os.getenv("EXPLORE_CONCURRENCY", "1"))
         _lock = _threading.Lock()
         _state = {"explored": explored}
+        _sentinel_catalog: dict[str, dict] = {}
 
         def _explore_one(inv: dict) -> None:
             fn_name = inv["name"]
+            _vocab_snap = dict(vocab)
 
             # Skip functions already documented in a previous session (thread-safe)
             _skip = False
@@ -338,8 +520,6 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 if fn_name in already_explored:
                     _state["explored"] += 1
                     _skip = True
-                else:
-                    _vocab_snap = dict(vocab)
             if _skip:
                 _set_explore_status(job_id, _state["explored"], total, f"Skipped {fn_name} (already documented)")
                 return
@@ -350,9 +530,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             # Build a focused conversation just for this function
             prior = _load_findings(job_id)
             sys_msg = _build_explore_system_message(invocables, prior, sentinels=sentinels, vocab=_vocab_snap, use_cases=_use_cases_text)
-            _is_write_fn = bool(_re.search(
-                r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", fn_name, _re.I
-            ))
+            _is_write_fn = bool(_WRITE_FN_RE.search(fn_name))
             conversation = [
                 sys_msg,
                 {
@@ -376,6 +554,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             _fn_probe_log: list[dict] = []  # accumulate probe entries for explore_probe_log.json
             _fn_tool_call_count = 0  # hard cap on tool calls per function
             _finding_recorded = False  # track whether LLM called record_finding
+            _policy_stop_reason: str | None = None
+            _policy_events: list[dict] = []
+            _write_retry_counts: dict[str, int] = defaultdict(int)
 
             for _round in range(_MAX_EXPLORE_ROUNDS_PER_FUNCTION):
                 if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
@@ -431,10 +612,73 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         tc_args = {}
 
                     tc_inv = inv_map.get(tc_name)
+                    classification = {
+                        "has_return": False,
+                        "format_guess": "not_executed",
+                        "confidence": 0.0,
+                        "source": "none",
+                    }
+                    _policy_block: dict | None = None
+
+                    if _is_write_fn and tc_name == fn_name:
+                        _ok, _reason, _detail = _write_policy_precheck(
+                            fn_name, tc_args, _vocab_snap, unlock_result,
+                        )
+                        if not _ok:
+                            _policy_stop_reason = _reason or "policy_exhausted"
+                            _policy_block = {
+                                "allowed": False,
+                                "stop_reason": _policy_stop_reason,
+                                "detail": _detail,
+                            }
+                            _policy_events.append(_policy_block)
+
                     if tc_inv is not None:
                         try:
-                            _tc_traced = _execute_tool_traced(tc_inv, tc_args)
-                            tool_result = _tc_traced["result_str"]
+                            if _policy_block:
+                                _tc_traced = {"result_str": "", "trace": {"backend": "policy", "blocked": True}}
+                                tool_result = (
+                                    f"Policy blocked write probe: {_policy_block['stop_reason']}"
+                                    f" ({_policy_block.get('detail') or 'no additional detail'})"
+                                )
+                            else:
+                                _tc_traced = _execute_tool_traced(tc_inv, tc_args)
+                                tool_result = _tc_traced["result_str"]
+
+                            classification = _classify_result_text(str(tool_result))
+
+                            if _is_write_fn and tc_name == fn_name and classification.get("has_return"):
+                                _ret_signed = int(classification.get("signed", 0))
+                                if _ret_signed != 0:
+                                    _cls = _sentinel_class_from_classification(classification)
+                                    _write_retry_counts[_cls] += 1
+                                    _budget = _WRITE_RETRY_BUDGET_BY_CLASS.get(_cls, _WRITE_RETRY_BUDGET_BY_CLASS["unknown"])
+                                    if _write_retry_counts[_cls] > _budget:
+                                        _policy_stop_reason = "policy_exhausted"
+                                        _pe = {
+                                            "allowed": False,
+                                            "stop_reason": _policy_stop_reason,
+                                            "detail": (
+                                                f"retry budget exceeded for class={_cls} "
+                                                f"({_write_retry_counts[_cls]}/{_budget})"
+                                            ),
+                                            "sentinel_class": _cls,
+                                        }
+                                        _policy_events.append(_pe)
+
+                            _llm_result = tool_result
+                            if classification.get("has_return"):
+                                _llm_result += (
+                                    "\n[CLASSIFICATION] "
+                                    f"format={classification.get('format_guess')} "
+                                    f"confidence={classification.get('confidence')} "
+                                    f"source={classification.get('source')} "
+                                    f"signed={classification.get('signed')} "
+                                    f"unsigned={classification.get('unsigned')} "
+                                    f"hex={classification.get('hex')} "
+                                    f"meaning={classification.get('meaning') or 'unknown'}"
+                                )
+
                             _fn_probe_log.append({
                                 "phase": "explore",
                                 "function": fn_name,
@@ -444,11 +688,45 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 "args": tc_args,
                                 "result_excerpt": str(tool_result)[:200],
                                 "trace": _tc_traced.get("trace"),
+                                "classification": classification,
+                                "policy": _policy_block,
                             })
+
+                            if classification.get("has_return") and classification.get("signed", 0) != 0:
+                                _hex = str(classification.get("hex"))
+                                _arg_shape = sorted(list(tc_args.keys()))
+                                with _lock:
+                                    _cat = _sentinel_catalog.setdefault(_hex, {
+                                        "hex": _hex,
+                                        "unsigned": classification.get("unsigned"),
+                                        "format_guess": classification.get("format_guess"),
+                                        "confidence": classification.get("confidence"),
+                                        "source": classification.get("source"),
+                                        "meaning": classification.get("meaning") or "unknown",
+                                        "evidence_count": 0,
+                                        "functions": [],
+                                        "arg_shapes": [],
+                                        "phases": [],
+                                        "provisional": True,
+                                    })
+                                    _cat["evidence_count"] = int(_cat.get("evidence_count", 0)) + 1
+                                    if fn_name not in _cat["functions"]:
+                                        _cat["functions"].append(fn_name)
+                                    _shape_s = ",".join(_arg_shape)
+                                    if _shape_s not in _cat["arg_shapes"]:
+                                        _cat["arg_shapes"].append(_shape_s)
+                                    if "explore" not in _cat["phases"]:
+                                        _cat["phases"].append("explore")
+                                    _cat["provisional"] = not (
+                                        float(classification.get("confidence") or 0.0) >= 0.9
+                                        and int(_cat["evidence_count"]) >= 2
+                                    )
                         except Exception as exc:
                             tool_result = f"Tool error: {exc}"
+                            _llm_result = tool_result
                     else:
                         tool_result = f"Tool '{tc_name}' not found."
+                        _llm_result = tool_result
 
                     _fn_tool_call_count += 1
 
@@ -460,7 +738,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
                     # Ground-truth tracking: record direct observations of return=0
                     if tc_name == fn_name:
-                        _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
+                        _ret_m = _re.search(r"Returned:\s*(-?\d+)", tool_result or "")
                         if _ret_m and int(_ret_m.group(1)) == 0:
                             _out_bases = frozenset({
                                 "undefined", "undefined2", "undefined4", "undefined8",
@@ -485,12 +763,20 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     conversation.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": tool_result,
+                        "content": _llm_result,
                     })
+
+                    if _policy_stop_reason in {"policy_exhausted", "dependency_missing", "schema_missing"}:
+                        break
 
                     # Break out of tool-call processing if we hit the per-function cap
                     if _fn_tool_call_count >= _MAX_TOOL_CALLS_PER_FUNCTION:
                         break
+
+                if _policy_stop_reason in {"policy_exhausted", "dependency_missing", "schema_missing"}:
+                    logger.info("[%s] explore_worker: %s stopped by write policy (%s)",
+                                job_id, fn_name, _policy_stop_reason)
+                    break
 
             # ── Force record_finding if the LLM never called it ──────────────
             if not _finding_recorded and not _observed_successes:
@@ -505,14 +791,19 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                             _seen_codes.add(hex(_rv) if _rv > 0xFFFFFFF0 else str(_rv))
                 _code_str = ", ".join(sorted(_seen_codes)) or "unknown"
                 try:
+                    _policy_note = (
+                        f" Stop reason: {_policy_stop_reason}." if _policy_stop_reason else ""
+                    )
                     _save_finding(job_id, {
                         "function": fn_name,
                         "status": "error",
                         "finding": f"All {_fn_tool_call_count} probes returned sentinel codes: {_code_str}. "
-                                   f"No working call found.",
+                                   f"No working call found.{_policy_note}",
                         "working_call": None,
                         "notes": f"Auto-recorded: LLM exhausted {_fn_tool_call_count} tool calls "
                                  f"without calling record_finding.",
+                        "stop_reason": _policy_stop_reason,
+                        "write_policy_events": _policy_events,
                     })
                     _finding_recorded = True
                     logger.info("[%s] explore_worker: forced record_finding(error) for %s — codes: %s",
@@ -575,6 +866,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     _patch_finding(job_id, fn_name, {
                         "working_call": _observed_successes[0],
                         "status": "success",
+                        "stop_reason": "success",
                     })
                     logger.info(
                         "[%s] explore_worker: ground-truth override for %s working_call=%s",
@@ -592,6 +884,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         try:
                             _vt = _execute_tool_traced(_vi, _ff["working_call"])
                             _vr = _vt["result_str"]
+                            _vr_class = _classify_result_text(str(_vr))
                             _fn_probe_log.append({
                                 "phase": "verify",
                                 "function": fn_name,
@@ -599,15 +892,22 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                                 "args": _ff["working_call"],
                                 "result_excerpt": str(_vr)[:200],
                                 "trace": _vt.get("trace"),
+                                "classification": _vr_class,
+                                "policy": None,
                             })
-                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                            _vm = _re.search(r"Returned:\s*(-?\d+)", _vr or "")
                             if _vm:
-                                _vret = int(_vm.group(1))
+                                _vret = int(_vm.group(1)) & 0xFFFFFFFF
                                 if _vret not in sentinels and _vret <= 0xFFFFFFF0:
-                                    _patch_finding(job_id, fn_name, {"status": "success"})
+                                    _patch_finding(job_id, fn_name, {
+                                        "status": "success",
+                                        "stop_reason": "success",
+                                    })
                                 else:
                                     _patch_finding(job_id, fn_name, {
-                                        "working_call": None, "status": "error",
+                                        "working_call": None,
+                                        "status": "error",
+                                        "stop_reason": _policy_stop_reason or "policy_exhausted",
                                     })
                                     logger.info(
                                         "[%s] explore_worker: discarded hallucinated working_call for %s",
@@ -641,6 +941,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         _cv_inv = inv_map[_cv["function"]]
                         _cvt = _execute_tool_traced(_cv_inv, _cv.get("args") or {})
                         _cv_result = _cvt["result_str"]
+                        _cv_class = _classify_result_text(str(_cv_result))
                         _fn_probe_log.append({
                             "phase": "cross_validate",
                             "function": fn_name,
@@ -648,6 +949,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                             "args": _cv.get("args") or {},
                             "result_excerpt": str(_cv_result)[:200],
                             "trace": _cvt.get("trace"),
+                            "classification": _cv_class,
+                            "policy": None,
                         })
                         _patch_finding(
                             job_id, fn_name,
@@ -709,6 +1012,38 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         else:
             for inv in invocables:
                 _explore_one(inv)
+
+        # Persist S1 sentinel evidence catalog for save-session diagnostics.
+        try:
+            _promoted = 0
+            vocab.setdefault("error_codes", {})
+            for _hex, _row in _sentinel_catalog.items():
+                _conf = float(_row.get("confidence") or 0.0)
+                _evi = int(_row.get("evidence_count") or 0)
+                _meaning = str(_row.get("meaning") or "unknown")
+                if _conf >= 0.9 and _evi >= 2 and _meaning and _meaning != "unknown":
+                    vocab["error_codes"].setdefault(_hex, _meaning)
+                    _row["provisional"] = False
+                    _promoted += 1
+
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{job_id}/sentinel_catalog.json",
+                json.dumps({
+                    "codes": _sentinel_catalog,
+                    "promoted_count": _promoted,
+                    "total_codes": len(_sentinel_catalog),
+                }, indent=2).encode(),
+            )
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{job_id}/vocab.json",
+                json.dumps(vocab).encode(),
+            )
+            logger.info("[%s] explore_worker: sentinel_catalog persisted (%d codes, %d promoted)",
+                        job_id, len(_sentinel_catalog), _promoted)
+        except Exception as _sce:
+            logger.debug("[%s] explore_worker: sentinel_catalog persist failed: %s", job_id, _sce)
 
         explored = _state["explored"]
 

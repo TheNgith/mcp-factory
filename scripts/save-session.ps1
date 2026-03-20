@@ -562,6 +562,31 @@ if (Test-Path $sentCalibPath) {
     } catch { Write-Host "  sentinel_calibration.json skipped" -ForegroundColor DarkYellow }
 }
 
+# ── 12.92. sentinel_catalog.json (S1 evidence + confidence gating) ─────────
+$sentCatalogPath    = Join-Path $sessionDir "sentinel_catalog.json"
+$sentCatalogSummary = $null
+if (Test-Path $sentCatalogPath) {
+    try {
+        $scat = Get-Content $sentCatalogPath -Raw | ConvertFrom-Json
+        $codesObj = if ($scat.codes) { $scat.codes } else { @{} }
+        $codes = @($codesObj.PSObject.Properties)
+        $provisional = @($codes | Where-Object { $_.Value.provisional -eq $true }).Count
+        $promoted = if ($scat.promoted_count -ne $null) { [int]$scat.promoted_count } else { ($codes.Count - $provisional) }
+        $topEvidence = @($codes | Sort-Object { [int]$_.Value.evidence_count } -Descending | Select-Object -First 5 |
+            ForEach-Object { "$($_.Name) x$([int]$_.Value.evidence_count) ($($_.Value.format_guess))" })
+        $sentCatalogSummary = [PSCustomObject]@{
+            total_codes      = $codes.Count
+            promoted_codes   = $promoted
+            provisional_codes = $provisional
+            top_evidence     = $topEvidence
+        }
+        $scColor = if ($provisional -gt 0) { "Yellow" } else { "Green" }
+        Write-Host ("  sentinel_catalog.json: $($codes.Count) codes, $promoted promoted, $provisional provisional") -ForegroundColor $scColor
+    } catch {
+        Write-Host "  sentinel_catalog.json skipped" -ForegroundColor DarkYellow
+    }
+}
+
 # ── 12.95. gap_resolution_log.json (mini-session per-gap outcomes) ────────────
 $gapResPath    = Join-Path $sessionDir "gap_resolution_log.json"
 $gapResSummary = $null
@@ -578,6 +603,23 @@ if (Test-Path $gapResPath) {
         $grColor = if ($grUnresolved -gt 0) { "Yellow" } else { "Green" }
         Write-Host ("  gap_resolution_log.json: $grResolved resolved / $grUnresolved unresolved") -ForegroundColor $grColor
     } catch { Write-Host "  gap_resolution_log.json skipped" -ForegroundColor DarkYellow }
+}
+
+# ── 12.97. Consolidated S1/S2 diagnostics artifact ─────────────────────────
+try {
+    $s1s2 = [PSCustomObject]@{
+        generated_at         = (Get-Date -Format "o")
+        probe_summary        = $probeSummary
+        sentinel_calibration = $sentCalibSummary
+        sentinel_catalog     = $sentCatalogSummary
+        executor_trace       = $execTraceSummary
+        gap_resolution       = $gapResSummary
+        diagnosis            = $diagOut
+    }
+    $s1s2 | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $sessionDir "s1_s2_diagnostics.json") -Encoding UTF8
+    Write-Host "  Wrote s1_s2_diagnostics.json" -ForegroundColor Green
+} catch {
+    Write-Host "  s1_s2_diagnostics.json skipped" -ForegroundColor DarkYellow
 }
 
 # ── 13. SUMMARY.md — DEPRECATED ──────────────────────────────────────────────

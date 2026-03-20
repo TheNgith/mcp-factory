@@ -13,6 +13,7 @@ import re as _re
 from collections import defaultdict
 
 from api.executor import _execute_tool, _execute_tool_traced
+from api.sentinel_codes import SENTINEL_DEFAULTS, classify_common_result_code
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -26,13 +27,7 @@ _MAX_EXPLORE_ROUNDS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_ROUNDS", "5"))
 _MAX_TOOL_CALLS_PER_FUNCTION = int(_os.getenv("EXPLORE_MAX_TOOL_CALLS", "15"))
 _MAX_FUNCTIONS_PER_SESSION = int(_os.getenv("EXPLORE_MAX_FUNCTIONS", "50"))
 
-_SENTINEL_DEFAULTS: dict[int, str] = {
-    0xFFFFFFFF: "not found / invalid input",
-    0xFFFFFFFE: "null argument",
-    0xFFFFFFFD: "not initialized",
-    0xFFFFFFFC: "account locked or suspended",
-    0xFFFFFFFB: "write operation denied",
-}
+_SENTINEL_DEFAULTS = SENTINEL_DEFAULTS
 
 
 def _calibrate_sentinels(
@@ -81,9 +76,21 @@ def _calibrate_sentinels(
     if not candidates:
         return _SENTINEL_DEFAULTS
 
+    resolved: dict[int, str] = {}
+    unresolved: dict[int, list[str]] = {}
+    for _v, _fns in candidates.items():
+        _meaning = classify_common_result_code(_v)
+        if _meaning:
+            resolved[_v] = _meaning
+        else:
+            unresolved[_v] = _fns
+
+    if not unresolved:
+        return resolved or _SENTINEL_DEFAULTS
+
     cand_lines = "\n".join(
         f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
-        for v, fns in sorted(candidates.items(), reverse=True)
+        for v, fns in sorted(unresolved.items(), reverse=True)
     )
     prompt = (
         "Assign a SHORT plain-English meaning (3-8 words) to each of these "
@@ -108,10 +115,12 @@ def _calibrate_sentinels(
             except (ValueError, TypeError):
                 pass
         if result_map:
-            return result_map
+            merged = dict(resolved)
+            merged.update(result_map)
+            return merged
     except Exception as exc:
         logger.debug("[explore] sentinel calibration LLM call failed: %s", exc)
-    return _SENTINEL_DEFAULTS
+    return resolved or _SENTINEL_DEFAULTS
 
 
 def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:

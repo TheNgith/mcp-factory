@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from api.config import IS_WINDOWS, GUI_BRIDGE_URL, GUI_BRIDGE_SECRET
+from api.sentinel_codes import classify_common_result_code
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -246,6 +247,8 @@ def _execute_dll(inv: dict, execution: dict, args: dict, extra_sentinels: dict |
                     pass
         _r32 = result & 0xFFFFFFFF
         _note = _SENTINEL_NOTES.get(_r32, "")
+        if not _note:
+            _note = classify_common_result_code(_r32) or ""
         # When ctypes uses a signed restype (c_int, c_long) and the DLL returns
         # e.g. 0xFFFFFFFC, Python reports -4.  Show the hex form so the model
         # can match against hex vocab entries like error_codes["0xFFFFFFFC"].
