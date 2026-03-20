@@ -66,7 +66,7 @@ logger = logging.getLogger("gui_bridge")
 # A warm cache hit skips re-launching the same binary on repeated uploads,
 # which matters most for UWP stubs that require a full cold-start window wait.
 _ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
-_ANALYSIS_CACHE_TTL = 3600  # seconds — 1 hour
+_ANALYSIS_CACHE_TTL = float("inf")  # indefinite — same binary never re-analyzed
 
 # ── Active analysis cancellation ─────────────────────────────────────────────
 # Only one analysis runs at a time.  When a new /analyze request arrives,
