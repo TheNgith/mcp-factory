@@ -112,32 +112,19 @@ Both containers scale to zero when idle (zero cost) and auto-scale on HTTP load.
 
 ---
 
-## Current Impediments
+## Current Challenges
 
-> **This is the primary blocker for demo readiness.**
+### Pipeline self-enrichment
 
-The explore engine — which automatically probes undocumented DLL functions to learn their behavior — has a **schema enrichment pipeline** with several data-flow bugs that were identified and fixed this week. These bugs caused the enriched parameter names and descriptions discovered by the LLM to be lost before they reached the final MCP schema.
+The explore engine probes each DLL function and learns parameter names, error codes, and calling patterns — but getting those results to reliably flow back into the final MCP schema has been the primary engineering challenge. Multiple data-flow bugs were identified and fixed (D-5 through D-11, all committed). The pipeline's multi-stage architecture means each stage must correctly read, enrich, and persist the invocable map for the next stage. See [Pipeline Cohesion](docs/PIPELINE-COHESION.md) for the full analysis.
 
-### Bug Summary (all fixed, awaiting verification run)
+### UI for iterative deployment
 
-| ID | Bug | Impact | Fix |
-|----|-----|--------|-----|
-| D-5 | Parameter semantic naming skipped on wholesale replacement path | Params kept raw Ghidra names (`param_1`, `param_2`) instead of learned names (`customer_id`, `balance`) | `790dd3a` |
-| D-8 | Deterministic fallback success went unrecorded | Functions that return 0 on success were marked as errors | `5310428` |
-| D-9 | Stale invocables snapshot | Backfill read a stale copy of the invocable map, overwriting enrichments | `5310428` |
-| D-10 | No direction inference on wholesale params | All params marked as required inputs, even output buffers | `5310428` |
-| D-11 | Ground-truth override didn't rewrite finding text | Synthesis read stale "all probes returned sentinel codes" text → concluded functions were undocumented → skipped enrichment | `82c29e8` |
+Tuning the explore engine requires rapid edit → deploy → run → inspect cycles. The current workflow (push to main → GitHub Actions → Azure Container Apps → start a job → wait → download session) is too slow for debugging probe quality. Building effective diagnostics controls into the UI and streamlining the feedback loop is an active focus. See [Roadmap](docs/ROADMAP.md) for planned UI work.
 
-### Net Effect
+### LLM variability
 
-In the last pipeline run (job `7af1301e`), the MCP schema **froze after the second checkpoint** — all subsequent enrichment was silently lost. The schema showed 7/13 functions succeeding, but 6 functions still had raw Ghidra decompiled descriptions like `"Recovered by Ghidra static analysis. Original C signature: undefined4 CS_GetOrderStatus(…)"` instead of meaningful descriptions.
-
-D-11 was the root cause of the freeze — the other bugs (D-8, D-9, D-10) were masked by it. All fixes are committed and pushed (`82c29e8`). **Next step: verify with a fresh pipeline run.**
-
-### Remaining Risk
-
-- **LLM variability** — probe quality varies run-to-run; the same function may get rich descriptions in one run and sparse descriptions in the next. *CSA Chad suggested using Azure AI Foundry's model comparison feature to evaluate prompt performance across models (GPT-4o vs GPT-4o mini etc.).*
-- **CS_GetVersion misclassification** — this function returns a version constant (`0x20301` = version 2.3.1), which the sentinel detector misclassifies as an error code. Needs special handling for constant-return functions.
+The same DLL function can get rich semantic descriptions in one run and sparse results in the next, because GPT-4o's probe strategy varies. Mitigations include deterministic fallback probes, minimum probe floors per function, and vocabulary accumulation across functions — but model variance remains an inherent challenge of LLM-driven reverse engineering.
 
 ---
 
@@ -267,21 +254,37 @@ Two containers auto-deployed on every push to `main` via GitHub Actions (OIDC, n
 cd aspire/AppHost && dotnet run   # requires .NET 8 SDK + Docker Desktop
 ```
 
-## Documentation
+## Key Documents
 
 | Document | Description |
 |----------|-------------|
-| [Workflow](docs/WORKFLOW.md) | Pipeline architecture and data flow (with flowchart) |
-| [Architecture](docs/architecture.md) | Azure infrastructure and component diagram |
-| [Pipeline Cohesion](docs/PIPELINE-COHESION.md) | Schema enrichment analysis (D-1 through D-11) |
-| [Diagnostic Checklist](docs/PIPELINE-DIAGNOSTIC-CHECKLIST.md) | Post-run verification checks |
-| [Session Script](docs/SESSION-SCRIPT-DIAGNOSTICS.md) | save-session.ps1 capabilities reference |
-| [MVP Thesis](docs/MVP-THESIS.md) | Minimum viable product scope and deliverables |
-| [Roadmap](docs/ROADMAP.md) | Priority-ordered work items and deferred enhancements |
-| [Schemas](docs/schemas/) | JSON schema contracts |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common setup issues and solutions |
-| [Project Description](docs/project_description.md) | Microsoft-sponsored capstone scope |
-| [Local Debug](docs/local-debug-workflow/) | Running Ghidra→LLM loop locally |
+| [MVP Thesis](docs/MVP-THESIS.md) | What the MVP is, who it's for, coverage expectations |
+| [Pipeline Cohesion](docs/PIPELINE-COHESION.md) | Inter-stage data flow analysis and bug resolution (D-1 → D-11) |
+| [Roadmap](docs/ROADMAP.md) | Priority-ordered work items — probe depth, UI, deliverables |
+| [Workflow](docs/WORKFLOW.md) | Pipeline architecture reference with data flow diagram |
+
+_Additional docs in `docs/`: [architecture](docs/architecture.md), [schemas](docs/schemas/), [troubleshooting](docs/TROUBLESHOOTING.md), [local debug workflow](docs/local-debug-workflow/), [project description](docs/project_description.md)_
+
+---
+
+## Project Requirements
+
+MCP Factory was built to satisfy the Microsoft-sponsored USF CSE Senior Design capstone. The table below maps each requirement to its implementation.
+
+| Requirement | Coverage |
+|-------------|----------|
+| **§1 — Definition of a binary** | 29 source types: PE DLL/EXE, COM/DCOM, RPC, JNDI, SOAP/WSDL, CORBA IDL, JSON-RPC, SQL, Python, PowerShell, JS/TS, Ruby, PHP, Batch, VBScript, .NET, PDB, OpenAPI, GUI (UIA), CLI, Registry |
+| **§2 — Specifying the target** | Upload binary via Web UI or `--target` CLI; free-text hints file for expected functions; supports individual files and installed-instance directories |
+| **§3 — Displaying invocable functions** | Discovery produces a uniform invocable list with confidence scoring (HIGH/MEDIUM/LOW); TUI and Web UI allow toggle/deselect before generation |
+| **§4 — Generating the MCP architecture** | `generate.py` emits OpenAI function-calling schema + `server.py` (stdio/HTTP); auto-deploys and connects to chat |
+| **§5 — Verifying the output** | Chat UI at `/api/chat` shows tool calls, arguments, and live execution results; downloadable session snapshots |
+| **§6a — Azure cloud resources** | Container Apps (pipeline + UI), Blob Storage, Key Vault, Azure OpenAI GPT-4o, Application Insights, Log Analytics — all in `mcp-factory-rg` |
+| **§6b — Microsoft tooling** | .NET Aspire local orchestration, VS Code + Copilot, GitHub + GitHub Actions CI/CD, GitHub Copilot MCP integration |
+| **§6c — Microsoft docs** | [Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/), [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/), [MCP spec](https://modelcontextprotocol.io/), [.NET Aspire](https://learn.microsoft.com/en-us/dotnet/aspire/) |
+| **§6d — Budget ≤ $150/month** | Both containers scale to zero when idle; Azure OpenAI pay-per-token; total ~$40-60/month active |
+| **§6e — FERPA compliance** | No student PII collected; synthetic test data only; see [compliance statement](#ferpa-compliance-statement) below |
+| **§6f — Access restricted** | Repo private to team; Azure resources restricted to project accounts; API key-gated |
+| **§7 — Communication** | Weekly sponsor meetings; Teams/email updates; work tracked in [Roadmap](docs/ROADMAP.md) |
 
 ---
 
