@@ -220,6 +220,16 @@ def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:
         for n in no_param_inits:
             r = _execute_tool(inv_map[n], {})
             tried.append(f"{n}() -> {r}")
+        # Test a write function right after no-param init
+        if _write_fn_names:
+            _wfn = _write_fn_names[0]
+            _wr  = _execute_tool(inv_map[_wfn], {})
+            _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
+            _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
+            if _ret not in _WRITE_SENTINELS and _ret == 0:
+                return {"unlocked": True,
+                        "sequence": [{"fn": n, "args": {}} for n in no_param_inits],
+                        "notes": f"unlocked with no-param init: {', '.join(no_param_inits)}"}
 
     # Try mode-based init
     for mode in (0, 1, 2, 4, 8, 16, 256, 512):

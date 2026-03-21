@@ -232,6 +232,15 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     logger.info("[%s] explore_worker: merged %d error codes from hints: %s",
                                 job_id, len(_hint_codes),
                                 {f"0x{k:08X}": v for k, v in _hint_codes.items()})
+                    # Re-save sentinel_calibration.json so snapshot includes hint codes
+                    try:
+                        _upload_to_blob(
+                            ARTIFACT_CONTAINER,
+                            f"{job_id}/sentinel_calibration.json",
+                            json.dumps({f"0x{k:08X}": v for k, v in sentinels.items()}, indent=2).encode(),
+                        )
+                    except Exception:
+                        pass
             # Persist use_cases into vocab so the chat phase sees it even after
             # vocab["notes"] may be overwritten by later vocabulary updates.
             if _use_cases_text and "user_context" not in vocab:
