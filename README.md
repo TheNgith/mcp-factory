@@ -251,8 +251,7 @@ mcp-factory/
 ├── tests/                      # Test fixtures for all source types
 │   └── fixtures/contoso_legacy/# contoso_cs.c source + build instructions
 ├── sessions/                   # Captured pipeline run snapshots
-│   └── misc/                   # Tracked workflow docs (ROADMAP, WORKFLOW, etc.)
-├── docs/                       # ADRs, architecture, schemas
+├── docs/                       # Architecture, pipeline docs, schemas, roadmap
 └── .github/workflows/          # CI/CD (OIDC, 4-job pipeline)
 ```
 
@@ -272,16 +271,17 @@ cd aspire/AppHost && dotnet run   # requires .NET 8 SDK + Docker Desktop
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](docs/architecture.md) | System design and component overview |
-| [Sections 2-3](docs/sections-2-3.md) | Binary discovery implementation (29 source types) |
-| [Product Flow](docs/product-flow.md) | Full pipeline walkthrough |
+| [Workflow](docs/WORKFLOW.md) | Pipeline architecture and data flow (with flowchart) |
+| [Architecture](docs/architecture.md) | Azure infrastructure and component diagram |
+| [Pipeline Cohesion](docs/PIPELINE-COHESION.md) | Schema enrichment analysis (D-1 through D-11) |
+| [Diagnostic Checklist](docs/PIPELINE-DIAGNOSTIC-CHECKLIST.md) | Post-run verification checks |
+| [Session Script](docs/SESSION-SCRIPT-DIAGNOSTICS.md) | save-session.ps1 capabilities reference |
+| [MVP Thesis](docs/MVP-THESIS.md) | Minimum viable product scope and deliverables |
+| [Roadmap](docs/ROADMAP.md) | Priority-ordered work items and deferred enhancements |
 | [Schemas](docs/schemas/) | JSON schema contracts |
-| [ADRs](docs/adr/) | Architecture decision records (8 ADRs) |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-| [Roadmap](sessions/misc/ROADMAP.md) | Priority-ordered work items and deferred enhancements |
-| [Workflow](sessions/misc/WORKFLOW.md) | Pipeline architecture and data flow (with flowchart) |
-| [Pipeline Cohesion](sessions/misc/PIPELINE-COHESION.md) | Schema enrichment disconnect analysis (D-1 through D-11) |
-| [MVP Thesis](sessions/misc/MVP-THESIS.md) | Minimum viable product scope checklist |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common setup issues and solutions |
+| [Project Description](docs/project_description.md) | Microsoft-sponsored capstone scope |
+| [Local Debug](docs/local-debug-workflow/) | Running Ghidra→LLM loop locally |
 
 ---
 

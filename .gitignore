@@ -55,8 +55,6 @@ sessions/
 !sessions/compare.ps1
 !sessions/contoso_cs/
 !sessions/contoso_cs/**
-!sessions/misc/
-!sessions/misc/**
 
 # Working/scratch documents not for version control
 docs/SECTIONS_2_3_GAP_ANALYSIS.md
