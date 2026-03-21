@@ -54,38 +54,7 @@ A bank deploys a customer-service AI agent. The agent needs to look up account b
                     └─────────────────────────────────────────────┘
 ```
 
-### Discovery Coverage (29 source types)
-
-| Category | Source Types |
-|----------|-------------|
-| Native PE | DLL/EXE exports (pefile), Ghidra decompilation |
-| .NET | Reflection-based method extraction |
-| COM / TLB | Registry CLSID scan, type library parsing |
-| CLI | Argument extraction from help output |
-| GUI | UIA control walk, menu enumeration (pywinauto) |
-| SQL | Stored procs, views, tables, triggers |
-| Scripting | Python, PowerShell, Shell, Batch, VBScript, Ruby, PHP |
-| JS/TS | JavaScript + TypeScript function extraction |
-| RPC | Interface scanning |
-| Legacy specs | OpenAPI, JSON-RPC, WSDL, CORBA IDL, JNDI, PDB symbols |
-
-All source types produce the **same uniform JSON schema** — a PE export, a Python function, and a SQL stored procedure look identical to the MCP generator.
-
-### Cloud Architecture
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Pipeline API | FastAPI on Azure Container Apps | Runs discovery, explore, generation |
-| Web UI | FastAPI on Azure Container Apps | Upload → Select → Generate → Chat wizard |
-| LLM | Azure OpenAI GPT-4o | Powers the explore engine + chat |
-| Storage | Azure Blob Storage | Per-job artifacts (schemas, findings, vocab) |
-| Secrets | Azure Key Vault | All secrets via Managed Identity — no env vars |
-| Monitoring | Application Insights | Custom telemetry spans + Azure Monitor Workbook |
-| CI/CD | GitHub Actions (OIDC) | Auto-deploy on push to main — no stored secrets |
-| Orchestration | .NET Aspire | Local multi-container dev (`dotnet run`) |
-| GUI Bridge | Self-hosted Windows runner VM | GUI/COM analysis in CI + production |
-
-Both containers scale to zero when idle (zero cost) and auto-scale on HTTP load.
+For a detailed breakdown of each stage, see [Explore Engine](docs/EXPLORE-ENGINE.md) and [Workflow](docs/WORKFLOW.md).
 
 ---
 
@@ -108,7 +77,19 @@ Both containers scale to zero when idle (zero cost) and auto-scale on HTTP load.
 |--------|------|--------|
 | `calc.exe` | WinUI3/MSIX | 55 invocables, live GUI control via chat |
 | `notepad.exe` | Win32 | Type, save, open, append — controlled by Copilot |
-| `contoso_cs.dll` | Custom DLL (no source) | 13 exports, 7/13 currently succeeding (see impediments) |
+| `contoso_cs.dll` | Custom DLL (no source) | 13 exports, 7/13 currently succeeding (see challenges below) |
+
+---
+
+## Key Documents
+
+| Document | Description |
+|----------|-------------|
+| [MVP Thesis](docs/MVP-THESIS.md) | What the MVP is, who it's for, coverage expectations |
+| [Pipeline Cohesion](docs/PIPELINE-COHESION.md) | Inter-stage data flow analysis and bug resolution (D-1 → D-11) |
+| [Roadmap](docs/ROADMAP.md) | Priority-ordered work items — probe depth, UI, deliverables |
+| [Workflow](docs/WORKFLOW.md) | Pipeline architecture reference with data flow diagram |
+| [Explore Engine](docs/EXPLORE-ENGINE.md) | Per-function probe strategy, configuration profiles, key source files |
 
 ---
 
@@ -124,7 +105,7 @@ Tuning the explore engine requires rapid edit → deploy → run → inspect cyc
 
 ### LLM variability
 
-The same DLL function can get rich semantic descriptions in one run and sparse results in the next, because GPT-4o's probe strategy varies. Mitigations include deterministic fallback probes, minimum probe floors per function, and vocabulary accumulation across functions — but model variance remains an inherent challenge of LLM-driven reverse engineering.
+The same DLL function can get rich semantic descriptions in one run and sparse results in the next, because GPT-4o's probe strategy varies. Mitigations include deterministic fallback probes, minimum probe floors per function, and vocabulary accumulation across functions — but model variance remains an inherent challenge of LLM-driven reverse engineering. **Next step:** evaluate prompt behavior across models (GPT-4o vs GPT-4o mini vs others) using [Azure AI Foundry model comparison](https://learn.microsoft.com/en-us/azure/ai-studio/).
 
 ---
 
@@ -186,29 +167,6 @@ Upload any DLL through the web UI at `mcp-factory-ui.icycoast-8ddfa278.eastus.az
 
 ---
 
-## Explore Engine Deep Dive
-
-The explore engine is the core differentiator — it's an LLM-driven autonomous agent that probes undocumented functions to learn their behavior without source code.
-
-**How it works per function:**
-1. **Sentinel calibration** — calls the function with known-bad inputs to establish baseline error codes
-2. **Boundary probing** — systematically varies parameters to find valid input patterns
-3. **Vocabulary learning** — accumulates domain knowledge (ID formats, error codes, value semantics) across functions
-4. **Finding recording** — saves successful call patterns with semantic descriptions
-5. **Deterministic fallback** — for simple init/getter functions, tries a zero-arg call pattern
-6. **Gap detection** — identifies functions that need clarification and generates targeted questions
-7. **Schema synthesis** — rewrites raw Ghidra parameter names (`param_1`) to semantic names (`customer_id`) based on probe evidence
-
-**Configuration profiles:**
-
-| Profile | Rounds | Tool Calls | Use Case |
-|---------|--------|-----------|----------|
-| dev | 3 | 5 | Fast iteration |
-| stabilize | 5 | 10 | Quality runs |
-| deploy | 8 | 15 | Production |
-
----
-
 ## Repository Structure
 
 ```
@@ -254,19 +212,6 @@ Two containers auto-deployed on every push to `main` via GitHub Actions (OIDC, n
 cd aspire/AppHost && dotnet run   # requires .NET 8 SDK + Docker Desktop
 ```
 
-## Key Documents
-
-| Document | Description |
-|----------|-------------|
-| [MVP Thesis](docs/MVP-THESIS.md) | What the MVP is, who it's for, coverage expectations |
-| [Pipeline Cohesion](docs/PIPELINE-COHESION.md) | Inter-stage data flow analysis and bug resolution (D-1 → D-11) |
-| [Roadmap](docs/ROADMAP.md) | Priority-ordered work items — probe depth, UI, deliverables |
-| [Workflow](docs/WORKFLOW.md) | Pipeline architecture reference with data flow diagram |
-
-_Additional docs in `docs/`: [architecture](docs/architecture.md), [schemas](docs/schemas/), [troubleshooting](docs/TROUBLESHOOTING.md), [local debug workflow](docs/local-debug-workflow/), [project description](docs/project_description.md)_
-
----
-
 ## Project Requirements
 
 MCP Factory was built to satisfy the Microsoft-sponsored USF CSE Senior Design capstone. The table below maps each requirement to its implementation.
@@ -285,6 +230,41 @@ MCP Factory was built to satisfy the Microsoft-sponsored USF CSE Senior Design c
 | **§6e — FERPA compliance** | No student PII collected; synthetic test data only; see [compliance statement](#ferpa-compliance-statement) below |
 | **§6f — Access restricted** | Repo private to team; Azure resources restricted to project accounts; API key-gated |
 | **§7 — Communication** | Weekly sponsor meetings; Teams/email updates; work tracked in [Roadmap](docs/ROADMAP.md) |
+
+---
+
+## Cloud Architecture
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| Pipeline API | FastAPI on Azure Container Apps | Runs discovery, explore, generation |
+| Web UI | FastAPI on Azure Container Apps | Upload → Select → Generate → Chat wizard |
+| LLM | Azure OpenAI GPT-4o | Powers the explore engine + chat |
+| Storage | Azure Blob Storage | Per-job artifacts (schemas, findings, vocab) |
+| Secrets | Azure Key Vault | All secrets via Managed Identity — no env vars |
+| Monitoring | Application Insights | Custom telemetry spans + Azure Monitor Workbook |
+| CI/CD | GitHub Actions (OIDC) | Auto-deploy on push to main — no stored secrets |
+| Orchestration | .NET Aspire | Local multi-container dev (`dotnet run`) |
+| GUI Bridge | Self-hosted Windows runner VM | GUI/COM analysis in CI + production |
+
+Both containers scale to zero when idle (zero cost) and auto-scale on HTTP load.
+
+## Discovery Coverage (29 source types)
+
+| Category | Source Types |
+|----------|-------------|
+| Native PE | DLL/EXE exports (pefile), Ghidra decompilation |
+| .NET | Reflection-based method extraction |
+| COM / TLB | Registry CLSID scan, type library parsing |
+| CLI | Argument extraction from help output |
+| GUI | UIA control walk, menu enumeration (pywinauto) |
+| SQL | Stored procs, views, tables, triggers |
+| Scripting | Python, PowerShell, Shell, Batch, VBScript, Ruby, PHP |
+| JS/TS | JavaScript + TypeScript function extraction |
+| RPC | Interface scanning |
+| Legacy specs | OpenAPI, JSON-RPC, WSDL, CORBA IDL, JNDI, PDB symbols |
+
+All source types produce the **same uniform JSON schema** — a PE export, a Python function, and a SQL stored procedure look identical to the MCP generator.
 
 ---
 
