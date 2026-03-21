@@ -297,6 +297,35 @@ def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
     return tool_schemas
 
 
+def _strip_output_buffer_params(tc_args: dict, p_lookup: dict) -> dict:
+    """Return *tc_args* with genuine output-buffer parameters removed.
+
+    FIX-1 invariant: only strip params whose Ghidra type is a pointer to a
+    numeric/undefined base type (e.g. ``int*``, ``undefined4*``).  Do NOT
+    strip params whose base type is ``byte`` or a text-like type — Ghidra
+    tags ``byte*`` as ``direction=out`` because it is a pointer, but such
+    params are commonly string *inputs* (customer_id, order_id, etc.).
+
+    READS:  tc_args   — {param_name: value} dict from tool call
+            p_lookup  — {param_name: invocable_param_dict}
+    WRITES: returns a new dict (never mutates tc_args or p_lookup)
+    INVARIANT: every non-output-buffer key from tc_args is present in result
+    """
+    _out_bases: frozenset[str] = frozenset({
+        "undefined", "undefined2", "undefined4", "undefined8",
+        "uint", "uint32_t", "int", "int32_t", "dword",
+        "ulong", "uint4", "uint8", "long", "ulong32",
+    })
+    result: dict = {}
+    for k, v in tc_args.items():
+        p = p_lookup.get(k, {})
+        pt = p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+        is_out_buffer = "*" in p.get("type", "") and pt in _out_bases
+        if not is_out_buffer:
+            result[k] = v
+    return result
+
+
 def _snapshot_schema_stage(job_id: str, stage_blob_name: str) -> None:
     """Copy current mcp_schema.json to a stage-specific blob for diffing."""
     try:

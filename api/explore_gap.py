@@ -12,6 +12,7 @@ from api.explore_helpers import (
     _build_tool_schemas,
     _set_explore_status,
     _snapshot_schema_stage,
+    _strip_output_buffer_params,
 )
 from api.explore_phases import _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _SENTINEL_DEFAULTS
 from api.explore_prompts import _build_explore_system_message, _generate_confidence_gaps
@@ -169,22 +170,9 @@ def _attempt_gap_resolution(
                 if tc_name == fn_name:
                     _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                     if _ret_m and int(_ret_m.group(1)) == 0:
-                        # FIX-1: Strip only genuine output buffers (pointer to numeric/undefined type).
-                        # Do NOT strip based on direction='out' alone — static analysis wrongly tags
-                        # byte* (string inputs) as direction=out because they are pointers.
-                        _out_bases = frozenset({
-                            "undefined", "undefined2", "undefined4", "undefined8",
-                            "uint", "uint32_t", "int", "int32_t", "dword",
-                            "ulong", "uint4", "uint8", "long", "ulong32",
-                        })
-                        _clean: dict = {}
-                        for _k, _v in tc_args.items():
-                            _p = _p_lookup.get(_k, {})
-                            _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
-                            _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                            if not _is_out:
-                                _clean[_k] = _v
-                        _observed_successes.append(_clean)
+                        _observed_successes.append(
+                            _strip_output_buffer_params(tc_args, _p_lookup)
+                        )
 
                 logger.info("[%s] gap_resolution: tool=%s result=%s", job_id, tc_name, str(tool_result)[:120])
                 conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
@@ -446,22 +434,9 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     if tc_name == fn_name:
                         _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                         if _ret_m and int(_ret_m.group(1)) == 0:
-                            # FIX-1: Strip only genuine output buffers (pointer to numeric/undefined type).
-                            # Do NOT strip based on direction='out' alone — static analysis wrongly tags
-                            # byte* (string inputs) as direction=out because they are pointers.
-                            _out_bases = frozenset({
-                                "undefined", "undefined2", "undefined4", "undefined8",
-                                "uint", "uint32_t", "int", "int32_t", "dword",
-                                "ulong", "uint4", "uint8", "long", "ulong32",
-                            })
-                            _clean: dict = {}
-                            for _k, _v in tc_args.items():
-                                _p = _p_lookup.get(_k, {})
-                                _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
-                                _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                                if not _is_out:
-                                    _clean[_k] = _v
-                            _observed_successes.append(_clean)
+                            _observed_successes.append(
+                                _strip_output_buffer_params(tc_args, _p_lookup)
+                            )
 
                     logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
                                 job_id, tc_name, str(tool_result)[:120])

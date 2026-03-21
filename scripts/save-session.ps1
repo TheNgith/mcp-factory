@@ -126,49 +126,63 @@ if ($OutDir) {
 Write-Host "  Folder : $sessionDir"
 Write-Host ""
 
-# ── 7.5. schema evolution summary (checkpoint presence + content diffs) ─────
-$schemaDir = Join-Path $sessionDir "schema"
-$schemaEvolution = $null
-if (Test-Path $schemaDir) {
-    try {
-        $schemaFiles = @(Get-ChildItem $schemaDir -File -Filter "*.json" | Sort-Object Name)
-        $checkpoints = @()
-        foreach ($sf in $schemaFiles) {
-            $checkpoints += [PSCustomObject]@{
-                name = $sf.Name
-                size_bytes = $sf.Length
-            }
-        }
+# ── Backward-compat path helpers (handle both old flat and new stage layouts) ─
+function Resolve-FindingsPath([string]$Dir) {
+    $new = Join-Path $Dir "stage-05-finalization\findings.json"
+    if (Test-Path $new) { return $new }
+    return Join-Path $Dir "artifacts\findings.json"
+}
+function Resolve-VocabPath([string]$Dir) {
+    $new = Join-Path $Dir "stage-05-finalization\vocab.json"
+    if (Test-Path $new) { return $new }
+    return Join-Path $Dir "artifacts\vocab.json"
+}
 
+# ── 7.5. schema evolution summary — collected from stage subfolders in pipeline order ─
+# New ZIP layout: each stage keeps schema-before.json / schema-after.json instead of
+# a flat schema/ folder with numbered files.  We enumerate them in pipeline order so
+# the checkpoint list and delta chain reflect the actual transformation sequence.
+$schemaEvolution = $null
+try {
+    # Ordered list of (stage-path, logical-name) pairs that represent schema state
+    $schemaManifest = @(
+        @{ rel = "stage-00-setup\schema.json";                      label = "00-setup" }
+        @{ rel = "stage-01-probe-loop\schema-before.json";          label = "01-probe-before" }
+        @{ rel = "stage-01-probe-loop\schema-after.json";           label = "01-probe-after" }
+        @{ rel = "stage-02-synthesis\schema-before.json";           label = "02-synthesis-before" }
+        @{ rel = "stage-02-synthesis\schema-after.json";            label = "02-synthesis-after" }
+        @{ rel = "stage-03-gap-resolution\schema-before.json";      label = "03-gap-before" }
+        @{ rel = "stage-03-gap-resolution\schema-after.json";       label = "03-gap-after" }
+        @{ rel = "stage-04-clarification\schema-before.json";       label = "04-clarify-before" }
+        @{ rel = "stage-04-clarification\schema-after.json";        label = "04-clarify-after" }
+    )
+    $schemaFiles = @()
+    foreach ($m in $schemaManifest) {
+        $full = Join-Path $sessionDir $m.rel
+        if (Test-Path $full) { $schemaFiles += [PSCustomObject]@{ FullName=$full; Name=$m.label; Length=(Get-Item $full).Length } }
+    }
+    if ($schemaFiles.Count -gt 0) {
+        $checkpoints = @($schemaFiles | ForEach-Object { [PSCustomObject]@{ name=$_.Name; size_bytes=$_.Length } })
         $deltas = @()
         for ($i = 0; $i -lt ($schemaFiles.Count - 1); $i++) {
-            $a = $schemaFiles[$i]
-            $b = $schemaFiles[$i + 1]
+            $a = $schemaFiles[$i]; $b = $schemaFiles[$i + 1]
             $aRaw = Get-Content $a.FullName -Raw
             $bRaw = Get-Content $b.FullName -Raw
             $changed = $aRaw -ne $bRaw
-            $deltas += [PSCustomObject]@{
-                from = $a.Name
-                to = $b.Name
-                changed = $changed
-                size_delta_bytes = ($b.Length - $a.Length)
-            }
+            $deltas += [PSCustomObject]@{ from=$a.Name; to=$b.Name; changed=$changed; size_delta_bytes=($b.Length - $a.Length) }
         }
-
-        $schemaEvolution = [PSCustomObject]@{
-            checkpoint_count = $schemaFiles.Count
-            checkpoints = $checkpoints
-            deltas = $deltas
-        }
+        $schemaEvolution = [PSCustomObject]@{ checkpoint_count=$schemaFiles.Count; checkpoints=$checkpoints; deltas=$deltas }
         $schemaEvolution | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $sessionDir "schema_evolution.json") -Encoding UTF8
         Write-Host ("  schema checkpoints: " + $schemaFiles.Count) -ForegroundColor Cyan
         foreach ($d in $deltas) {
             $col = if ($d.changed) { "Yellow" } else { "DarkGray" }
             Write-Host ("    " + $d.from + " -> " + $d.to + " changed=" + $d.changed + " size_delta=" + $d.size_delta_bytes) -ForegroundColor $col
         }
-    } catch {
-        Write-Host "  schema evolution summary skipped" -ForegroundColor DarkYellow
+    } else {
+        Write-Host "  schema evolution: no stage schema files found" -ForegroundColor DarkYellow
     }
+} catch {
+    Write-Host "  schema evolution summary skipped" -ForegroundColor DarkYellow
 }
 
 # ── 4-A. delta.md ────────────────────────────────────────────
@@ -179,12 +193,12 @@ $prevSession = Get-ChildItem $SessionsRoot -Directory -ErrorAction SilentlyConti
 
 if ($prevSession) {
     $prevFindings = @()
-    $prevFindPath = Join-Path $prevSession.FullName "artifacts\findings.json"
+    $prevFindPath = Resolve-FindingsPath $prevSession.FullName
     if (Test-Path $prevFindPath) {
         try { $prevFindings = @(Get-Content $prevFindPath -Raw | ConvertFrom-Json) } catch { }
     }
     $prevVocab = $null
-    $prevVocabPath = Join-Path $prevSession.FullName "artifacts\vocab.json"
+    $prevVocabPath = Resolve-VocabPath $prevSession.FullName
     if (Test-Path $prevVocabPath) {
         try { $prevVocab = Get-Content $prevVocabPath -Raw | ConvertFrom-Json } catch { }
     }
@@ -199,7 +213,7 @@ if ($prevSession) {
 
     # Findings changes
     $gainedFns = @(); $lostFns = @(); $unchangedFns = @()
-    $prevFindDir = Join-Path $sessionDir "artifacts\findings.json"
+    $prevFindDir = Resolve-FindingsPath $sessionDir
     $newFindings = @()
     if (Test-Path $prevFindDir) { try { $newFindings = @(Get-Content $prevFindDir -Raw | ConvertFrom-Json) } catch { } }
     $newFnStatus = @{}
@@ -274,7 +288,7 @@ Write-Host "  Wrote code-changes.md" -ForegroundColor Green
 $successCount = 0; $partialCount = 0; $failedCount = 0; $totalFindings = 0
 $workingBlock = "(none recorded)"
 $functionStatus = @{}   # fn_name -> latest status (Phase 5-A)
-$findPath = Join-Path $sessionDir "artifacts\findings.json"
+$findPath = Join-Path $sessionDir "stage-05-finalization\findings.json"
 if (Test-Path $findPath) {
     try {
         $findings = Get-Content $findPath -Raw | ConvertFrom-Json
@@ -302,7 +316,7 @@ if (Test-Path $findPath) {
 
 # ?? 11. Parse vocab.json ?????????????????????????????????????????????????????
 $knownIds = "(none recorded)"
-$vocabPath = Join-Path $sessionDir "artifacts\vocab.json"
+$vocabPath = Join-Path $sessionDir "stage-05-finalization\vocab.json"
 $vocab = $null   # kept in scope for vocab_coverage and SUMMARY
 if (Test-Path $vocabPath) {
     try {
@@ -314,7 +328,7 @@ if (Test-Path $vocabPath) {
 }
 # Phase 5-C: vocab completeness = fraction of params with a human semantic name
 $vocabCompleteness = $null
-$invMapPath = Join-Path $sessionDir "artifacts\invocables_map.json"
+$invMapPath = Join-Path $sessionDir "stage-05-finalization\invocables_map.json"
 $paramDescQuality = $null
 if (Test-Path $invMapPath) {
     try {
@@ -353,7 +367,7 @@ if (Test-Path $invMapPath) {
 # ── 11.5. vocab_coverage.json (Phase 2-A) ──────────────────────────────────
 # Check which vocab entries from vocab.json actually appear in model_context.txt
 $vocabCoverageScore = $null
-$contextPath = Join-Path $sessionDir "model_context.txt"
+$contextPath = Join-Path $sessionDir "diagnostics\model_context.txt"
 if ($null -ne $vocab -and (Test-Path $contextPath)) {
     try {
         $contextText = Get-Content $contextPath -Raw
@@ -391,7 +405,7 @@ if ($null -ne $vocab -and (Test-Path $contextPath)) {
 
 # ?? 12. Parse clarification-questions.md ????????????????????????????????????
 $gapCount = 0; $gapBlock = "(none)"
-$gapsPath = Join-Path $sessionDir "clarification-questions.md"
+$gapsPath = Join-Path $sessionDir "stage-04-clarification\clarification-questions.md"
 if (Test-Path $gapsPath) {
     $gt = Get-Content $gapsPath -Raw
     $gapCount = ([regex]::Matches($gt, '(?m)^##\s+')).Count
@@ -399,7 +413,7 @@ if (Test-Path $gapsPath) {
 }
 
 # ── 12.5. Pre-parse static_analysis.json (required before SUMMARY.md) ─────────────
-$staticAnalysisPath = Join-Path $sessionDir "static_analysis.json"
+$staticAnalysisPath = Join-Path $sessionDir "stage-00-setup\static_analysis.json"
 $staticVerification = $null; $staticVerdictStr = "n/a"
 if (Test-Path $staticAnalysisPath) {
     try {
@@ -448,7 +462,7 @@ if (Test-Path $staticAnalysisPath) {
 }
 
 # ── 12.6. Pre-parse executor_trace.json (required before SUMMARY.md) ───────────
-$execTracePath    = Join-Path $sessionDir "executor_trace.json"
+$execTracePath    = Join-Path $sessionDir "diagnostics\executor_trace.json"
 $execTraceSummary = $null
 if (Test-Path $execTracePath) {
     try {
@@ -478,7 +492,7 @@ if (Test-Path $execTracePath) {
 }
 
 # ── 12.65. Pre-parse explore_probe_log.json (discover phase probe coverage) ─────
-$probePath    = Join-Path $sessionDir "explore_probe_log.json"
+$probePath    = Join-Path $sessionDir "stage-01-probe-loop\explore_probe_log.json"
 $probeSummary = $null
 if (Test-Path $probePath) {
     try {
@@ -570,7 +584,7 @@ if (Test-Path $probePath) {
 }
 
 # ── 12.66. explore_config.json (cap profile + limits in this run) ─────────
-$exploreConfigPath = Join-Path $sessionDir "explore_config.json"
+$exploreConfigPath = Join-Path $sessionDir "stage-00-setup\explore_config.json"
 $exploreConfig = $null
 if (Test-Path $exploreConfigPath) {
     try {
@@ -622,7 +636,7 @@ if ($null -ne $probeSummary) {
 }
 
 # ── 12.7. Pre-parse diagnosis_raw.json (required before SUMMARY.md + DIAGNOSIS.json) ──
-$diagPath = Join-Path $sessionDir "diagnosis_raw.json"
+$diagPath = Join-Path $sessionDir "diagnostics\diagnosis_raw.json"
 $diagRaw  = @(); $diagOut = $null
 if (Test-Path $diagPath) {
     try {
@@ -649,7 +663,7 @@ $modelContextSizeKB = $null
 if (Test-Path $contextPath) { $modelContextSizeKB = [Math]::Round((Get-Item $contextPath).Length / 1024, 1) }
 
 # ── 12.9. sentinel_calibration.json (Phase 0.5 assigned meanings) ────────────
-$sentCalibPath    = Join-Path $sessionDir "sentinel_calibration.json"
+$sentCalibPath    = Join-Path $sessionDir "stage-00-setup\sentinel_calibration.json"
 $sentCalibSummary = $null
 if (Test-Path $sentCalibPath) {
     try {
@@ -665,7 +679,7 @@ if (Test-Path $sentCalibPath) {
 }
 
 # ── 12.92. sentinel_catalog.json (S1 evidence + confidence gating) ─────────
-$sentCatalogPath    = Join-Path $sessionDir "sentinel_catalog.json"
+$sentCatalogPath    = Join-Path $sessionDir "stage-05-finalization\sentinel_catalog.json"
 $sentCatalogSummary = $null
 if (Test-Path $sentCatalogPath) {
     try {
@@ -690,7 +704,7 @@ if (Test-Path $sentCatalogPath) {
 }
 
 # ── 12.95. gap_resolution_log.json (mini-session per-gap outcomes) ────────────
-$gapResPath    = Join-Path $sessionDir "gap_resolution_log.json"
+$gapResPath    = Join-Path $sessionDir "stage-03-gap-resolution\gap_resolution_log.json"
 $gapResSummary = $null
 if (Test-Path $gapResPath) {
     try {
@@ -708,7 +722,7 @@ if (Test-Path $gapResPath) {
 }
 
 # ── 12.96. harmonization_report.json (final non-LLM reconciliation) ─────────
-$harmPath    = Join-Path $sessionDir "harmonization_report.json"
+$harmPath    = Join-Path $sessionDir "stage-05-finalization\harmonization_report.json"
 $harmSummary = $null
 if (Test-Path $harmPath) {
     try {
@@ -777,7 +791,7 @@ try {
 # <SUMMARY.md generation removed — see git history for last working version>
 
 # ?? 14. chat_transcript.txt — pull from API ????????????????????????????????????
-$destTranscript = Join-Path $sessionDir "chat_transcript.txt"
+$destTranscript = Join-Path $sessionDir "diagnostics\chat_transcript.txt"
 # Transcript is now persisted server-side during chat. Pull via the snapshot ZIP
 # (already extracted above). If not present in ZIP, fall back to Downloads search.
 if (-not (Test-Path $destTranscript)) {
@@ -807,11 +821,13 @@ if (-not (Test-Path $destTranscript)) {
 
 # 3. transcript_present / mini_transcript_present flags
 $transcriptPresent      = Test-Path $destTranscript
-$miniTranscriptPath     = Join-Path $sessionDir "mini_session_transcript.txt"
+$miniTranscriptPath     = Join-Path $sessionDir "diagnostics\mini_session_transcript.txt"
 $miniTranscriptPresent  = Test-Path $miniTranscriptPath
 if (-not $miniTranscriptPresent) {
-    # also accept inside artifacts/ subdir (older ZIP layouts)
-    $miniTranscriptPresent = Test-Path (Join-Path $sessionDir "artifacts\mini_session_transcript.txt")
+    # also accept in gap-resolution stage or flat root (older ZIP layouts)
+    $miniTranscriptPresent = (Test-Path (Join-Path $sessionDir "stage-03-gap-resolution\mini_session_transcript.txt")) -or
+                             (Test-Path (Join-Path $sessionDir "mini_session_transcript.txt")) -or
+                             (Test-Path (Join-Path $sessionDir "artifacts\mini_session_transcript.txt"))
 }
 
 # ── 14.5. transcript metrics (Phase 5-B) ──────────────────────────────
@@ -981,7 +997,7 @@ Write-Host "  Updated index.json" -ForegroundColor Green
 
 # ── 17.5. Stable current-gaps.md — always reflects the latest run ────────────
 $currentGapsOut = Join-Path $SessionsRoot "current-gaps.md"
-$gapsSource = Join-Path $sessionDir "clarification-questions.md"
+$gapsSource = Join-Path $sessionDir "stage-04-clarification\clarification-questions.md"
 if (Test-Path $gapsSource) {
     Copy-Item $gapsSource $currentGapsOut -Force
     Write-Host "  Wrote sessions/current-gaps.md ($gapCount question(s))" -ForegroundColor Cyan
