@@ -247,8 +247,11 @@ mcp-factory/
 ├── infra/                      # Bicep IaC (workbook, runner VM)
 ├── aspire/                     # .NET Aspire app host
 ├── scripts/                    # Tooling (save-session, demos, bridge, CI)
+│   └── vm-ops/                 # Azure VM diagnostic scripts (33 files)
 ├── tests/                      # Test fixtures for all source types
+│   └── fixtures/contoso_legacy/# contoso_cs.c source + build instructions
 ├── sessions/                   # Captured pipeline run snapshots
+│   └── misc/                   # Tracked workflow docs (ROADMAP, WORKFLOW, etc.)
 ├── docs/                       # ADRs, architecture, schemas
 └── .github/workflows/          # CI/CD (OIDC, 4-job pipeline)
 ```
@@ -273,8 +276,12 @@ cd aspire/AppHost && dotnet run   # requires .NET 8 SDK + Docker Desktop
 | [Sections 2-3](docs/sections-2-3.md) | Binary discovery implementation (29 source types) |
 | [Product Flow](docs/product-flow.md) | Full pipeline walkthrough |
 | [Schemas](docs/schemas/) | JSON schema contracts |
-| [ADRs](docs/adr/) | Architecture decision records |
+| [ADRs](docs/adr/) | Architecture decision records (8 ADRs) |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
+| [Roadmap](sessions/misc/ROADMAP.md) | Priority-ordered work items and deferred enhancements |
+| [Workflow](sessions/misc/WORKFLOW.md) | Pipeline architecture and data flow (with flowchart) |
+| [Pipeline Cohesion](sessions/misc/PIPELINE-COHESION.md) | Schema enrichment disconnect analysis (D-1 through D-11) |
+| [MVP Thesis](sessions/misc/MVP-THESIS.md) | Minimum viable product scope checklist |
 
 ---
 

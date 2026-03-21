@@ -1403,3 +1403,35 @@ New issues identified during cohesion analysis:
 |----|------|----------|-------|-------|
 | Q-5 | **State mutation across probes** — payment drains balance, later probes fail | Medium | L2 | Need state-reset strategy (re-init between write probes, or probe ordering) |
 | C-2 | **Crypto/XOR unlock codes** — CS_UnlockAccount requires XOR-fold to 0xa5, undiscoverable by probing | Low | L3 | Requires decompilation-guided hint injection or brute-force |
+
+---
+
+## UI Control Expansion (planned)
+
+### Gap Resolution Settings — Inherit + Override
+
+Gap resolution currently uses hardcoded constants from `explore_phases.py`, ignoring the
+UI controls (floor, fallback, max rounds) that the main explore loop respects.
+
+**Phase 1 — Inherit (✅ done, `3cc5d9b`+):**
+Wired `_job_runtime` into `_attempt_gap_resolution` and `_run_gap_answer_mini_sessions`
+so they read the same max-rounds/max-tool-calls settings as explore. Falls back to
+hardcoded `explore_phases.py` constants when not set. ~15 lines in `explore_gap.py`.
+
+**Phase 2 — Override (future, if needed):**
+Add gap-specific overrides in the UI (gap_floor, gap_fallback toggle). Falls back to
+explore values when blank. Only add when testing shows gap needs different tuning.
+
+### Clarification Questions Controls
+
+| Control | Default | Why |
+|---------|---------|-----|
+| `clarification_max_rounds` | 2 | Cap how many times the pipeline pauses for human input. Prevents unbounded wait. |
+| `auto_answer_from_hints` | False | When True, pipeline checks the hints file (e.g. contoso_cs.txt) for answers before asking the human. Enables unattended runs when hints are rich enough. |
+
+### Controls NOT planned (intentionally omitted)
+
+- **Write retry budget per-function** — already tuned in code (`_WRITE_RETRY_BUDGET_BY_CLASS`), no user-facing need
+- **Sentinel calibration depth** — automatic, works well
+- **Gap targeting per-function** — gap analysis already selects targets; manual override adds complexity without value
+- **Synthesis model picker** — future consideration if model quality variance becomes an issue
