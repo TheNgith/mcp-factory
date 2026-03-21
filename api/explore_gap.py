@@ -264,7 +264,10 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
         _snapshot_schema_stage(job_id, "mcp_schema_pre_mini_session.json")
 
         client = _openai_client()
-        model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+        _model_override = str(_job_runtime.get("model") or "").strip()
+        model = _model_override or (
+            OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+        )
 
         _job_meta = _get_job_status(job_id) or {}
         _use_cases_text = _job_meta.get("use_cases", "")

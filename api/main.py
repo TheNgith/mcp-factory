@@ -122,6 +122,10 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
     if cap_profile not in {"dev", "stabilize", "deploy"}:
         cap_profile = defaults["cap_profile"]
 
+    # Allow per-request model override for A/B model comparison.
+    # Must be a known deployment name; empty string means use env-var default.
+    _model_override = str(raw.get("model") or "").strip()
+
     return {
         "mode": mode,
         "cap_profile": cap_profile,
@@ -136,6 +140,7 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
             raw.get("clarification_questions_enabled"),
             bool(defaults["clarification_questions_enabled"]),
         ),
+        "model": _model_override,
     }
 
 # ── FastAPI app ────────────────────────────────────────────────────────────

@@ -118,10 +118,12 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     tool_schemas = _build_tool_schemas(invocables)
 
     client = _openai_client()
-    # Use the dedicated explore model (gpt-4o-mini by default) for cost efficiency.
-    # When using direct OpenAI key, OPENAI_EXPLORE_MODEL controls this.
-    # When using Azure, fall back to the reasoning deployment.
-    model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+    # Per-request model override (A/B comparison) takes priority.
+    # Else: direct OpenAI key → OPENAI_EXPLORE_MODEL; Azure → reasoning deployment.
+    _model_override = str(_job_runtime.get("model") or "").strip()
+    model = _model_override or (
+        OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
+    )
 
     try:
         _upload_to_blob(
