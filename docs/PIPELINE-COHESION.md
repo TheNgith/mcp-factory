@@ -217,3 +217,147 @@ With Layer 1 plumbing fixed, Layer 2 issues are now measurable:
 | Param names renamed | ❌ still `param_N` | ❌ still `param_N` (D-5 fix in `9b46b3b` — validate next run) |
 | Ghidra decompiled C in final schema | Yes (some functions) | No (stripped by enrichment) |
 | Gap resolution schema change | Yes (delta -10588) | Yes (delta -6040) |
+
+---
+
+## Stage Flow Deep Dive — Context Propagation Audit (2026-03-20)
+
+> Based on tracing session `8211c70` (job `1259f0e5`) schema checkpoints byte-
+> for-byte against the source code.  The **core finding** is that context flows
+> through two disconnected channels (`invocables_map.json` vs `mcp_schema.json`)
+> and later stages overwrite earlier enrichments because there is no monotonic
+> quality guarantee between stages.
+
+### How the Pipeline *Should* Build Cumulative Knowledge
+
+Each stage should read the output of every prior stage and **only add** — never
+downgrade.  The knowledge hub is:
+
+| Store | What It Holds | Who Writes | Who Reads |
+|-------|--------------|------------|-----------|
+| `invocables_map.json` (blob + in-memory `_JOB_INVOCABLE_MAPS`) | Canonical param names, types, descriptions, direction | `_register_invocables`, `_patch_invocable` | `run_generate`, `_build_tool_schemas`, backfill, gap resolution |
+| `mcp_schema.json` (blob) | OpenAI function-calling schema — what the chat LLM sees | `run_generate` (called by `_patch_invocable` on every patch) | Chat phase, session snapshot |
+| `findings.json` (blob + in-memory `_JOB_FINDINGS`) | Per-function probe results, working calls, status | `_save_finding`, `_patch_finding` | Synthesis, backfill, gap resolution, chat system message |
+| `vocab.json` (blob) | Cross-function conventions — IDs, error codes, semantics | `_update_vocabulary`, explore phases | Chat system message, explore system message |
+| `api_reference.md` (blob) | Synthesized human-readable API doc | `_synthesize` | Backfill (as input to LLM) |
+
+### Actual Stage Flow (7 Stages) With Evidence
+
+```
+STAGE 1: Discovery (_run_discovery)
+│  Input:  Raw binary
+│  Output: invocables[] with Ghidra params (param_1, param_2, raw types)
+│  Status: ✅ Works
+│
+▼
+STAGE 2: Initial Schema Generation (run_generate)
+│  Input:  invocables from discovery
+│  Output: mcp_schema.json + invocables_map.json
+│  Key:    _infer_param_desc generates descriptions FROM TYPE + FINDINGS
+│          (e.g. byte* → "Input string — e.g. 'CUST-001'")
+│  Bug:    ❌ Enriched descriptions go to SCHEMA ONLY, not back to invocables
+│  Evidence: CP01 = 20,720 bytes — long descriptions from _infer_param_desc
+│  Status: ⚠️ Works but schema-only enrichment, invocables stay raw
+│
+▼
+STAGE 3: Per-Function Exploration (_explore_worker loop)
+│  Input:  invocables (snapshot from Stage 1), tool_schemas from Stage 2
+│  Output: findings.json, vocab.json, patched invocables via enrich_invocable
+│  Key:    Forced enrich_invocable → _patch_invocable:
+│          - Sets inv["doc"] and inv["description"]  ← WORKS (D-11)
+│          - Should rename params via D-5 auto-derive  ← FAILS
+│          - Each patch triggers run_generate → schema rebuilt
+│  Bug:    ❌ LLM provides descriptions without name keys;
+│          D-5 keyword regex too narrow for most descriptions
+│  Evidence: 0 enrich_invocable calls from LLM in probe log;
+│            all enrichment comes from forced-enrich fallback;
+│            invocables_map shows 0/32 params renamed
+│  Status: ⚠️ Descriptions enriched | Param names stuck at param_N
+│
+▼
+STAGE 4: Synthesis (_synthesize → api_reference.md)
+│  Input:  findings.json + vocab.json
+│  Output: api_reference.md
+│  Status: ✅ Works — no schema modification
+│
+▼
+STAGE 5: Backfill (_backfill_schema_from_synthesis)
+│  Input:  api_reference.md + refreshed invocables (D-9 fix)
+│  Output: Patched invocables via _patch_invocable (wholesale param replacement)
+│  Bug:    ❌ CLOBBERS Stage 3 descriptions with worse ones
+│          Wholesale param replacement provides generic descriptions
+│          that skip _infer_param_desc guard
+│  Bug:    ❌ Description guard only protects function descriptions,
+│          not individual param descriptions
+│  Evidence: CP01→CP03: 6/13 function descriptions REVERTED to raw Ghidra.
+│            CS_GetAccountBalance desc went from 104 chars (enriched) to 1056
+│            chars (raw Ghidra decompilation with address + calling convention).
+│            This happens because backfill clears inv["doc"] for some functions,
+│            and run_generate falls through to inv["signature"].
+│  Status: ❌ Active bug — this is the primary clobbering stage
+│
+▼
+STAGE 6: Gap Resolution (_attempt_gap_resolution)
+│  Input:  invocables (refreshed via D-9), failed functions from findings
+│  Output: Patched findings, occasionally triggers enrich → _patch_invocable
+│  Key:    When enrich fires, _patch_invocable calls run_generate, which
+│          reads current inv["doc"] fields (which survived backfill for
+│          most functions) and rebuilds a clean schema
+│  Evidence: CP03→CP05: Schema drops from 15,022 → 10,132 bytes.
+│            This looks like damage but is actually REPAIR — the long
+│            Ghidra raw descriptions from CP03 get replaced with short
+│            enriched descriptions because inv["doc"] was preserved.
+│  Status: ⚠️ Accidentally repairs backfill damage
+│
+▼
+STAGE 7: Clarification + Harmonization
+│  Output: Final mcp_schema.json = CP07
+│  Evidence: CP05 = CP06 = CP07 = CP02 (all identical, same hash)
+│  Status: ✅ No schema modification
+```
+
+### CP02 Naming Bug
+
+`02-post-enrichment.json` in the session snapshot is **NOT** a snapshot after
+per-function enrichment.  It is the final `mcp_schema.json` blob — byte-
+identical to CP07 (verified: same SHA-256 hash `7ACEC4CC8DCE4CF0…`).
+
+The session-snapshot endpoint maps:
+```
+mcp_schema.json  →  schema/02-post-enrichment.json
+```
+
+There is **no checkpoint** capturing the post-per-function-enrichment state
+(after Stage 3, before Stage 5).  This makes it impossible to tell from session
+data alone what enrichment achieved before backfill clobbered it.
+
+### Root Causes of Context Loss (Clobbering)
+
+| ID | Root Cause | Stage | Impact | Fix Strategy |
+|----|-----------|-------|--------|-------------|
+| RC-1 | `_infer_param_desc` writes to schema only, never to invocables | 2 | Invocables stay raw; any later `run_generate` call can lose the enriched descriptions | Write enriched descriptions back to invocables in `run_generate` |
+| RC-2 | Backfill wholesale param replacement downgrades descriptions | 5 | 6/13 functions reverted to raw Ghidra in CP03 | Add quality guard: only replace if new description is richer |
+| RC-3 | D-5 keyword regex too narrow for LLM-generated descriptions | 3 | 0/32 param renames in latest session (previous session got 4 by luck) | Broader strategy: use findings to deterministically infer names |
+| RC-4 | No monotonic quality guarantee across stages | All | Each stage independently overwrites; no "high-water mark" | Track description quality score; reject downgrades |
+
+### Evidence: Function-Level Clobbering Trace
+
+CS_GetAccountBalance across all 7 checkpoints:
+
+| CP | Stage | Description | param_1 |
+|----|-------|-------------|---------|
+| 01 | Pre-enrichment | *Recovered by Ghidra...* (1056 chars) | `Input string — e.g. 'CUST-001'` |
+| 03 | Post-backfill | *Recovered by Ghidra...* (1056 chars) ← **REVERTED** | `Input string parameter` ← **WORSE** |
+| 05 | Post-gap-resolution | *Retrieves account balance...* (104 chars) ← **REPAIRED** | `Input string — e.g. 'CUST-001'` |
+| 07 | Final | Same as CP05 | Same as CP05 |
+
+invocables_map final state: `doc` = enriched ✅ | `param_1` = still `param_1` ❌ | param descriptions = raw Ghidra ❌
+
+### Previous Session Comparison (5310428)
+
+Session `5310428` had `customer_id`, `balance`, `principal`, `interest_rate` on
+4 functions.  Session `8211c70` has 0 renamed params.  Both used the same D-5
+code.  The difference: the LLM happened to write descriptions containing the
+exact keyword phrases in the D-5 regex (`"customer id"`, `"balance"`, etc.) in
+`5310428` but wrote generic descriptions in `8211c70`.  **D-5 is LLM-variability-
+dependent**, not deterministic.

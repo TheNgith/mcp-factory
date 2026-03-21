@@ -24,6 +24,90 @@ from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
 
+# Positional param ordinals that map to common DLL calling conventions.
+# Used by _apply_findings_param_names to derive semantic names from working
+# call keys.  The mapping is: if a working_call has key "customer_id" at
+# position 0 and the invocable has "param_1" at position 0, rename param_1
+# → customer_id.
+_GENERIC_PARAM_RE = re.compile(r'^param_\d+$')
+
+
+def _apply_findings_param_names(
+    invocables: list[dict],
+    findings_by_fn: dict[str, list],
+) -> None:
+    """RC-3: Deterministic param naming from findings working_call keys.
+
+    When a finding has a working_call like {"param_1": "CUST-001", "param_2": 0},
+    the keys are generic.  But when it has {"customer_id": "CUST-001"}, those
+    keys came from a previous enrichment that was later clobbered.
+
+    This function also inspects the working_call VALUES to infer names:
+    - String values matching ID patterns → "<entity>_id"
+    - Integer values → keep param_N unless description says otherwise
+
+    Runs once in run_generate, so every schema rebuild benefits.
+    """
+    for inv in invocables:
+        params = inv.get("parameters") or []
+        if not params or not isinstance(params, list):
+            continue
+        fn_name = inv.get("name", "")
+        fn_findings = findings_by_fn.get(fn_name, [])
+        if not fn_findings:
+            continue
+
+        # Find the best working_call (prefer success findings with most keys)
+        best_wc: dict | None = None
+        for f in reversed(fn_findings):
+            wc = f.get("working_call")
+            if wc and isinstance(wc, dict) and f.get("status") == "success":
+                if best_wc is None or len(wc) > len(best_wc):
+                    best_wc = wc
+        if not best_wc:
+            continue
+
+        # Strategy 1: If working_call already has semantic keys (from a
+        # previous enrichment), apply them to matching positional params.
+        # Strategy 2: If working_call keys are generic (param_N), infer
+        # names from the VALUES (ID patterns, numeric ranges, etc.)
+        wc_keys = list(best_wc.keys())
+        for i, p in enumerate(params):
+            if not isinstance(p, dict):
+                continue
+            pname = p.get("name", "")
+            if not _GENERIC_PARAM_RE.match(pname):
+                continue  # already has a semantic name
+
+            # Check if working_call has a non-generic key at this position
+            if i < len(wc_keys):
+                wc_key = wc_keys[i]
+                if not _GENERIC_PARAM_RE.match(wc_key):
+                    p["name"] = wc_key
+                    continue
+
+            # Infer from value: string matching ID patterns → entity_id
+            wc_val = best_wc.get(pname)
+            if wc_val is None and i < len(wc_keys):
+                wc_val = best_wc.get(wc_keys[i])
+            if isinstance(wc_val, str) and re.match(r'[A-Z]{2,6}-[\w-]+', wc_val):
+                # Extract entity prefix: "CUST-001" → "customer_id",
+                # "ORD-123" → "order_id"
+                _PREFIX_MAP = {
+                    "CUST": "customer_id",
+                    "ORD": "order_id",
+                    "ACCT": "account_id",
+                    "PAY": "payment_id",
+                    "INV": "invoice_id",
+                    "TXN": "transaction_id",
+                }
+                prefix = wc_val.split("-")[0]
+                inferred = _PREFIX_MAP.get(prefix, f"{prefix.lower()}_id")
+                # Avoid duplicate names within the same function
+                existing_names = {pp.get("name") for pp in params if isinstance(pp, dict)}
+                if inferred not in existing_names:
+                    p["name"] = inferred
+
 
 def run_generate(body: dict[str, Any]) -> dict[str, Any]:
     """Build an MCP tool schema, persist artifacts, and index in AI Search.
@@ -78,6 +162,11 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
                 fn_findings = _findings_by_fn.get(inv.get("name", ""), [])
                 ptype = p.get("type", "")
                 pdesc = _infer_param_desc(pname, ptype, fn_findings)
+                # RC-1: Write enriched description back to the invocable so
+                # it persists across stages.  Without this, any later
+                # run_generate call from a different stage can lose the
+                # enriched description.
+                p["description"] = pdesc
             props[pname] = {
                 "type":        json_type,
                 "description": pdesc,
@@ -119,6 +208,12 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
         "component": body.get("component_name", "mcp-component"),
         "tools": tools,
     }
+
+    # RC-1 / RC-3: Apply findings-based param naming to invocables before
+    # registration.  This uses working_call keys from findings to
+    # deterministically derive semantic param names — not dependent on
+    # LLM variability like D-5's keyword regex.
+    _apply_findings_param_names(selected, _findings_by_fn)
 
     # Register invocables for later execution via /api/chat or /api/execute
     _register_invocables(job_id, selected)

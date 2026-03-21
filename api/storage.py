@@ -457,7 +457,38 @@ def _patch_invocable(job_id: str, function_name: str, patch: dict) -> str:
     # Accept a pre-built parameters list (e.g. from backfill) — replaces the
     # current list wholesale, direction already set by the caller.
     if "parameters" in patch and isinstance(patch["parameters"], list):
-        inv["parameters"] = patch["parameters"]
+        # RC-2: Merge wholesale params with existing, preserving enriched descriptions.
+        existing_params = {
+            p.get("name", ""): p
+            for p in (inv.get("parameters") or [])
+            if isinstance(p, dict)
+        }
+        merged_params = []
+        for new_p in patch["parameters"]:
+            if not isinstance(new_p, dict):
+                merged_params.append(new_p)
+                continue
+            pname = new_p.get("name", "")
+            old_p = existing_params.get(pname)
+            if old_p:
+                old_desc = (old_p.get("description") or "").strip()
+                new_desc = (new_p.get("description") or "").strip()
+                _old_rich = (
+                    "e.g." in old_desc
+                    or "observed" in old_desc.lower()
+                    or _re.search(r"'[A-Z]{2,6}-[\w-]+'", old_desc)
+                )
+                _new_generic = (
+                    not new_desc
+                    or new_desc.lower().startswith("input ")
+                    or new_desc.lower().startswith("output ")
+                    or new_desc.lower().startswith("parameter ")
+                    or (old_desc and len(new_desc) < len(old_desc) * 0.6)
+                )
+                if _old_rich and _new_generic:
+                    new_p = {**new_p, "description": old_desc}
+            merged_params.append(new_p)
+        inv["parameters"] = merged_params
         # D-5: apply semantic name derivation to the wholesale replacement too.
         # The backfill path supplies updated descriptions but keeps param_N names.
         for param in inv["parameters"]:

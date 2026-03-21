@@ -299,7 +299,31 @@ def _backfill_schema_from_synthesis(
                     if isinstance(p, dict):
                         pname = p.get("name", "")
                         if pname in param_patches:
-                            desc = param_patches[pname]
+                            new_desc = param_patches[pname]
+                            existing_desc = (p.get("description") or "").strip()
+                            # RC-2: Quality guard — don't let backfill overwrite
+                            # a richer description with a generic one.
+                            # Indicators of a high-quality existing description:
+                            #   - Contains example values ("e.g.")
+                            #   - Contains observed data references
+                            #   - Is substantially longer (2x+) than replacement
+                            _existing_rich = (
+                                "e.g." in existing_desc
+                                or "observed" in existing_desc.lower()
+                                or "example" in existing_desc.lower()
+                                or _re.search(r"'[A-Z]{2,6}-[\w-]+'", existing_desc)
+                            )
+                            _new_generic = (
+                                len(new_desc) < len(existing_desc) * 0.6
+                                or new_desc.lower().startswith("input ")
+                                or new_desc.lower().startswith("output ")
+                                or new_desc.lower().startswith("parameter ")
+                            )
+                            if _existing_rich and _new_generic:
+                                # Keep existing rich description, only update direction
+                                desc = existing_desc
+                            else:
+                                desc = new_desc
                             desc_lower = desc.lower()
                             if _re.search(r"\boutput\b.*\bbuffer\b|\bbuffer\b.*\boutput\b|\bauto.allocated\b", desc_lower):
                                 new_dir = "out"

@@ -1119,6 +1119,10 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         invocables = _refreshed
                         inv_map = {iv["name"]: iv for iv in invocables}
 
+                    # Snapshot BEFORE backfill so we can compare what enrichment
+                    # produced vs what backfill overwrites.
+                    _snapshot_schema_stage(job_id, "mcp_schema_post_enrichment.json")
+
                     # Layer 3: backfill schema descriptions from synthesis document.
                     # Uses the completed synthesis to enrich param descriptions with
                     # proven semantics (units, entity refs, example values).

@@ -821,7 +821,8 @@ async def session_snapshot(job_id: str):
     dated sessions/ folder.  Contents:
 
       schema/01-pre-enrichment.json   ← mcp_schema snapshotted before explore
-      schema/02-post-enrichment.json  ← mcp_schema after explore/refine
+      schema/02-post-enrichment.json  ← mcp_schema after per-function enrichment (before backfill)
+      schema/02b-post-backfill.json   ← mcp_schema after backfill (may clobber enrichment)
       artifacts/findings.json
       artifacts/vocab.json
       artifacts/api_reference.md
@@ -841,7 +842,8 @@ async def session_snapshot(job_id: str):
         # ── Schema snapshots ─────────────────────────────────────────────────
         for blob_name, zip_name in [
             (f"{job_id}/mcp_schema_t0.json",  "schema/01-pre-enrichment.json"),
-            (f"{job_id}/mcp_schema.json",      "schema/02-post-enrichment.json"),
+            (f"{job_id}/mcp_schema_post_enrichment.json", "schema/02-post-enrichment.json"),
+            (f"{job_id}/mcp_schema.json",      "schema/02b-post-backfill.json"),
             (f"{job_id}/mcp_schema_post_discovery.json",      "schema/03-post-discovery.json"),
             (f"{job_id}/mcp_schema_pre_gap_resolution.json",  "schema/04-pre-gap-resolution.json"),
             (f"{job_id}/mcp_schema_post_gap_resolution.json", "schema/05-post-gap-resolution.json"),
