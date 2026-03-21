@@ -220,6 +220,18 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 if _clean_hints and "notes" not in vocab:
                     vocab["notes"] = f"User description: {_clean_hints}"
                 logger.info("[%s] explore_worker: seeded vocab from user hints: %s", job_id, _user_hints[:80])
+                # Q-1: Parse explicit error codes from hints and merge into sentinels
+                # so that codes like 0xFFFFFFFB ("write denied") from user knowledge
+                # are recognized even when calibration probing doesn't trigger them.
+                from api.explore_phases import _parse_hint_error_codes
+                _hint_codes = _parse_hint_error_codes(_user_hints)
+                if _hint_codes:
+                    sentinels.update(_hint_codes)
+                    vocab.setdefault("error_codes", {})
+                    vocab["error_codes"].update({f"0x{k:08X}": v for k, v in _hint_codes.items()})
+                    logger.info("[%s] explore_worker: merged %d error codes from hints: %s",
+                                job_id, len(_hint_codes),
+                                {f"0x{k:08X}": v for k, v in _hint_codes.items()})
             # Persist use_cases into vocab so the chat phase sees it even after
             # vocab["notes"] may be overwritten by later vocabulary updates.
             if _use_cases_text and "user_context" not in vocab:
@@ -367,6 +379,16 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             if _skip:
                 _set_explore_status(job_id, _state["explored"], total, f"Skipped {fn_name} (already documented)")
                 return
+
+            # Q-5: Re-initialize before each function's probe sequence to reset
+            # DLL state (balance, points, etc.) so probes don't fail due to
+            # state drained by previous function's probing.
+            if not _INIT_RE.search(fn_name) and _init_invs:
+                for _rinit in _init_invs:
+                    try:
+                        _execute_tool(_rinit, {})
+                    except Exception:
+                        pass
 
             _set_explore_status(job_id, _state["explored"], total, f"Exploring {fn_name}…")
             logger.info("[%s] explore_worker: starting %s (%d/%d)", job_id, fn_name, _state["explored"] + 1, total)

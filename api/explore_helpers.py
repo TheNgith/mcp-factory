@@ -67,17 +67,20 @@ def _parse_id_format_pattern(pattern: str) -> str:
     return "^" + "".join(out) + "$"
 
 
-def _sample_id_from_vocab(id_formats: list[str], kind: str) -> str:
+def _sample_id_from_vocab(id_formats: list[str], kind: str, attempt: int = 0) -> str:
     kind = (kind or "").lower()
+    # Q-3: rotate IDs across attempts so probes aren't locked to one account
+    _cust_ids = ["CUST-001", "CUST-002", "CUST-003"]
+    _order_ids = ["ORD-20260315-0117", "ORD-20260315-0118", "ORD-20260315-0119"]
     for fmt in id_formats:
         s = str(fmt or "").upper()
         if kind == "order" and "ORD" in s:
-            return "ORD-20260315-0117"
+            return _order_ids[attempt % len(_order_ids)]
         if kind in {"customer", "account"} and ("CUST" in s or "ACCT" in s or "ACCOUNT" in s):
-            return "CUST-001"
+            return _cust_ids[attempt % len(_cust_ids)]
     if kind == "order":
-        return "ORD-20260315-0117"
-    return "CUST-001"
+        return _order_ids[attempt % len(_order_ids)]
+    return _cust_ids[attempt % len(_cust_ids)]
 
 
 def _default_scalar_value(param_name: str, json_type: str, description: str, vocab: dict, attempt: int = 0) -> Any:
@@ -87,9 +90,9 @@ def _default_scalar_value(param_name: str, json_type: str, description: str, voc
     id_formats = [str(x) for x in (vocab.get("id_formats") or []) if x]
 
     if _re.search(r"order", name) or _re.search(r"order", desc):
-        return _sample_id_from_vocab(id_formats, "order")
+        return _sample_id_from_vocab(id_formats, "order", attempt)
     if _re.search(r"customer|account", name) or _re.search(r"customer|account", desc):
-        return _sample_id_from_vocab(id_formats, "customer")
+        return _sample_id_from_vocab(id_formats, "customer", attempt)
     if _re.search(r"amount|cents|refund|payment|debit|credit", name) or _re.search(r"amount|cents", desc):
         return 100 if attempt > 0 else 1000
     if _re.search(r"points", name) or _re.search(r"points", desc):

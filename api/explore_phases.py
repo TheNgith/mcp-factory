@@ -49,6 +49,35 @@ _ENABLE_STICKY_SENTINEL_BASELINE = _os.getenv(
 _SENTINEL_DEFAULTS = SENTINEL_DEFAULTS
 
 
+def _parse_hint_error_codes(hints: str) -> dict[int, str]:
+    """Q-1: Extract explicit error code definitions from user hints.
+
+    Parses patterns like:
+      "Error code 0xFFFFFFFB (4294967291) = write denied"
+      "0xFFFFFFFC = account not found"
+    Returns {int_code: meaning}.
+    """
+    codes: dict[int, str] = {}
+    if not hints:
+        return codes
+    for m in _re.finditer(
+        r'(?:error\s+code\s+)?'           # optional prefix
+        r'(0x[0-9A-Fa-f]+)'               # hex code
+        r'(?:\s*\(\d+\))?'                # optional decimal
+        r'\s*[=:–—]\s*'                   # separator
+        r'(.+?)(?:\.|$)',                  # meaning (up to period or EOL)
+        hints, _re.IGNORECASE | _re.MULTILINE,
+    ):
+        try:
+            code = int(m.group(1), 16)
+            meaning = m.group(2).strip()
+            if meaning and code > 0:
+                codes[code] = meaning
+        except (ValueError, TypeError):
+            pass
+    return codes
+
+
 def _calibrate_sentinels(
     invocables: list[dict], client, model: str, job_id: str = ""
 ) -> dict[int, str]:
