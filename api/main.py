@@ -1004,6 +1004,12 @@ async def session_snapshot(job_id: str):
         _zwrite(zf, "diagnostics/mini_session_transcript.txt",
                 f"{job_id}/mini_session_transcript.txt")
 
+        # Canonical diagnostics names from contract (retain legacy names above).
+        _zwrite(zf, "diagnostics/transcript.txt", f"{job_id}/chat_transcript.txt")
+        _zwrite(zf, "diagnostics/probe-log.json", f"{job_id}/explore_probe_log.json")
+        _zwrite(zf, "diagnostics/chat-model-context.txt", f"{job_id}/model_context_phase_01_probe_loop.txt")
+        _zwrite(zf, "diagnostics/chat-system-context-turn0.txt", f"{job_id}/chat_system_context_turn0.txt")
+
         # Model operating context (exact system message the LLM receives)
         try:
             from api.chat import _build_system_message
@@ -1026,6 +1032,12 @@ async def session_snapshot(job_id: str):
 
         # ── Top-level files ───────────────────────────────────────────────────
 
+        # Contract-first machine artifacts
+        _zwrite(zf, "session-meta.json", f"{job_id}/session-meta.json")
+        _zwrite(zf, "stage-index.json", f"{job_id}/stage-index.json")
+        _zwrite(zf, "transition-index.json", f"{job_id}/transition-index.json")
+        _zwrite(zf, "cohesion-report.json", f"{job_id}/cohesion-report.json")
+
         # hints.txt — strip DOMAIN ANSWER entries (those are gap answers, not user hints)
         _raw_hints_txt = status.get("hints", "") or ""
         _clean_hints_txt = " | ".join(
@@ -1041,7 +1053,7 @@ async def session_snapshot(job_id: str):
             hints_lines.append(status["use_cases"])
         zf.writestr("hints.txt", "\n".join(hints_lines) if hints_lines else "(none)")
 
-        # session-meta.json
+        # session-meta.json fallback (for runs that do not emit contract artifact yet)
         # D-7: gap_count reflects unresolved functions (error status), not
         # clarification question count, for an accurate "still-broken" signal.
         _raw_hints = status.get("hints", "") or ""
@@ -1068,7 +1080,43 @@ async def session_snapshot(job_id: str):
             "finding_count":  len(_all_findings_for_meta),
             "question_count": len(gaps),
         }
-        zf.writestr("session-meta.json", json.dumps(meta, indent=2))
+        if not _try_blob(f"{job_id}/session-meta.json"):
+            zf.writestr("session-meta.json", json.dumps(meta, indent=2))
+
+        # Canonical evidence paths from contract layout (retain legacy stage-* paths above).
+        _zwrite(zf, "evidence/stage-00-setup/schema-t0.json", f"{job_id}/mcp_schema_t0.json")
+        _zwrite(zf, "evidence/stage-00-setup/invocables-map.json", f"{job_id}/invocables_map.json")
+        _zwrite(zf, "evidence/stage-00-setup/stage-checks.json", f"{job_id}/explore_config.json")
+
+        _zwrite(zf, "evidence/stage-01-pre-probe/hints.txt", f"{job_id}/hints.txt")
+        _zwrite(zf, "evidence/stage-01-pre-probe/vocab.json", f"{job_id}/vocab.json")
+        _zwrite(zf, "evidence/stage-01-pre-probe/static-analysis.json", f"{job_id}/static_analysis.json")
+        _zwrite(zf, "evidence/stage-01-pre-probe/sentinel-calibration.json", f"{job_id}/sentinel_calibration.json")
+
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-log.json", f"{job_id}/explore_probe_log.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/findings.json", f"{job_id}/findings.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/stage-context.txt", f"{job_id}/model_context_phase_01_probe_loop.txt")
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-user-message-sample.txt", f"{job_id}/probe_user_message_sample.txt")
+
+        _zwrite(zf, "evidence/stage-03-post-probe/sentinel-catalog.json", f"{job_id}/sentinel_catalog.json")
+        _zwrite(zf, "evidence/stage-03-post-probe/harmonization-report.json", f"{job_id}/harmonization_report.json")
+
+        _zwrite(zf, "evidence/stage-04-synthesis/api-reference.md", f"{job_id}/api_reference.md")
+        _zwrite(zf, "evidence/stage-04-synthesis/stage-context.txt", f"{job_id}/model_context_phase_06_synthesis.txt")
+
+        _zwrite(zf, "evidence/stage-05-backfill/backfill-report.json", f"{job_id}/backfill_result.json")
+        _zwrite(zf, "evidence/stage-05-backfill/schema-post-backfill.json", f"{job_id}/mcp_schema_post_discovery.json")
+
+        _zwrite(zf, "evidence/stage-06-gap-resolution/gap-resolution-log.json", f"{job_id}/gap_resolution_log.json")
+        _zwrite(zf, "evidence/stage-06-gap-resolution/mini-session-transcript.txt", f"{job_id}/mini_session_transcript.txt")
+        _zwrite(zf, "evidence/stage-06-gap-resolution/schema-pre-mini-session.json", f"{job_id}/mcp_schema_pre_mini_session.json")
+        _zwrite(zf, "evidence/stage-06-gap-resolution/schema-post-mini-session.json", f"{job_id}/mcp_schema_post_mini_session.json")
+
+        _zwrite(zf, "evidence/stage-07-finalize/behavioral-spec.py", f"{job_id}/behavioral_spec.py")
+        _zwrite(zf, "evidence/stage-07-finalize/final-vocab.json", f"{job_id}/vocab.json")
+        _zwrite(zf, "evidence/stage-07-finalize/final-status.json", f"{job_id}/status.json")
+        _zwrite(zf, "evidence/stage-07-finalize/schema-evolution.json", f"{job_id}/schema_evolution.json")
+        _zwrite(zf, "evidence/stage-07-finalize/schema-final.json", f"{job_id}/mcp_schema.json")
 
     zbuf.seek(0)
     return StreamingResponse(

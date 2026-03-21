@@ -548,3 +548,17 @@ With FIX-1 + FIX-2, gap resolution can now correctly handle 2 previously-corrupt
 |----|-----------|-------|--------|
 | GR-1 | **Input params incorrectly tagged `direction=out`** — Ghidra's Pcode decompiler marks `byte*` params as output pointers because they're pointer types. The static analysis importer preserves this tag without cross-referencing whether the function reads or writes through the pointer. String inputs (`customer_id`, `order_id`) are uniformly `byte*`, so they're all tagged out — this affects `_clean`, `required` field generation, and any code that consults `direction`. | `api/static_analysis.py` Ghidra importer, `api/storage.py` `_patch_invocable` required-field logic | **PARTIALLY FIXED** — `_clean` fixed in `e5b0507`; `required` field generation still reads `direction`. |
 | GR-2 | **Success criterion `== 0` too strict for info/version functions** — functions like `CS_GetVersion`, `CS_GetDiagnostics` (in other DLLs), and any function returning handles or counts will never return 0 on success. The explore loop, gap resolution, and fallback all treat non-zero as failure. | `api/explore_gap.py`, `api/explore.py` return value judgment | **PARTIALLY FIXED** — zero-param fallback added in `e5b0507`; general `!= 0 means error` assumption still present in explore loop's success check. |
+
+---
+
+## Causality Artifact Layer Plan
+
+This section was moved to keep this file focused on historical run analysis and disconnect tracking.
+
+Canonical location:
+- docs/CAUSALITY-ARTIFACT-LAYER-PLAN.md
+
+Schema authority remains:
+- docs/AI-FIRST-SNAPSHOT-CONTRACT.md
+
+Transition semantics and evaluator logic remain in the moved plan.

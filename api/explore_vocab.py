@@ -226,7 +226,7 @@ def _backfill_schema_from_synthesis(
     synthesis_md: str,
     invocables: list[dict],
     job_id: str,
-) -> None:
+) -> dict:
     """Layer 3: re-annotate stored schema using the completed synthesis document.
 
     After _synthesize() produces api_reference.md this pass asks the LLM to use the
@@ -272,6 +272,7 @@ def _backfill_schema_from_synthesis(
         patches = patches_data.get("patches", [])
 
         patched = 0
+        patched_functions: list[str] = []
         for patch in patches:
             fn_name = patch.get("function", "")
             if not fn_name:
@@ -339,12 +340,24 @@ def _backfill_schema_from_synthesis(
                 try:
                     _patch_invocable(job_id, fn_name, update)
                     patched += 1
+                    patched_functions.append(fn_name)
                 except Exception as _pe:
                     logger.debug("[%s] backfill: patch failed for %s: %s", job_id, fn_name, _pe)
 
         logger.info("[%s] backfill_schema: applied patches to %d/%d functions", job_id, patched, len(patches))
+        return {
+            "patches_requested": len(patches),
+            "patches_applied": patched,
+            "patched_functions": patched_functions,
+        }
     except Exception as exc:
         logger.debug("[%s] _backfill_schema_from_synthesis failed: %s", job_id, exc)
+        return {
+            "patches_requested": 0,
+            "patches_applied": 0,
+            "patched_functions": [],
+            "error": str(exc),
+        }
 
 
 def _vocab_block(vocab: dict) -> str:

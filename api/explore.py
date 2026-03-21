@@ -75,6 +75,7 @@ from api.explore_helpers import (
 )
 from api.explore_gap import _attempt_gap_resolution, _run_gap_answer_mini_sessions
 from api.explore_types import ExploreContext, ExploreRuntime
+from api.cohesion import emit_contract_artifacts
 
 logger = logging.getLogger("mcp_factory.api")
 
@@ -1402,15 +1403,39 @@ def _run_phase_7_backfill(ctx: ExploreContext, report: str) -> None:
     WRITES: param descriptions updated via _backfill_schema_from_synthesis
     HANDOFF: schema snapshots written at post-discovery and pre-gap-resolution
     """
+    _backfill_stats: dict[str, Any] = {
+        "patches_requested": 0,
+        "patches_applied": 0,
+        "patched_functions": [],
+    }
     try:
         logger.info("[%s] phase7: layer3 schema backfill…", ctx.job_id)
         _set_explore_status(ctx.job_id, ctx._state["explored"], ctx.total,
                             "Enriching schema from synthesis…")
-        _backfill_schema_from_synthesis(
+        _backfill_stats = _backfill_schema_from_synthesis(
             ctx.client, ctx.model, report, ctx.invocables, ctx.job_id
         )
     except Exception as _bf_e:
         logger.debug("[%s] phase7: backfill failed: %s", ctx.job_id, _bf_e)
+        _backfill_stats["error"] = str(_bf_e)
+
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{ctx.job_id}/backfill_result.json",
+            json.dumps(
+                {
+                    "backfill_ran": True,
+                    "patches_requested": int(_backfill_stats.get("patches_requested") or 0),
+                    "patches_applied": int(_backfill_stats.get("patches_applied") or 0),
+                    "patched_functions": _backfill_stats.get("patched_functions") or [],
+                    "error": _backfill_stats.get("error"),
+                },
+                indent=2,
+            ).encode("utf-8"),
+        )
+    except Exception as _bf_emit_e:
+        logger.debug("[%s] phase7: backfill_result emit failed: %s", ctx.job_id, _bf_emit_e)
 
     # Schema checkpoint after initial discovery/backfill but before gap-resolution
     _snapshot_schema_stage(ctx.job_id, "mcp_schema_post_discovery.json")
@@ -1739,6 +1764,12 @@ def _run_finalize(ctx: ExploreContext) -> None:
     )
     logger.info("[%s] finalize: finished %d/%d functions (phase=%s)",
                 ctx.job_id, ctx._state["explored"], ctx.total, _final_phase)
+
+    # Emit machine-first contract artifacts as run outputs.
+    try:
+        emit_contract_artifacts(ctx.job_id)
+    except Exception as _coh_e:
+        logger.debug("[%s] finalize: cohesion artifact emission failed: %s", ctx.job_id, _coh_e)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

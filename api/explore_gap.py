@@ -6,6 +6,7 @@ import re as _re
 import time
 
 from api.config import ARTIFACT_CONTAINER, OPENAI_API_KEY, OPENAI_DEPLOYMENT, OPENAI_EXPLORE_MODEL, OPENAI_REASONING_DEPLOYMENT, OPENAI_ENDPOINT
+from api.cohesion import emit_contract_artifacts
 from api.executor import _execute_tool, _execute_tool_traced
 from api.explore_helpers import (
     _GAP_RESOLUTION_ENABLED,
@@ -513,6 +514,14 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
             {**_cur_status, "explore_phase": _final_phase, "updated_at": time.time()},
             sync=True,
         )
+
+        # Emit machine-first contract artifacts for answer-gaps-triggered runs
+        # so strict snapshot validation has parity with explore-worker finalize.
+        try:
+            emit_contract_artifacts(job_id)
+        except Exception as _coh_e:
+            logger.debug("[%s] gap_mini_sessions: cohesion artifact emission failed: %s", job_id, _coh_e)
+
         logger.info("[%s] gap_mini_sessions: complete (phase=%s)", job_id, _final_phase)
 
     except Exception as exc:

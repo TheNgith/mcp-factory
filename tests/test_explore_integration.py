@@ -304,6 +304,12 @@ class TestSessionSnapshotZipStructure:
         self._assert_present("diagnostics/model_context.txt")
         self._assert_present("diagnostics/diagnosis_raw.json")
 
+    def test_contract_artifacts_present(self):
+        self._assert_present('"session-meta.json"')
+        self._assert_present('"stage-index.json"')
+        self._assert_present('"transition-index.json"')
+        self._assert_present('"cohesion-report.json"')
+
     def test_no_old_flat_artifacts_path(self):
         """Old ZIP structure used 'artifacts/' prefix — must no longer appear."""
         assert "artifacts/findings.json" not in self.src, \
