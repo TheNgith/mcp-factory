@@ -81,6 +81,9 @@ logger = logging.getLogger("mcp_factory.api")
 # Regex for identifying init/startup functions — used in Phase 2 ordering and
 # in _explore_one for Q-5 DLL state resets between function probes.
 _INIT_RE = _re.compile(r"(init(ializ)?|startup|start|setup|open|login|logon|connect)", _re.I)
+# Version-query functions return a packed UINT (e.g. 0x20401 = 2.3.1), not 0.
+# Any positive non-sentinel result is SUCCESS for these function names.
+_VERSION_FN_RE = _re.compile(r"get(version|version_?string|build|revision|release)", _re.I)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -476,6 +479,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         vocab=_vocab_snap, use_cases=ctx.use_cases_text,
     )
     _is_write_fn = bool(_WRITE_FN_RE.search(fn_name))
+    _is_version_fn = bool(_VERSION_FN_RE.search(fn_name))
     conversation = [
         sys_msg,
         {
@@ -526,8 +530,21 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 timeout=90.0,
             )
         except Exception as exc:
-            logger.warning("[%s] explore_worker: OpenAI call failed for %s round %d: %s",
-                           ctx.job_id, fn_name, _round, exc)
+            _exc_type = type(exc).__name__
+            _exc_status = getattr(exc, "status_code", None)
+            _exc_body = str(getattr(exc, "body", None) or "")[:200]
+            logger.warning(
+                "[%s] explore_worker: OpenAI call failed for %s round %d: "
+                "type=%s status=%s body=%s msg=%s",
+                ctx.job_id, fn_name, _round,
+                _exc_type, _exc_status, _exc_body, exc,
+            )
+            _fn_probe_log.append({
+                "phase": "llm_error", "function": fn_name, "round": _round,
+                "tool": None, "args": {},
+                "result_excerpt": f"LLM error: {_exc_type} status={_exc_status}: {exc}",
+                "trace": None, "classification": {"has_return": False}, "policy": None,
+            })
             break
 
         msg = response.choices[0].message
@@ -723,11 +740,18 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
             if tc_name == fn_name:
                 _direct_target_tool_calls += 1
                 _ret_m = _re.search(r"Returned:\s*(-?\d+)", tool_result or "")
-                if _ret_m and int(_ret_m.group(1)) == 0:
-                    _observed_successes.append(
-                        _strip_output_buffer_params(tc_args, _p_lookup)
+                if _ret_m:
+                    _ret_val = int(_ret_m.group(1))
+                    _is_version_success = (
+                        _is_version_fn
+                        and _ret_val > 0
+                        and (_ret_val & 0xFFFFFFFF) not in ctx.sentinels
                     )
-                    _best_raw_result = tool_result
+                    if _ret_val == 0 or _is_version_success:
+                        _observed_successes.append(
+                            _strip_output_buffer_params(tc_args, _p_lookup)
+                        )
+                        _best_raw_result = tool_result
 
             logger.info("[%s] explore_worker: tool=%s result=%s",
                         ctx.job_id, tc_name, str(tool_result)[:120])
@@ -792,10 +816,19 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
             _fn_tool_call_count += 1
             _direct_target_tool_calls += 1
             _ret_m = _re.search(r"Returned:\s*(-?\d+)", _res or "")
-            if _ret_m and int(_ret_m.group(1)) == 0:
-                _observed_successes.append(_fb_args)
-                _best_raw_result = _res
-                break
+            if _ret_m:
+                _ret_val = int(_ret_m.group(1))
+                # Version functions return a packed UINT (e.g. 131841 = 2.3.1).
+                # Any positive non-sentinel result counts as success.
+                _is_version_success = (
+                    _is_version_fn
+                    and _ret_val > 0
+                    and (_ret_val & 0xFFFFFFFF) not in ctx.sentinels
+                )
+                if _ret_val == 0 or _is_version_success:
+                    _observed_successes.append(_fb_args)
+                    _best_raw_result = _res
+                    break
 
     # ── Post-loop: direct probe floor enforcement ────────────────────────────
 
@@ -923,13 +956,24 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     # ── Ground-truth override (D-11) ─────────────────────────────────────────
 
     if _observed_successes:
-        # We observed return=0 directly → force success and rewrite finding text
-        # so synthesis doesn't see "All N probes returned sentinel codes" for a
-        # function that actually works.
-        _gt_text = (
-            f"Returns 0 on success when called with {_observed_successes[0]}. "
-            f"Discovered via deterministic fallback (direct LLM probes: {_direct_target_tool_calls})."
-        )
+        # We observed return=0 or a valid version uint → force success and rewrite
+        # finding text so synthesis doesn't see "All N probes returned sentinel codes"
+        # for a function that actually works.
+        _success_val_m = _re.search(r"Returned:\s*(-?\d+)", _best_raw_result or "")
+        _success_val = int(_success_val_m.group(1)) if _success_val_m else 0
+        if _is_version_fn and _success_val > 0:
+            # Decode packed version UINT: (val>>16)&0xFF . (val>>8)&0xFF . val&0xFF
+            _v_uval = _success_val & 0xFFFFFFFF
+            _v_str = f"{(_v_uval >> 16) & 0xFF}.{(_v_uval >> 8) & 0xFF}.{_v_uval & 0xFF}"
+            _gt_text = (
+                f"Returns packed version UINT {_success_val} (decoded: {_v_str}) "
+                f"when called with {_observed_successes[0]}. Non-zero return is SUCCESS for version functions."
+            )
+        else:
+            _gt_text = (
+                f"Returns 0 on success when called with {_observed_successes[0]}. "
+                f"Discovered via deterministic fallback (direct LLM probes: {_direct_target_tool_calls})."
+            )
         try:
             _patch_finding(ctx.job_id, fn_name, {
                 "working_call": _observed_successes[0],
@@ -973,6 +1017,54 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 except Exception as _ve:
                     logger.debug("[%s] working_call verify failed for %s: %s",
                                  ctx.job_id, fn_name, _ve)
+
+    # ── D-12: Auto-enrich schema when LLM skipped enrich_invocable ──────────
+    # If the LLM never called enrich_invocable (e.g. all LLM rounds failed and
+    # only the deterministic fallback ran), synthesise param descriptions from
+    # Ghidra type info + probe findings so the schema isn't left as raw Ghidra
+    # boilerplate.  Only fires when the description is still the default Ghidra
+    # annotation — never overwrites a description the LLM set.
+
+    if not _enrich_called:
+        try:
+            from api.explore_phases import _infer_param_desc
+            _cur_findings = _load_findings(ctx.job_id)
+            _fn_findings = [f for f in _cur_findings if f.get("function") == fn_name]
+            _auto_patch: dict = {}
+            _cur_desc = (inv.get("description") or inv.get("doc") or "").strip()
+            _is_ghidra = (
+                _cur_desc.lower().startswith("recovered by ghidra")
+                or not _cur_desc
+            )
+            # Build param-level patches first
+            for _p in (inv.get("parameters") or []):
+                _pname = _p.get("name", "")
+                _ptype = _p.get("type", "")
+                _pdesc = (_p.get("description") or "").strip()
+                _pdesc_generic = (
+                    not _pdesc
+                    or _pdesc.lower().startswith("input ")
+                    or _pdesc.lower().startswith("output ")
+                    or _pdesc.lower().startswith("parameter of type")
+                    or len(_pdesc) < 8
+                )
+                if _pdesc_generic:
+                    _inferred = _infer_param_desc(_pname, _ptype, _fn_findings)
+                    if _inferred and not _inferred.startswith("Parameter of type"):
+                        _auto_patch[_pname] = {"description": _inferred}
+            # Set a minimal function description from the finding text if still Ghidra
+            if _is_ghidra and _fn_findings:
+                _latest = _fn_findings[-1]
+                _finding_text = (_latest.get("finding") or "").strip()
+                if _finding_text and len(_finding_text) > 20:
+                    _auto_patch["function_description"] = _finding_text[:300]
+            if _auto_patch:
+                _patch_invocable(ctx.job_id, fn_name, _auto_patch)
+                logger.info("[%s] D-12: auto-enriched %s (%d fields)",
+                            ctx.job_id, fn_name, len(_auto_patch))
+        except Exception as _ae:
+            logger.debug("[%s] D-12 auto-enrich failed for %s: %s",
+                         ctx.job_id, fn_name, _ae)
 
     # ── Hypothesis-driven interpretation ─────────────────────────────────────
 
