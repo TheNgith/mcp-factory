@@ -43,7 +43,7 @@ from api.storage import (
     _persist_job_status, _get_job_status, _patch_invocable,
     _save_finding, _patch_finding, _upload_to_blob, _download_blob,
     _append_transcript, _append_executor_trace, _append_explore_probe_log,
-    _register_invocables, _get_current_invocables,
+    _register_invocables, _merge_invocables, _get_current_invocables,
 )
 from api.telemetry import _openai_client
 from api.explore_phases import (
@@ -66,6 +66,7 @@ from api.explore_helpers import (
     _build_fallback_probe_args,
     _build_tool_schemas,
     _classify_result_text,
+    _save_stage_context,
     _sentinel_class_from_classification,
     _set_explore_status,
     _snapshot_schema_stage,
@@ -103,9 +104,12 @@ def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContex
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
 
-    # COH-1: register invocables so enrich_invocable / _patch_invocable can
-    # resolve function names during this explore session.
-    _register_invocables(job_id, invocables)
+    # COH-1: Merge invocables into the registry so enrich_invocable /
+    # _patch_invocable can resolve function names.  Use merge (not replace)
+    # so that a refine/gap run with a target subset doesn't evict the full
+    # set of functions already registered — run_generate must see all of
+    # them to produce a complete schema.
+    _merge_invocables(job_id, invocables)
 
     # Inject synthetic built-in tools that the LLM calls to record discoveries
     inv_map["enrich_invocable"] = {
@@ -1064,6 +1068,21 @@ def _run_phase_3_probe_loop(ctx: ExploreContext) -> None:
     INVARIANT: every invocable is processed exactly once (cancel may abort early)
     HANDOFF: explore_probe_log.json continuously flushed to blob by _explore_one
     """
+    # Save probe-loop model context: the full system message the LLM will receive.
+    # This captures variable parts (vocab, findings, sentinels) at probe-loop start.
+    try:
+        from api.storage import _load_findings
+        _ctx_prior = _load_findings(ctx.job_id)
+        _ctx_sys = _build_explore_system_message(
+            ctx.invocables, _ctx_prior,
+            sentinels=ctx.sentinels, vocab=ctx.vocab,
+            use_cases=ctx.use_cases_text,
+        )
+        _save_stage_context(ctx.job_id, "model_context_phase_01_probe_loop.txt",
+                            _ctx_sys.get("content", ""))
+    except Exception as _mce:
+        logger.debug("[%s] phase3: model context save failed: %s", ctx.job_id, _mce)
+
     if ctx.runtime.concurrency > 1:
         logger.info("[%s] phase3: running %d functions with concurrency=%d",
                     ctx.job_id, len(ctx.invocables), ctx.runtime.concurrency)
@@ -1215,6 +1234,33 @@ def _run_phase_6_synthesize(ctx: ExploreContext) -> str | None:
     if not _syn_findings:
         return None
 
+    # Save synthesis model context: what findings the LLM will synthesize from.
+    try:
+        import json as _json
+        _ctx_lines = [
+            "=== SYNTHESIS PHASE MODEL CONTEXT ===",
+            f"Functions: {len(ctx.invocables)}",
+            f"Findings: {len(_syn_findings)}",
+            "",
+            "--- Findings ---",
+        ]
+        for _f in _syn_findings:
+            _status = _f.get("status", "?")
+            _fn = _f.get("function", "?")
+            _wc = _f.get("working_call") or {}
+            _ctx_lines.append(
+                f"  {_fn}: {_status}"
+                + (f" | working_call={_wc}" if _wc else "")
+            )
+        _ctx_lines.append("")
+        _ctx_lines.append("--- Vocab (domain terms) ---")
+        for _k, _v in list((ctx.vocab or {}).items())[:15]:
+            _ctx_lines.append(f"  {_k}: {str(_v)[:80]}")
+        _save_stage_context(ctx.job_id, "model_context_phase_06_synthesis.txt",
+                            "\n".join(_ctx_lines))
+    except Exception as _mce:
+        logger.debug("[%s] phase6: model context save failed: %s", ctx.job_id, _mce)
+
     try:
         logger.info("[%s] phase6: synthesizing API reference (%d fns)…",
                     ctx.job_id, len(_syn_findings))
@@ -1306,6 +1352,40 @@ def _run_phase_8_gap_resolution(ctx: ExploreContext) -> None:
             sync=True,
         )
         return
+
+    # Save gap-resolution model context: what the LLM will see when retrying failures.
+    try:
+        _gap_findings = _load_findings(ctx.job_id)
+        _failed = [f for f in _gap_findings if f.get("status") != "success"]
+        _succeeded = [f for f in _gap_findings if f.get("status") == "success"]
+        _gap_sys = _build_explore_system_message(
+            ctx.invocables, _gap_findings,
+            sentinels=ctx.sentinels, vocab=ctx.vocab, use_cases=ctx.use_cases_text,
+        )
+        _gap_ctx_lines = [
+            "=== GAP RESOLUTION PHASE MODEL CONTEXT ===",
+            f"Functions total: {len(ctx.invocables)} | succeeded: {len(_succeeded)} | failed: {len(_failed)}",
+            "",
+            "--- Failed functions to retry ---",
+        ]
+        for _f in _failed:
+            _gap_ctx_lines.append(
+                f"  {_f.get('function','?')}: {_f.get('status','?')} | "
+                f"finding={str(_f.get('finding',''))[:80]}"
+            )
+        _gap_ctx_lines.append("")
+        _gap_ctx_lines.append("--- Known-good calls ---")
+        for _f in _succeeded[:6]:
+            _gap_ctx_lines.append(
+                f"  {_f.get('function','?')}: working_call={_f.get('working_call')}"
+            )
+        _gap_ctx_lines.append("")
+        _gap_ctx_lines.append("--- System prompt ---")
+        _gap_ctx_lines.append(_gap_sys.get("content", ""))
+        _save_stage_context(ctx.job_id, "model_context_phase_08_gap_resolution.txt",
+                            "\n".join(_gap_ctx_lines))
+    except Exception as _mce:
+        logger.debug("[%s] phase8: model context save failed: %s", ctx.job_id, _mce)
 
     # ── Gap resolution ───────────────────────────────────────────────────────
 

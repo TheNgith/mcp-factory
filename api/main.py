@@ -910,6 +910,8 @@ async def session_snapshot(job_id: str):
                 f"{job_id}/mcp_schema_t0.json")
         _zwrite(zf, "stage-01-probe-loop/schema-after.json",
                 f"{job_id}/mcp_schema_post_enrichment.json")
+        _zwrite(zf, "stage-01-probe-loop/model_context.txt",
+                f"{job_id}/model_context_phase_01_probe_loop.txt")
 
         # ── stage-02-synthesis ────────────────────────────────────────────────
         _zwrite(zf, "stage-02-synthesis/findings.json",
@@ -926,6 +928,8 @@ async def session_snapshot(job_id: str):
         )
         if _schema_after_backfill:
             zf.writestr("stage-02-synthesis/schema-after.json", _schema_after_backfill)
+        _zwrite(zf, "stage-02-synthesis/model_context.txt",
+                f"{job_id}/model_context_phase_06_synthesis.txt")
 
         # ── stage-03-gap-resolution ───────────────────────────────────────────
         _zwrite(zf, "stage-03-gap-resolution/gap_resolution_log.json",
@@ -934,6 +938,8 @@ async def session_snapshot(job_id: str):
                 f"{job_id}/mcp_schema_pre_gap_resolution.json")
         _zwrite(zf, "stage-03-gap-resolution/schema-after.json",
                 f"{job_id}/mcp_schema_post_gap_resolution.json")
+        _zwrite(zf, "stage-03-gap-resolution/model_context.txt",
+                f"{job_id}/model_context_phase_08_gap_resolution.txt")
         _zwrite(zf, "stage-03-gap-resolution/mini_session_transcript.txt",
                 f"{job_id}/mini_session_transcript.txt")
         _zwrite(zf, "stage-03-gap-resolution/mini-schema-before.json",

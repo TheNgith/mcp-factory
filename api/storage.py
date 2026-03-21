@@ -268,6 +268,29 @@ def _register_invocables(job_id: str, invocables: list[dict]) -> None:
         logger.warning("[%s] Failed to persist invocables to Blob: %s", job_id, exc)
 
 
+def _merge_invocables(job_id: str, invocables: list[dict]) -> None:
+    """Merge (update) invocables into the registry without removing existing entries.
+
+    Unlike _register_invocables (which replaces the entire map), this function
+    only adds or updates the provided entries.  Use this whenever you have a
+    SUBSET of functions to refresh — e.g. during backfill or gap mini-sessions —
+    so that functions not covered by the current batch are preserved.
+    """
+    with _JOB_MAP_LOCK:
+        current = _JOB_INVOCABLE_MAPS.setdefault(job_id, {})
+        for inv in invocables:
+            current[inv["name"]] = inv
+        merged = dict(current)
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{job_id}/invocables_map.json",
+            json.dumps(merged).encode(),
+        )
+    except Exception as exc:
+        logger.warning("[%s] _merge_invocables: failed to persist to Blob: %s", job_id, exc)
+
+
 # ── Per-job LLM findings (probe-and-learn memory) ─────────────────────────
 # The LLM writes entries here via the record_finding synthetic tool.
 # Entries survive session end and are injected into the system prompt on the

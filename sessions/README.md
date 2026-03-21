@@ -234,4 +234,7 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-20 | `8211c70` | `1259f0e5` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 | 2026-03-20 | `66d7077` | `dd66fb6a` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 | 2026-03-20 | `66d7077` | `dd66fb6a` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
+| 2026-03-20 | `3cc5d9b` | `22204c7b` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
+| 2026-03-20 | `5310428` | `7af1301e` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `78df00c` | `920ccd9a` | extended-no-sentinel-hints | contoso_cs - (fill in after testing) |
 

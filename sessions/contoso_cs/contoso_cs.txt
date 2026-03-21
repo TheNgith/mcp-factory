@@ -4,8 +4,6 @@ Order IDs follow the format ORD-YYYYMMDD-NNNN (e.g. ORD-20260315-0117).
 Monetary amounts (payments, refunds, balances) are in integer cents — $25.00 = 2500, $0.01 = 1.
 Loyalty points are plain integers, not dollars.
 CS_Initialize must be called before any other customer operation; calling functions without it returns error sentinels.
-Error code 0xFFFFFFFB (4294967291) = write denied — account is locked or amount is outside valid range.
-Error code 0xFFFFFFFC (4294967292) = account not found / operation is a no-op (e.g. unlocking an already-active account).
 
 # use_cases
 Customer service operations for a CRM loyalty system: look up customer profiles, check account status and balances, process payments and refunds, redeem loyalty points, unlock locked accounts, retrieve order status. Customer IDs are CUST-NNN format. Used by call-center agents to handle inbound service requests end-to-end.

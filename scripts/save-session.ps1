@@ -403,6 +403,22 @@ if ($null -ne $vocab -and (Test-Path $contextPath)) {
     }
 }
 
+# ── 11.6. Model context availability check ──────────────────────────────────
+$stageContextMap = @(
+    @{ stage = "stage-01-probe-loop";   file = "model_context.txt"; label = "probe-loop" }
+    @{ stage = "stage-02-synthesis";    file = "model_context.txt"; label = "synthesis" }
+    @{ stage = "stage-03-gap-resolution"; file = "model_context.txt"; label = "gap-resolution" }
+)
+$ctxPresent = 0
+foreach ($sc in $stageContextMap) {
+    $ctxPath = Join-Path $sessionDir "$($sc.stage)\$($sc.file)"
+    if (Test-Path $ctxPath) { $ctxPresent++ }
+    else { Write-Host ("  model_context missing: " + $sc.label) -ForegroundColor DarkYellow }
+}
+if ($ctxPresent -gt 0) {
+    Write-Host ("  model_context: $ctxPresent/$($stageContextMap.Count) stages have context") -ForegroundColor Cyan
+}
+
 # ?? 12. Parse clarification-questions.md ????????????????????????????????????
 $gapCount = 0; $gapBlock = "(none)"
 $gapsPath = Join-Path $sessionDir "stage-04-clarification\clarification-questions.md"

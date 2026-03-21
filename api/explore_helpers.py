@@ -335,6 +335,20 @@ def _snapshot_schema_stage(job_id: str, stage_blob_name: str) -> None:
         logger.debug("[%s] schema snapshot failed (%s): %s", job_id, stage_blob_name, _se)
 
 
+def _save_stage_context(job_id: str, blob_name: str, content: str) -> None:
+    """Persist a plain-text model-context snapshot for one pipeline phase.
+
+    Captures the system prompt (or a human-readable summary of it) at the
+    start of a phase so that save-session can expose what the LLM saw at
+    each stage.  Failures are silently swallowed — this is diagnostic only.
+    """
+    try:
+        _upload_to_blob(ARTIFACT_CONTAINER, f"{job_id}/{blob_name}",
+                        content.encode("utf-8"))
+    except Exception as _ce:
+        logger.debug("[%s] stage context save failed (%s): %s", job_id, blob_name, _ce)
+
+
 def _set_explore_status(job_id: str, explored: int, total: int, message: str) -> None:
     current = _get_job_status(job_id) or {}
     _persist_job_status(

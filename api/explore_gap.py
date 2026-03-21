@@ -12,7 +12,6 @@ from api.explore_helpers import (
     _build_tool_schemas,
     _set_explore_status,
     _snapshot_schema_stage,
-    _strip_output_buffer_params,
 )
 from api.explore_phases import _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _SENTINEL_DEFAULTS
 from api.explore_prompts import _build_explore_system_message, _generate_confidence_gaps
@@ -21,6 +20,7 @@ from api.storage import (
     _append_transcript,
     _download_blob,
     _get_job_status,
+    _merge_invocables,
     _patch_finding,
     _persist_job_status,
     _register_invocables,
@@ -170,9 +170,19 @@ def _attempt_gap_resolution(
                 if tc_name == fn_name:
                     _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                     if _ret_m and int(_ret_m.group(1)) == 0:
-                        _observed_successes.append(
-                            _strip_output_buffer_params(tc_args, _p_lookup)
-                        )
+                        _out_bases = frozenset({
+                            "undefined", "undefined2", "undefined4", "undefined8",
+                            "uint", "uint32_t", "int", "int32_t", "dword",
+                            "ulong", "uint4", "uint8", "long", "ulong32",
+                        })
+                        _clean: dict = {}
+                        for _k, _v in tc_args.items():
+                            _p = _p_lookup.get(_k, {})
+                            _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                            _is_out = "*" in _p.get("type", "") and _pt in _out_bases
+                            if not _is_out and _p.get("direction", "in") != "out":
+                                _clean[_k] = _v
+                        _observed_successes.append(_clean)
 
                 logger.info("[%s] gap_resolution: tool=%s result=%s", job_id, tc_name, str(tool_result)[:120])
                 conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
@@ -198,51 +208,6 @@ def _attempt_gap_resolution(
                                 _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
                     except Exception as _ve:
                         logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
-            elif not (inv.get("parameters") or []):
-                # FIX-2: Zero-parameter function (e.g. CS_GetVersion) — probe directly with {}.
-                # Success criterion of return==0 is wrong for version/info functions; any
-                # non-sentinel return (<= 0xFFFFFFF0) is a valid response, so mark as success.
-                _vi = inv_map.get(fn_name)
-                if _vi:
-                    try:
-                        _vr = _execute_tool(_vi, {})
-                        _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
-                        if _vm:
-                            _vret = int(_vm.group(1))
-                            if _vret <= 0xFFFFFFF0:
-                                _patch_finding(job_id, fn_name, {"working_call": {}, "status": "success"})
-                                logger.info("[%s] gap_resolution: resolved zero-param %s → success (returned %d)",
-                                            job_id, fn_name, _vret)
-                    except Exception as _ve:
-                        logger.debug("[%s] gap_resolution: zero-param probe failed for %s: %s",
-                                     job_id, fn_name, _ve)
-
-    # D-6: Write gap_resolution_log.json so auto gap-resolution outcomes are
-    # observable in session snapshots (previously only _run_gap_answer_mini_sessions
-    # wrote this artifact).
-    try:
-        _grl_findings = _load_findings(job_id)
-        _targeted_names = {inv["name"] for inv in failed_invs}
-        _grl = [
-            {
-                "function": f.get("function"),
-                "status": f.get("status"),
-                "working_call": f.get("working_call"),
-                "confidence": f.get("confidence"),
-                "successes": f.get("successes", 0),
-                "attempts": f.get("attempts", 0),
-            }
-            for f in _grl_findings
-            if f.get("function") in _targeted_names
-        ]
-        _upload_to_blob(
-            ARTIFACT_CONTAINER,
-            f"{job_id}/gap_resolution_log.json",
-            json.dumps(_grl, indent=2).encode(),
-        )
-        logger.info("[%s] gap_resolution: gap_resolution_log written (%d entries)", job_id, len(_grl))
-    except Exception as _grl_e:
-        logger.debug("[%s] gap_resolution: gap_resolution_log write failed: %s", job_id, _grl_e)
 
 
 def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
@@ -273,10 +238,7 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
         _snapshot_schema_stage(job_id, "mcp_schema_pre_mini_session.json")
 
         client = _openai_client()
-        _model_override = str(_job_runtime.get("model") or "").strip()
-        model = _model_override or (
-            OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
-        )
+        model = OPENAI_EXPLORE_MODEL if OPENAI_API_KEY else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
 
         _job_meta = _get_job_status(job_id) or {}
         _use_cases_text = _job_meta.get("use_cases", "")
@@ -289,9 +251,11 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
 
         inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
 
-        # COH-2: Register invocables so enrich_invocable / _patch_invocable can
-        # resolve function names during gap mini-sessions.
-        _register_invocables(job_id, invocables)
+        # COH-2: Merge invocables so enrich_invocable / _patch_invocable can
+        # resolve function names during gap mini-sessions.  Use merge (not
+        # replace) so functions outside this subset remain in the registry and
+        # run_generate continues to produce a complete schema.
+        _merge_invocables(job_id, invocables)
 
         inv_map["enrich_invocable"] = {
             "name": "enrich_invocable", "source_type": "enrich", "_job_id": job_id,
@@ -434,9 +398,19 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     if tc_name == fn_name:
                         _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                         if _ret_m and int(_ret_m.group(1)) == 0:
-                            _observed_successes.append(
-                                _strip_output_buffer_params(tc_args, _p_lookup)
-                            )
+                            _out_bases = frozenset({
+                                "undefined", "undefined2", "undefined4", "undefined8",
+                                "uint", "uint32_t", "int", "int32_t", "dword",
+                                "ulong", "uint4", "uint8", "long", "ulong32",
+                            })
+                            _clean: dict = {}
+                            for _k, _v in tc_args.items():
+                                _p = _p_lookup.get(_k, {})
+                                _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                                _is_out = "*" in _p.get("type", "") and _pt in _out_bases
+                                if not _is_out and _p.get("direction", "in") != "out":
+                                    _clean[_k] = _v
+                            _observed_successes.append(_clean)
 
                     logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
                                 job_id, tc_name, str(tool_result)[:120])
@@ -483,23 +457,6 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                                     _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
                         except Exception as _ve:
                             logger.debug("[%s] gap_mini_sessions: verify failed for %s: %s",
-                                         job_id, fn_name, _ve)
-                elif not (inv.get("parameters") or []):
-                    # FIX-2: Zero-parameter function — probe directly with {}.
-                    # Any non-sentinel return (<= 0xFFFFFFF0) is a valid response.
-                    _vi = inv_map.get(fn_name)
-                    if _vi:
-                        try:
-                            _vr = _execute_tool(_vi, {})
-                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
-                            if _vm:
-                                _vret = int(_vm.group(1))
-                                if _vret <= 0xFFFFFFF0:
-                                    _patch_finding(job_id, fn_name, {"working_call": {}, "status": "success"})
-                                    logger.info("[%s] gap_mini_sessions: resolved zero-param %s → success (%d)",
-                                                job_id, fn_name, _vret)
-                        except Exception as _ve:
-                            logger.debug("[%s] gap_mini_sessions: zero-param probe failed for %s: %s",
                                          job_id, fn_name, _ve)
 
         try:

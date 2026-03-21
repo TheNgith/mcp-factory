@@ -78,6 +78,53 @@
 
 ---
 
+## 2026-03-21 — Model Selection Architecture
+
+### First-layer comparison (contoso_cs.dll, commit `128efb5`, normal mode)
+
+| Model | Success | WC Params | Explore Speed | Gap Strategy |
+|---|---|---|---|---|
+| **gpt-4o** | **6/13** | 4 | ~4 min | 9 gaps |
+| **gpt-4-1** | 5/13 | 4 | ~3 min | 10 gaps |
+| **gpt-4-1-mini** | **6/13** | **5** | **~2.5 min** | 10 gaps |
+| o4-mini | 3/13 | 4 | ~30s | skipped (too many failures) |
+
+**Key finding**: o4-mini is unsuitable for the explore layer — reasoning models overthink tool-calling sequences instead of just executing probes. gpt-4-1-mini matched gpt-4o on success rate, had the best working_call richness, and was ~40% faster.
+
+### Architectural question: per-layer model routing
+
+Different pipeline layers have different cognitive demands:
+
+| Layer | Task | Cognitive need | Recommended model |
+|---|---|---|---|
+| **Analyze** (static analysis) | Parse PE, Ghidra, IAT | N/A (not LLM-driven) | — |
+| **Explore (probing)** | Generate arguments, interpret return codes | Fast tool-calling, pattern matching | gpt-4-1-mini *(fastest, tied for best accuracy)* |
+| **Gap resolution** | Retry failures with creative approaches | Deeper reasoning about failure modes | gpt-4o or gpt-4-1 *(more capable)* |
+| **Clarification** | Generate user-facing questions | Language quality | gpt-4-1-mini *(cost-effective)* |
+| **Chat (agentic)** | Real-time tool use with user | Reasoning + tool calling | gpt-4o *(proven)* |
+
+### Recommended defaults
+
+```
+EXPLORE_MODEL       = gpt-4-1-mini   # fast, cheap, tied-best accuracy
+GAP_MODEL           = gpt-4o         # deeper reasoning for retries
+CLARIFICATION_MODEL = gpt-4-1-mini   # just needs good language
+CHAT_MODEL          = gpt-4o         # agentic chat with user
+```
+
+### Implementation: `gap_model` field in explore_settings
+
+Add `explore_settings.gap_model` override so each layer can use a different deployment.
+Falls back to `explore_settings.model` if not set, then env-var default.
+
+| ID | Item | Priority | Effort |
+|---|---|---|---|
+| MOD-1 | Per-layer model routing (`gap_model` in explore_settings) | High | ~2 hrs |
+| MOD-2 | Default model matrix in `config.py` (env-var per layer) | Medium | ~1 hr |
+| MOD-3 | Re-run comparison with split models (gpt-4-1-mini explore + gpt-4o gap) | Medium | ~30 min |
+
+---
+
 ## Technical Depth — Ugly DLL Priority Order
 
 Sequenced by unblocking impact on real-world legacy DLLs.

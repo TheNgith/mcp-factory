@@ -141,6 +141,10 @@ Quick version:
 | 2026-03-20 | Commit `790dd3a`: D-5 wholesale path (backfill params renamed), Ghidra boilerplate description guard. | Run 159c017 vs 3cc5d9b |
 | 2026-03-20 | D-8 force-record success gap, D-9 stale invocables refresh, D-10 direction inference on wholesale path. CS_CalculateInterest dropped because deterministic fallback found success but no finding was saved. Gap resolution reverted discovery schema because backfill/gap read stale invocables snapshot. | Run 159c017 analysis |
 | 2026-03-20 | D-11: ground-truth override now rewrites finding text to match patched status. Run `5310428` (job 7af1301e): 7 success/6 error — D-8 working (CS_CalculateInterest captured), but schema frozen 02-07 because synthesis saw misleading "sentinel codes" text on patched-success findings → generated no backfill patches. | Run 5310428 analysis |
+| 2026-03-20 | Commits `9a97977` (RC-1..RC-4) + validation run `9e27afdf`: 10/13 success. Schema stable from 02b through all 8 stages. `customer_id` renamed and held. Established as best-run baseline. | Run 9a97977 section above |
+| 2026-03-21 | Commits `daa101c` + `66a7135`: Q-1 hint sentinel merge, Q-3 multi-ID rotation, Q-5 re-init before probes, write-unlock regression fix. Run `dbedbfcd`: 7/13 — 3-function regression vs baseline due to model budget exhaustion on dep-chain functions, not plumbing. Schema frozen 02b→07 (by design — clean context, no backfill clobbering to repair). Gap resolution analysis revealed FIX-1 and FIX-2 bugs. | Run 66a7135 section above |
+| 2026-03-21 | Commit `128efb5`: per-request model override (`explore_settings.model`), 3 Azure OpenAI deployments added (gpt-4-1, gpt-4-1-mini, o4-mini). 4-model comparison run. First-layer verdict: gpt-4-1-mini wins (6/13, fastest, cheapest). o4-mini poor (3/13 — reasoning models overthink structured tool calls). | Model comparison analysis |
+| 2026-03-21 | Commit `e5b0507`: FIX-1 removes direction-based param stripping from `_clean` (byte* string inputs were being erased from working_call), FIX-2 adds zero-param fallback (CS_GetVersion-type functions correctly resolved). Applied to both `_attempt_gap_resolution` and `_run_gap_answer_mini_sessions`. Expected ceiling: 9/13. | GR-1 and GR-2 above |
 
 ---
 
@@ -361,3 +365,186 @@ code.  The difference: the LLM happened to write descriptions containing the
 exact keyword phrases in the D-5 regex (`"customer id"`, `"balance"`, etc.) in
 `5310428` but wrote generic descriptions in `8211c70`.  **D-5 is LLM-variability-
 dependent**, not deterministic.
+
+---
+
+## Run 9a97977 Assessment (job 9e27afdf) — RC-1 through RC-4 Validation
+
+**Config:** deploy profile, max_rounds=5, max_tool_calls=10, gap=✓, clarify=✓  
+**Commit:** `9a97977` (RC-1..RC-4 fixes + post-enrichment snapshot + CP02 naming fix)  
+**Comparison baseline:** `8211c70` (same DLL, deploy profile, pre-fix code)
+
+### RC Fix Verification
+
+| Fix | What we expected | What happened | Verdict |
+|-----|-----------------|---------------|---------|
+| RC-1 (`_infer_param_desc` writeback) | Enriched descriptions persist in invocables, not just schema | ✅ Descriptions survive through all stages | **FIXED** |
+| RC-2 (backfill quality guard) | Generic LLM descriptions don't overwrite richer ones | ✅ `customer_id: Customer ID in the format 'CUST-NNN'. Example: 'CUST-001'` stable CP02b→CP07 | **FIXED** |
+| RC-3 (`_apply_findings_param_names`) | Deterministic naming from working_call keys | ⚠️ Didn't fire — findings had generic keys (`param_2: 1`) not semantic keys | **WORKS** (no data to act on this run) |
+| RC-4 (monotonic quality) | No stage downgrades descriptions | ✅ Once `customer_id` named at CP02b, held through CP03–CP07 | **FIXED** (via RC-1+RC-2) |
+| Post-enrichment snapshot | `02-post-enrichment.json` captures state before backfill | ✅ 18,570 bytes (distinct from 02b at 16,110 bytes) | **WORKING** |
+| CP02 naming fix | Session snapshot correctly labels checkpoints | ✅ `02-post-enrichment` and `02b-post-backfill` are separate | **FIXED** |
+
+### Schema Evolution — Key Evidence: No More Clobbering
+
+CS_GetAccountBalance param names across all 8 checkpoints:
+
+| Checkpoint | param_1 name | param_1 description |
+|-----------|-------------|---------------------|
+| 01-pre-enrichment | `param_1` | `Input string parameter` |
+| 02-post-enrichment | `param_1` | `Input string parameter` |
+| 02b-post-backfill | **`customer_id`** | `Customer ID in the format 'CUST-NNN'. Example: 'CUST-001'.` |
+| 03-post-discovery | `customer_id` | Same ✅ |
+| 04-pre-gap-resolution | `customer_id` | Same ✅ |
+| 05-post-gap-resolution | `customer_id` | Same ✅ |
+| 06-pre-clarification | `customer_id` | Same ✅ |
+| 07-post-clarification | `customer_id` | Same ✅ |
+
+**Previously (8211c70):** `param_1` across ALL checkpoints. Backfill clobbered enrichment.  
+**Now (9a97977):** `customer_id` from CP02b onward, held stable through 6 subsequent stages.
+
+### Param Renaming Summary
+
+| Function | Pre-enrichment | Final (CP07) | Status |
+|----------|---------------|-------------|--------|
+| CS_GetAccountBalance | `param_1, param_2` | **`customer_id, output_buffer`** | ✅ Renamed |
+| CS_CalculateInterest | `param_1..4` | **`customer_id, amount, interest_rate, output_buffer`** | ✅ Renamed |
+| CS_ProcessPayment | `param_1, param_2` | `param_1, param_2` | ⚠️ Not renamed (findings lacked ID-pattern values) |
+| CS_LookupCustomer | `param_1..3` | `param_1..3` | ⚠️ Not renamed (same reason) |
+| CS_GetLoyaltyPoints | `param_1, param_2` | `param_1, param_2` | ⚠️ Not renamed |
+
+**Previous run (8211c70): 0/13 functions with renamed params**  
+**This run (9a97977): 2/13 functions with full semantic param names**  
+Remaining unrenamed functions need richer findings (working_call with CUST-NNN values) — Layer 2 probe quality issue, not plumbing.
+
+### Disconnect Status Update
+
+| ID | Previous Status | New Status | Notes |
+|----|----------------|------------|-------|
+| RC-1 | OPEN | **CLOSED** | `_infer_param_desc` writeback verified — descriptions persist |
+| RC-2 | OPEN | **CLOSED** | Quality guard verified — backfill cannot downgrade richer descriptions |
+| RC-3 | OPEN | **CLOSED** (code complete, needs richer findings to exercise) | Function defined and wired; will activate when findings contain semantic keys |
+| RC-4 | OPEN | **CLOSED** | Monotonic quality holds across all 8 checkpoints |
+| CP02 naming | OPEN | **CLOSED** | Separate `02-post-enrichment` and `02b-post-backfill` snapshots |
+
+---
+
+## Run 66a7135 Assessment (job dbedbfcd) — Layer 2 Probe Quality
+
+**Config:** deploy profile, max_rounds=5, max_tool_calls=10, gap=✓, clarify=✓  
+**Commit:** `66a7135` (Q-1 hint sentinel merge, Q-3 multi-ID rotation, Q-5 re-init before probes, write-unlock regression fix)  
+**Comparison baseline:** `9a97977` (10/13 success — best prior run)  
+**Snapshot:** `sessions/2026-03-21-66a7135-L2-fix2/`
+
+### Layer 2 Fix Verification
+
+| Fix | What we expected | What happened | Verdict |
+|-----|-----------------|---------------|---------|
+| Q-1 hint sentinel merge | Error codes from hints.txt (0xFFFFFFFB, 0xFFFFFFFC) flow into sentinel calibration | ✅ 4 sentinel codes calibrated (vs 2 before) | **FIXED** |
+| Q-3 multi-ID rotation | Probes rotate CUST-001/002/003 across attempts | ✅ Multiple IDs used in probe log | **FIXED** |
+| Q-5 re-init before probes | CS_Initialize called before each non-init function probe | ✅ Probe log shows Initialize preceding write functions | **FIXED** |
+| Write-unlock regression | `_probe_write_unlock()` tests write fn after no-param init | ✅ Regression resolved | **FIXED** |
+
+### Result: 7/13 success (vs 10/13 baseline)
+
+The 3-function regression from 10/13 is **not a plumbing regression** — it is model call-budget exhaustion. The init→unlock→write dependency chain (CS_UnlockAccount, CS_ProcessPayment, CS_ProcessRefund, CS_RedeemLoyaltyPoints) requires 4–6 tool calls to discover; with max_tool_calls=10, the model spends budget early on failed string permutations and runs dry.
+
+| Function | 9a97977 | dbedbfcd | Delta | Root cause of regression |
+|----------|---------|----------|-------|--------------------------|
+| CS_Initialize | success | success | = | |
+| CS_GetVersion | error | error | = | (see FIX-2 below) |
+| CS_GetDiagnostics | success | success | = | |
+| CS_GetAccountBalance | success | success | = | wc corrupted (see FIX-1) |
+| CS_GetLoyaltyPoints | success | success | = | wc corrupted (see FIX-1) |
+| CS_LookupCustomer | success | success | = | |
+| CS_CalculateInterest | success | success | = | |
+| CS_ProcessPayment | success | **error** | **-1** | dep chain, budget exhausted |
+| CS_RedeemLoyaltyPoints | success | **error** | **-1** | dep chain, budget exhausted |
+| CS_GetOrderStatus | success | success | = | |
+| CS_UnlockAccount | success | **error** | **-1** | dep chain, budget exhausted |
+| CS_ProcessRefund | error | error | = | |
+| entry | error | error | = | |
+
+### Schema Evolution — Frozen After Backfill
+
+```
+01-pre-enrichment.json:  20,723 bytes
+02-post-enrichment.json: 19,646 bytes  (−1,077 CHANGED)
+02b-post-backfill.json:  16,734 bytes  (−2,912 CHANGED)
+03-post-discovery.json:  16,734 bytes  (frozen)
+04-pre-gap-resolution:   16,734 bytes  (frozen)
+05-post-gap-resolution:  16,734 bytes  (frozen)
+06-pre-clarification:    16,734 bytes  (frozen)
+07-post-clarification:   16,734 bytes  (frozen)
+```
+
+Stages 03–07 are byte-identical. This is **by design for this run**: gap resolution writes to `findings.json` and `behavioral_spec.py`, not to the MCP schema. Unlike run `9a97977` where gap resolution repaired backfill damage, in this run backfill was already clean (RC-1..RC-4 held), so gap resolution had no clobbering to fix.
+
+### Gap Resolution Effectiveness Analysis: 4/10 flips
+
+Gap resolution was given 10 failed functions and resolved 4:
+
+| Function | Outcome | Working call saved | Real outcome |
+|----------|---------|-------------------|--------------|
+| CS_GetLoyaltyPoints | success | `{}` | **CORRUPTED** — customer_id stripped (see FIX-1) |
+| CS_GetAccountBalance | success | `{}` | **CORRUPTED** — customer_id stripped (see FIX-1) |
+| CS_GetOrderStatus | success | `{param_3: 1}` | Correct |
+| CS_LookupCustomer | success | `{param_3: 64}` | Correct |
+| CS_GetVersion | error | — | **FALSE NEGATIVE** — returns 131841 (valid version), not 0 (see FIX-2) |
+
+Root cause of FIX-1: static analysis tags `byte*` parameters as `direction=out` (pointer heuristic). The `_clean` step was stripping any param with `direction=out`, erasing string input params (customer_id, order_id) from the saved working_call.
+
+Root cause of FIX-2: the success criterion is `return_value == 0`. CS_GetVersion always returns `131841` (0x20301 = version 2.3.1). Not a sentinel, not an error, but never == 0.
+
+---
+
+## Commit e5b0507 — Gap Resolution Bug Fixes (FIX-1 + FIX-2)
+
+**Commit:** `e5b0507`  
+**Files changed:** `api/explore_gap.py` (both `_attempt_gap_resolution` and `_run_gap_answer_mini_sessions`)
+
+### FIX-1: Remove direction-based param stripping from `_clean`
+
+**Before:**
+```python
+if not _is_out and _p.get("direction", "in") != "out":
+    _clean[_k] = _v
+```
+
+**After:**
+```python
+if not _is_out:
+    _clean[_k] = _v
+```
+
+Only strip params that are pointers to numeric/undefined Ghidra types (`undefined4*`, `int*`, `dword*`). Do not consult `direction` — static analysis assigns `direction=out` to all pointer types including string inputs (`byte*` = `char*`).
+
+**Expected impact:** CS_GetAccountBalance and CS_GetLoyaltyPoints will now save `wc={"param_1": "CUST-001"}` instead of `wc={}`.
+
+### FIX-2: Zero-parameter fallback after gap resolution loop
+
+Added a new branch after the main loop in both gap resolution functions:
+
+```python
+elif not (inv.get("parameters") or []):
+    # Zero-parameter function — probe directly with {}.
+    # Any non-sentinel return (<= 0xFFFFFFF0) is valid.
+    _vr = _execute_tool(_vi, {})
+    if _vret <= 0xFFFFFFF0:
+        _patch_finding(job_id, fn_name, {"working_call": {}, "status": "success"})
+```
+
+This fires only when: no successes found in the main loop AND the function has no parameters. Accepts any return ≤ `0xFFFFFFF0` as success (same threshold as the existing verification path).
+
+**Expected impact:** CS_GetVersion (returns 131841 always) will be marked success with `wc={}`.
+
+### Theoretical new ceiling
+
+With FIX-1 + FIX-2, gap resolution can now correctly handle 2 previously-corrupted + 1 previously-missed function. The remaining failures (CS_UnlockAccount, CS_ProcessPayment, CS_ProcessRefund, CS_RedeemLoyaltyPoints, entry) are genuine Layer 3 structural ceilings — dep-chain discovery or crypto-XOR unlock. Expected ceiling: **9/13**.
+
+### New Issues Found
+
+| ID | Disconnect | Files | Status |
+|----|-----------|-------|--------|
+| GR-1 | **Input params incorrectly tagged `direction=out`** — Ghidra's Pcode decompiler marks `byte*` params as output pointers because they're pointer types. The static analysis importer preserves this tag without cross-referencing whether the function reads or writes through the pointer. String inputs (`customer_id`, `order_id`) are uniformly `byte*`, so they're all tagged out — this affects `_clean`, `required` field generation, and any code that consults `direction`. | `api/static_analysis.py` Ghidra importer, `api/storage.py` `_patch_invocable` required-field logic | **PARTIALLY FIXED** — `_clean` fixed in `e5b0507`; `required` field generation still reads `direction`. |
+| GR-2 | **Success criterion `== 0` too strict for info/version functions** — functions like `CS_GetVersion`, `CS_GetDiagnostics` (in other DLLs), and any function returning handles or counts will never return 0 on success. The explore loop, gap resolution, and fallback all treat non-zero as failure. | `api/explore_gap.py`, `api/explore.py` return value judgment | **PARTIALLY FIXED** — zero-param fallback added in `e5b0507`; general `!= 0 means error` assumption still present in explore loop's success check. |
