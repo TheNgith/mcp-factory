@@ -79,6 +79,8 @@ For a detailed breakdown of each stage, see [Explore Engine](docs/EXPLORE-ENGINE
 | `notepad.exe` | Win32 | Type, save, open, append — controlled by Copilot |
 | `contoso_cs.dll` | Custom DLL (no source) | 13 exports, 7/13 currently succeeding (see challenges below) |
 
+`contoso_cs.dll` is in the repo at `tests/fixtures/contoso_legacy/` — or you can download it directly here: [contoso_cs.dll](https://github.com/evanking12/mcp-factory/raw/refs/heads/main/tests/fixtures/contoso_legacy/contoso_cs.dll)
+
 ---
 
 ## Key Documents
