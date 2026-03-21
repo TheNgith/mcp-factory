@@ -169,6 +169,9 @@ def _attempt_gap_resolution(
                 if tc_name == fn_name:
                     _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                     if _ret_m and int(_ret_m.group(1)) == 0:
+                        # FIX-1: Strip only genuine output buffers (pointer to numeric/undefined type).
+                        # Do NOT strip based on direction='out' alone — static analysis wrongly tags
+                        # byte* (string inputs) as direction=out because they are pointers.
                         _out_bases = frozenset({
                             "undefined", "undefined2", "undefined4", "undefined8",
                             "uint", "uint32_t", "int", "int32_t", "dword",
@@ -179,7 +182,7 @@ def _attempt_gap_resolution(
                             _p = _p_lookup.get(_k, {})
                             _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
                             _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                            if not _is_out and _p.get("direction", "in") != "out":
+                            if not _is_out:
                                 _clean[_k] = _v
                         _observed_successes.append(_clean)
 
@@ -207,6 +210,24 @@ def _attempt_gap_resolution(
                                 _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
                     except Exception as _ve:
                         logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
+            elif not (inv.get("parameters") or []):
+                # FIX-2: Zero-parameter function (e.g. CS_GetVersion) — probe directly with {}.
+                # Success criterion of return==0 is wrong for version/info functions; any
+                # non-sentinel return (<= 0xFFFFFFF0) is a valid response, so mark as success.
+                _vi = inv_map.get(fn_name)
+                if _vi:
+                    try:
+                        _vr = _execute_tool(_vi, {})
+                        _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                        if _vm:
+                            _vret = int(_vm.group(1))
+                            if _vret <= 0xFFFFFFF0:
+                                _patch_finding(job_id, fn_name, {"working_call": {}, "status": "success"})
+                                logger.info("[%s] gap_resolution: resolved zero-param %s → success (returned %d)",
+                                            job_id, fn_name, _vret)
+                    except Exception as _ve:
+                        logger.debug("[%s] gap_resolution: zero-param probe failed for %s: %s",
+                                     job_id, fn_name, _ve)
 
     # D-6: Write gap_resolution_log.json so auto gap-resolution outcomes are
     # observable in session snapshots (previously only _run_gap_answer_mini_sessions
@@ -425,6 +446,9 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     if tc_name == fn_name:
                         _ret_m = _re.match(r"Returned:\s*(\d+)", tool_result or "")
                         if _ret_m and int(_ret_m.group(1)) == 0:
+                            # FIX-1: Strip only genuine output buffers (pointer to numeric/undefined type).
+                            # Do NOT strip based on direction='out' alone — static analysis wrongly tags
+                            # byte* (string inputs) as direction=out because they are pointers.
                             _out_bases = frozenset({
                                 "undefined", "undefined2", "undefined4", "undefined8",
                                 "uint", "uint32_t", "int", "int32_t", "dword",
@@ -435,7 +459,7 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                                 _p = _p_lookup.get(_k, {})
                                 _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
                                 _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                                if not _is_out and _p.get("direction", "in") != "out":
+                                if not _is_out:
                                     _clean[_k] = _v
                             _observed_successes.append(_clean)
 
@@ -484,6 +508,23 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                                     _patch_finding(job_id, fn_name, {"working_call": None, "status": "error"})
                         except Exception as _ve:
                             logger.debug("[%s] gap_mini_sessions: verify failed for %s: %s",
+                                         job_id, fn_name, _ve)
+                elif not (inv.get("parameters") or []):
+                    # FIX-2: Zero-parameter function — probe directly with {}.
+                    # Any non-sentinel return (<= 0xFFFFFFF0) is a valid response.
+                    _vi = inv_map.get(fn_name)
+                    if _vi:
+                        try:
+                            _vr = _execute_tool(_vi, {})
+                            _vm = _re.match(r"Returned:\s*(\d+)", _vr or "")
+                            if _vm:
+                                _vret = int(_vm.group(1))
+                                if _vret <= 0xFFFFFFF0:
+                                    _patch_finding(job_id, fn_name, {"working_call": {}, "status": "success"})
+                                    logger.info("[%s] gap_mini_sessions: resolved zero-param %s → success (%d)",
+                                                job_id, fn_name, _vret)
+                        except Exception as _ve:
+                            logger.debug("[%s] gap_mini_sessions: zero-param probe failed for %s: %s",
                                          job_id, fn_name, _ve)
 
         try:
