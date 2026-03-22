@@ -167,3 +167,69 @@ Suggested answer direction:
 Implementation note:
 - Keep full detailed artifacts for deep diagnosis, but require this compact
   manifest to be present for every run so models can triage in one read.
+
+## 14) Tournament Strategy: Should a production run select the best evidence per stage across parallel sessions?
+
+Why this question matters:
+- A real SaaS product for SMBs cannot ship a single-run result when any individual
+  run may miss functions due to budget exhaustion, model variance, or context-window
+  pressure. Running N parallel sessions with different profiles (hint variants, model
+  temperatures, tool-budget settings) and then selecting the strongest evidence at each
+  stage before synthesizing the final output is the most natural path to a reliable,
+  shippable wrapper — but only if "best" can be defined precisely enough to automate
+  the selection. Without a concrete scoring rubric, tournament selection just becomes
+  manual cherry-picking, which does not scale as a product.
+
+Suggested answer direction:
+- Yes: run N parallel sessions and apply a tournament selection pass before synthesis.
+  Define "best" at four granularities:
+
+  1. Per-function winner (which session's probe result ships for this function):
+     - Prefer `status=success` with `has_return=true` over success without a return.
+     - Among multiple successes, rank by `confidence` score descending.
+     - If no session succeeded, prefer the session with the richest failure evidence
+       (most unique sentinel codes observed, most probe variant attempts).
+
+  2. Per-stage artifact winner (which session's stage artifact becomes authoritative):
+     - Prefer the session whose stage-level `capture_quality` is highest.
+     - As a tiebreaker, prefer the session with the fewest `warn`/`partial` cohesion
+       transitions (i.e. the session that moved most stage gates to `pass`).
+
+  3. Per-probe argument quality (which session's argument selection is most credible):
+     - Rank argument source quality in descending order:
+         a. `vocab.id_formats` (real extracted string IDs — highest signal),
+         b. `static_analysis.binary_strings`,
+         c. `heuristic.*` sources,
+         d. `default.*` / fallback sources (lowest signal, use only if no other
+            session has higher-quality coverage for this function).
+     - This ensures the final wrapper is backed by the strongest available evidence
+       rather than whichever run happened to finish first.
+
+  4. Determinism as a tiebreaker:
+     - When two sessions produce otherwise equal evidence, prefer the session where
+       A/B legs of the same call agree (`deterministic: true`).
+     - Deterministic results indicate the system is reliable enough to trust without
+       a clarification tier.
+
+- Implementation sketch for MVP:
+  1. After all N parallel sessions complete, build a per-function evidence table
+     indexed by `function_name × session_id`.
+  2. Apply the four-tier ranking above to assign one authoritative session per
+     function.
+  3. Re-run the synthesis and schema-generation step using only the winning evidence
+     rows — the output `client.py` and `enriched_schema.json` are then composites
+     drawn from the best-performing session per element, not a single session's output.
+  4. Record provenance: every synthesized field should carry a `source_run_id` and
+     `selection_reason` so the customer (or a support engineer) can audit why any
+     particular probe result was chosen.
+
+- Connection to existing questions:
+  - Q10 ("Multi-model Parallelism") asked about parallelizing runs and merging
+    artifacts. Q14 extends that into a full selection architecture: it answers *what*
+    to merge, *how* to rank candidates, and *what provenance trails* the product must
+    emit. Q10 is a prerequisite; Q14 is the product-level answer.
+  - Q12 ("Success Criteria") KPIs should be measured against the *tournament output*,
+    not individual session outputs, to reflect real product quality.
+  - Q13 ("Front-and-Center Metadata") compact manifest fields should be emitted per
+    session so that the tournament pass can compare sessions in a single structured
+    read without re-parsing full artifact trees.
