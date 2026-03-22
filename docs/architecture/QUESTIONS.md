@@ -582,3 +582,68 @@ Suggested answer direction:
     coordinator applies in Phase C.
   - Q9 ("Beyond MVP") north-star: the coordinator is the first concrete step toward
     an autonomous improvement engine. Phases E and F are the path from MVP to north-star.
+
+### Q17 Implementation Preconditions
+
+Before `run_coordinator.py` can make a promotion decision in one read, three groups of
+fields must be added to every run's `session-meta.json` and passed through to the
+compact manifest (`human/dashboard-row.json`). These are not architectural decisions —
+they are pass-through tags written by the orchestrator and copied by `collect_session.py`.
+
+**Group B — Ablation tagging (required for Q15):**
+
+| Field | Type | Set by | When |
+|---|---|---|---|
+| `prompt_profile_id` | string | `run_set_orchestrator.py` | At job dispatch |
+| `layer` | int (1 or 2) | `run_set_orchestrator.py` | At job dispatch |
+| `ablation_variable` | string or null | `run_set_orchestrator.py` | At job dispatch |
+| `ablation_value` | string or null | `run_set_orchestrator.py` | At job dispatch |
+| `run_set_id` | string (UUID) | `run_set_orchestrator.py` | At job dispatch |
+
+Without these fields the coordinator cannot distinguish a control run from an ablation
+variant. It cannot compute a delta. Promotion decisions are impossible.
+
+**Group C — Sentinel state (required for Q16):**
+
+| Field | Type | Set by | When |
+|---|---|---|---|
+| `write_unlock_outcome` | string enum | `api/explore_phases.py` | After write-unlock probe |
+| `write_unlock_sentinel` | string or null | `api/explore_phases.py` | After write-unlock probe |
+| `sentinel_new_codes_this_run` | int | `api/explore_phases.py` | After each stage boundary |
+
+Values for `write_unlock_outcome`: `"blocked"`, `"resolved"`, `"not_attempted"`.
+Without these fields the coordinator cannot tell whether a blocked write-function is
+newly unblocked by a sentinel resolution, and cannot trigger Phase D of the playbook.
+
+**Group D — Coordinator state (required for Q17):**
+
+| Field | Type | Set by | When |
+|---|---|---|---|
+| `coordinator_cycle` | int | `run_set_orchestrator.py` | At job dispatch |
+| `playbook_step` | string | `run_set_orchestrator.py` | At job dispatch |
+
+Without these the coordinator cannot group runs by cycle or trace which playbook step
+produced which batch — essential when reading across many session folders after a
+re-start.
+
+**Implementation effort for all three groups:**
+- `api/worker.py` or `api/explore.py`: accept Groups B+D as job parameters, write to
+  `session-meta.json` — ~1 hour (pure pass-through, no logic).
+- `api/explore_phases.py`: emit Group C fields to `session-meta.json` at write-unlock
+  probe and stage boundary — ~2 hours.
+- `scripts/collect_session.py`: copy all six new `session-meta.json` fields into
+  `human/dashboard-row.json` — ~30 minutes (pure copy, no logic).
+
+**Human decisions required before implementation begins:**
+1. N and M per cycle — recommended: N=3 (Layer 1 control), M=3 (Layer 2 ablation).
+   More runs = more signal, more cost. Owner decides the tradeoff.
+2. Ablation variable order — recommended priority: prompt framing → vocab ordering →
+   context density → tool budget. Owner may reorder or drop families.
+3. Promotion bar — recommended: improve ≥1 gate, no regressions, confirmed in ≥2/3
+   Layer 2 runs. Owner may tighten (require 3/3) or loosen (require 1/3) this.
+4. Starting component — contoso_cs.dll (current target). Confirm or redirect.
+5. Max batches before coordinator self-halts — recommended: 10 cycles. Owner sets the
+   cost ceiling for autonomous operation before a human check-in is required.
+
+No other human decisions are needed. Everything else is an engineering choice with a
+clear answer documented in Q15/Q16/Q17.
