@@ -301,3 +301,158 @@ Suggested answer direction:
     MVP-TRANSITION-AUTOMATION-FINDINGS.md is the embryonic form of Q15: one variable
     family per batch, three variants against one control. Q15 elevates this from a
     debugging tactic into a first-class product architecture principle.
+
+### Q15 Implementation — What it actually takes
+
+**Full picture of what needs to be built:**
+
+1. Prompt profile system:
+   - Prompts are currently hardcoded in `api/explore_prompts.py`.
+   - Need: a parameterizable profile mechanism — a small set of named prompt
+     fragments that can be swapped per run without code changes.
+   - Each Layer 2 ablation run receives a profile that differs in exactly one
+     fragment (e.g. instruction framing, hint ordering, verbosity). Everything
+     else is identical to the Layer 1 control.
+   - Estimated effort: ~half day.
+
+2. Run-set orchestrator:
+   - A script (or extension of `run_batch_parallel.py`) that launches N+M runs in
+     parallel, tags each with its profile name, and waits for all to complete.
+   - N = identical-context control runs (Layer 1).
+   - M = ablation runs, one variable changed per run (Layer 2).
+   - Outputs: per-run `transition-readiness.json` + per-run findings schema.
+
+3. Accumulated knowledge merger (the key architectural distinction from Q14):
+   - Q14 ("Tournament Strategy") selects a WINNER per function — one run's result
+     becomes authoritative.
+   - Q15's accumulator is a UNION: every valid finding from every run contributes
+     to the final schema, regardless of which run it came from.
+   - A run that only produced ONE function's result that no other run found is
+     still a valuable contributor. The goal is the most complete schema possible,
+     not the schema from the best single run.
+   - Merger logic per function:
+       a. Collect all `status=success` findings across all runs for that function.
+       b. Merge: prefer the highest-confidence result, but include any unique
+          evidence (arg values, return semantics, boundary conditions) that other
+          runs discovered and the highest-confidence run missed.
+       c. Record `source_run_id` and `selection_reason` per field so the merge
+          is fully auditable.
+       d. If NO run produced a success for a function: merge the richest failure
+          evidence (most unique error codes seen, most probe variants attempted)
+          as the best available characterization of that function's behavior.
+   - This accumulated schema is the authoritative stage output — not any single
+     run's schema.
+
+4. Stage-by-stage knowledge pipeline:
+   - The accumulation does not happen once at the end. It happens at each stage
+     boundary, and the accumulated schema from stage N is the input context for
+     all runs in stage N+1.
+   - Flow:
+       Stage 1 (pre-probe/probe): N+M runs → accumulated findings schema
+       Stage 2 (synthesis): N+M runs, each seeded with accumulated Stage 1 schema
+       Stage 3 (post-probe/harmonization): N+M runs, seeded from Stage 2 output
+       ...and so on through finalize.
+   - This means each stage's parallel runs start from the richest possible
+     knowledge base — the union of everything all prior-stage runs discovered —
+     rather than any one run's partial view.
+   - Write function unlocking follows naturally: if any run in Stage 1 finds the
+     sentinel code that unlocks a write path, that code is in the accumulated
+     schema that feeds Stage 2. Every Stage 2 run starts knowing the unlock key,
+     not just the lucky run that found it.
+
+5. What "implementing Q15" means in practice for the repository:
+   - Phase 1 (available now, no new code): run N=3 identical control runs,
+     compare convergence. Are findings deterministic? If yes, Layer 1 is validated.
+   - Phase 2 (~half day): prompt profile mechanism + per-run profile tagging.
+   - Phase 3 (~1–2 days): accumulated knowledge merger script that reads all
+     post-run schema artifacts and emits one composite schema per stage boundary.
+   - Phase 4 (~1 day): stage-by-stage orchestrator that wires Phase 3 output
+     as the seeded input for the next stage's N+M run-set.
+
+## 16) Adaptive Sentinel Calibration: Should sentinel codes be re-attempted at every stage boundary, with parallel probe variants for each attempt?
+
+Why this question matters:
+- Sentinel calibration currently runs once as Phase 0.5 — before any exploration
+  begins — with empty-arg calls to every exported function. If the run returns few
+  high-bit return values (due to init state, runtime variance, or probe ordering),
+  the sentinel table is sparse. From that point on, the pipeline operates with
+  incomplete error semantics for every subsequent stage.
+- This matters because one unknown sentinel code can block an entire write path.
+  When `0xFFFFFFFB` is unknown, the system cannot distinguish "payment limit
+  exceeded" from "initialization failure" from "corrupt input" — three situations
+  requiring completely different responses. Every stage from S-02 onward interprets
+  that code incorrectly or conservatively until it is resolved.
+- Sentinel unlock cascades: once one code's meaning is confirmed, it often
+  implies the meaning of adjacent codes — a DLL that uses `0xFFFFFFFB` for "limit
+  exceeded" typically uses `0xFFFFFFFC` for "invalid input" and `0xFFFFFFFD` for
+  "not found." Resolving one systematically narrows the search space for the rest.
+- The current one-shot approach cannot exploit evidence that accumulates mid-run:
+  a successful probe in S-02 may surface a code that was never seen in Phase 0.5,
+  but there is no mechanism to feed that observation back into the sentinel table
+  for the remaining functions.
+
+Suggested answer direction:
+- Yes: make sentinel calibration opportunistic and continuous, not a one-time pass.
+
+  1. Initial calibration (Phase 0.5, current):
+     - Keep the empty-arg sweep to establish a baseline sentinel table before any
+       LLM probe rounds begin.
+     - Add: seed from `vocab["error_codes"]` (Q-1 fix) so hint-derived codes are
+       pre-populated even if the empty-arg sweep misses them.
+
+  2. Opportunistic re-calibration after each stage boundary:
+     - After Stage 1 (probe loop) accumulation, scan all probe-log entries across
+       all N+M runs for any new high-bit return values not in the current sentinel
+       table.
+     - Submit newly observed candidates to the sentinel LLM call (same as Phase
+       0.5 but incremental — only the new codes, not the full sweep).
+     - Update the accumulated schema's sentinel table before Stage 2 runs begin.
+     - Any Stage 2 run that has a newly resolved sentinel starts with richer
+       error semantics than the Stage 1 runs had.
+
+  3. Parallel sentinel probe variants (Layer 2 for sentinels):
+     - When a code remains unresolved after both Phase 0.5 and Stage 1, launch
+       M dedicated sentinel probe runs before Stage 2 — each with one varied
+       prompt framing specifically designed to elicit that code.
+     - Example variants:
+         a. "This code appears when the function enforces a constraint. Probe the
+            function with extreme argument values to trigger the constraint."
+         b. "This code appears when required state has not been established. Probe
+            the initialization chain to identify what pre-conditions it enforces."
+         c. "This code appears after a resource limit is exceeded. Probe with
+            progressively increasing numeric arguments to find the threshold."
+     - Record which variant's probe caused the code to appear and in what context.
+       That probe is the evidence the sentinel's meaning is based on.
+
+  4. Unlock cascade exploitation:
+     - Once a code is resolved, check the resolved meaning against a cascade
+       pattern table:
+         "limit exceeded" → adjacent code is likely "below minimum" or "range error"
+         "not found" → adjacent code is likely "already exists" or "duplicate"
+         "permission denied" → adjacent code is likely "not initialized" or "locked"
+     - Use cascade patterns to generate probe hypotheses for the next adjacent
+       unresolved code, rather than treating each code as independent.
+
+  5. Write function unlock gating:
+     - The write-unlock probe (`_probe_write_unlock` in `explore_phases.py`)
+       currently runs once at the start and, if it fails, permanently gates all
+       write-path functions as `dependency_missing`.
+     - With adaptive calibration: if Stage 1 accumulation resolves a new sentinel
+       that explains why write-unlock was failing (e.g. the code meant "not
+       initialized" and initialization needs a specific arg value), re-run
+       write-unlock before Stage 2 with the newly resolved context.
+     - A write function that was permanently blocked in Stage 1 may become
+       accessible in Stage 2 given better sentinel context. Unlocking even one
+       write function often reveals call patterns that unlock others (because
+       write functions commonly share initialization dependencies).
+
+- Connection to existing questions:
+  - Q15 ("Context Ablation") Layer 2 is the mechanism for varying sentinel probe
+    prompts. Q16 defines what specifically to vary and when to trigger it.
+  - Q14 ("Tournament Strategy") accumulator includes sentinel table as a field —
+    the most completely resolved sentinel table from all runs is the one that
+    feeds the next stage, just like the most complete function findings.
+  - G9 (Capstone sentinel harvesting, already implemented) provides the pre-probe
+    baseline by reading sentinel constants directly from binary instructions. Q16
+    is the runtime complement: harvesting sentinels that Capstone missed because
+    they only appear under specific runtime conditions, not in static code paths.
