@@ -233,3 +233,71 @@ Suggested answer direction:
   - Q13 ("Front-and-Center Metadata") compact manifest fields should be emitted per
     session so that the tournament pass can compare sessions in a single structured
     read without re-parsing full artifact trees.
+
+## 15) Context Ablation: Should each stage run N identical-context sessions PLUS M deliberate context-variant sessions that change one prompt variable at a time?
+
+Why this question matters:
+- Q14 asks which parallel run "won" and how to select it. Q15 asks *why* it won.
+  If all N parallel runs vary only by random sampling, the tournament tells you the
+  best result but not which context decisions produced it. To build a product that
+  reliably generates high-quality outputs, you need to know which context variables
+  (prompt framing, vocab emphasis, hint ordering, budget, tool sequence) are load-bearing
+  at each stage — and which are noise. Without deliberate one-variable-at-a-time
+  variation, you cannot separate signal from luck. This is the difference between a
+  pipeline that works and a pipeline you understand well enough to improve confidently.
+
+Suggested answer direction:
+- Yes: structure the parallel run set in two layers per stage:
+
+  Layer 1 — Robustness runs (N identical-context):
+  - All N runs share exactly the same prompt, context, hints, and settings.
+  - Purpose: reduce noise. A stage is "reliably solved" only when the majority of
+    identical-context runs converge on the same outcome.
+  - Recommended N: 3–5 for MVP (odd number, simple majority rule).
+  - These feed directly into the Q14 tournament selection for the final output.
+
+  Layer 2 — Ablation runs (M context-variant, one variable changed per run):
+  - Each of the M runs changes exactly ONE context variable from the Layer 1 baseline.
+  - Purpose: causal discovery. If changing variable X in one run improves a stage
+    outcome that was failing in all Layer 1 runs, X is load-bearing for that stage.
+  - Recommended M: 3–5 variants per batch (covering the highest-priority variable
+    families first).
+  - These do NOT directly feed the tournament output; they feed a separate
+    "context learning log" that drives prompt/config improvement across batches.
+
+- Variables to vary, ordered by expected impact on stage quality:
+  1. Prompt framing: rephrase the instruction — e.g. "probe this function carefully"
+     vs "your job is to find valid argument combinations" vs "treat this as unknown
+     territory; explore systematically". One variant per run.
+  2. Vocab/hint ordering: put highest-confidence static IDs first vs last vs omitted.
+     Tests whether the model front-loads or recency-biases static hints.
+  3. Context density: verbose context (all prior findings) vs minimal context
+     (only current-stage facts) vs no-init (no prior context at all).
+  4. Tool budget: low (8), medium (16), high (24). If a stage only passes at budget=24,
+     that stage's task is underspecified and needs a targeted prompt fix, not more budget.
+  5. Temperature / sampling (post-MVP): keep fixed for MVP; only vary after Layer 1
+     robustness is confirmed across 2–3 consecutive batches.
+
+- What to record per ablation run:
+  - Which variable was changed and what the exact change was.
+  - Stage-level outcome: pass / warn / fail per transition gate.
+  - Function-level outcome: how many functions reached success vs warn vs unresolved.
+  - Comparison delta: outcome compared to the Layer 1 majority baseline for the
+    same stage — better / same / worse.
+
+- Decision rule for promoting a context variant to new baseline:
+  - A variant becomes the new Layer 1 baseline if it improves at least one stage
+    gate from warn/fail to pass AND does not regress any other stage gate.
+  - Require improvement in at least 2 of 3 Layer 2 ablation runs (not just 1) before
+    promoting, to avoid promoting a lucky outlier.
+
+- Connection to existing questions:
+  - Q14 ("Tournament Strategy") defines the selection mechanism for Layer 1 runs.
+    Q15 defines how the context that feeds those runs improves over time.
+  - Q7 ("Instrumentation") and Q12 ("Success Criteria") both assume the context is
+    fixed across measurements. Q15 formalizes the process for deliberately unfixing it
+    in controlled, one-variable-at-a-time increments.
+  - The variable isolation strategy already documented in
+    MVP-TRANSITION-AUTOMATION-FINDINGS.md is the embryonic form of Q15: one variable
+    family per batch, three variants against one control. Q15 elevates this from a
+    debugging tactic into a first-class product architecture principle.
