@@ -237,4 +237,11 @@ git diff sessions/2026-03-17-.../artifacts/vocab.json sessions/2026-03-18-.../ar
 | 2026-03-20 | `3cc5d9b` | `22204c7b` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 | 2026-03-20 | `5310428` | `7af1301e` | contoso-cs-run2 | contoso_cs - (fill in after testing) |
 | 2026-03-21 | `78df00c` | `920ccd9a` | extended-no-sentinel-hints | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `ca576e2` | `920ccd9a-ef98-41a8-a38d-f8cf5b0a5e2f` | post-schema-fix-rerun | unknown - (fill in after testing) |
+| 2026-03-21 | `ca576e2` | `59ef08de` | schema-fix-validation | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `48db9b7` | `59ef08de` | d12-autofix-validation | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `48db9b7` | `44fb7051` | b1-live-explore-only-a | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `48db9b7` | `44fb7051` | b1-live-explore-only-b | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `48db9b7` | `cfd26cf5` | b1-live-answer-gaps-a | contoso_cs - (fill in after testing) |
+| 2026-03-21 | `48db9b7` | `cfd26cf5` | b1-live-answer-gaps-b | contoso_cs - (fill in after testing) |
 

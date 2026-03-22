@@ -18,6 +18,53 @@ param(
     [string]  $SessionsRoot   = $PSScriptRoot
 )
 
+function Resolve-SessionView {
+    param(
+        [Parameter(Mandatory=$true)]$Session,
+        [Parameter(Mandatory=$true)][string]$Root
+    )
+    $resolved = [PSCustomObject]@{}
+    foreach ($p in $Session.PSObject.Properties) {
+        $resolved | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+    }
+
+    $dir = Join-Path $Root $Session.folder
+    $dashPath = Join-Path $dir "human\dashboard-row.json"
+    $cohesionPath = Join-Path $dir "cohesion-report.json"
+
+    if (Test-Path $dashPath) {
+        try {
+            $row = Get-Content $dashPath -Raw | ConvertFrom-Json
+            foreach ($p in $row.PSObject.Properties) {
+                $resolved | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+            }
+        } catch { }
+    }
+
+    if (Test-Path $cohesionPath) {
+        try {
+            $coh = Get-Content $cohesionPath -Raw | ConvertFrom-Json
+            $resolved | Add-Member -NotePropertyName "hard_fail" -NotePropertyValue ([bool]$coh.gates.hard_fail) -Force
+            $resolved | Add-Member -NotePropertyName "transition_fail_count" -NotePropertyValue ([int]$coh.totals.transition_fail) -Force
+            $resolved | Add-Member -NotePropertyName "stage_fail_count" -NotePropertyValue ([int]$coh.totals.stage_fail) -Force
+            if (-not $resolved.PSObject.Properties["pipeline_verdict"] -and $coh.summary -and $coh.summary.pipeline_verdict) {
+                $resolved | Add-Member -NotePropertyName "pipeline_verdict" -NotePropertyValue ([string]$coh.summary.pipeline_verdict) -Force
+            }
+            if (-not $resolved.PSObject.Properties["failed_transitions"]) {
+                $resolved | Add-Member -NotePropertyName "failed_transitions" -NotePropertyValue @($coh.failed_transitions) -Force
+            }
+        } catch { }
+    }
+
+    if ($resolved.PSObject.Properties["pipeline_verdict"]) {
+        $resolved | Add-Member -NotePropertyName "verdict" -NotePropertyValue $resolved.pipeline_verdict -Force
+    } elseif ($resolved.PSObject.Properties["hard_fail"] -and $resolved.hard_fail) {
+        $resolved | Add-Member -NotePropertyName "verdict" -NotePropertyValue "DEGRADED" -Force
+    }
+
+    return $resolved
+}
+
 $indexPath = Join-Path $SessionsRoot "index.json"
 if (-not (Test-Path $indexPath)) {
     Write-Host "No index.json found at $indexPath" -ForegroundColor Red
@@ -46,6 +93,8 @@ if ($selected.Count -eq 0) {
     exit 0
 }
 
+$selectedResolved = @($selected | ForEach-Object { Resolve-SessionView -Session $_ -Root $SessionsRoot })
+
 Write-Host ""
 Write-Host "=== MCP Factory - Session Comparison ===" -ForegroundColor Cyan
 Write-Host "  Comparing $($selected.Count) session(s)" -ForegroundColor DarkCyan
@@ -63,7 +112,7 @@ $header = "Session".PadRight($colWidth) + " | " +
 Write-Host $header -ForegroundColor White
 Write-Host ("-" * ($header.Length + 4)) -ForegroundColor DarkGray
 
-foreach ($s in $selected) {
+foreach ($s in $selectedResolved) {
     $fc       = $s.finding_counts
     $success  = if ($fc) { [int]($fc.success) } else { 0 }
     $total    = if ($fc) { [int]($fc.total)   } else { 0 }
@@ -84,12 +133,12 @@ foreach ($s in $selected) {
 
 # ── Regression detection ──────────────────────────────────────────────────────
 $regressions = @()
-if ($selected.Count -ge 2) {
+if ($selectedResolved.Count -ge 2) {
     Write-Host ""
     Write-Host "── Regression check ─────────────────────────────────────────────" -ForegroundColor Cyan
-    for ($i = 1; $i -lt $selected.Count; $i++) {
-        $prev = $selected[$i - 1]
-        $curr = $selected[$i]
+    for ($i = 1; $i -lt $selectedResolved.Count; $i++) {
+        $prev = $selectedResolved[$i - 1]
+        $curr = $selectedResolved[$i]
         $prevStatus = if ($prev.function_status) { $prev.function_status } else { $null }
         $currStatus = if ($curr.function_status) { $curr.function_status } else { $null }
 
@@ -147,7 +196,7 @@ $md.Add("## Session Overview")
 $md.Add("")
 $md.Add("| Session | Component | Successes | / Total | Vocab % | Coverage % | Tools | Verdict |")
 $md.Add("|---------|-----------|-----------|---------|---------|------------|-------|---------|")
-foreach ($s in $selected) {
+foreach ($s in $selectedResolved) {
     $fc      = $s.finding_counts
     $success = if ($fc)                              { [int]($fc.success) }                             else { 0 }
     $total   = if ($fc)                              { [int]($fc.total)   }                             else { 0 }
@@ -164,7 +213,7 @@ $md.Add("")
 
 # Function status matrix
 $fnOrder = [System.Collections.Specialized.OrderedDictionary]::new()
-foreach ($s in $selected) {
+foreach ($s in $selectedResolved) {
     if ($s.function_status) {
         foreach ($prop in $s.function_status.PSObject.Properties) {
             if (-not $fnOrder.Contains($prop.Name)) { [void]$fnOrder.Add($prop.Name, $true) }
@@ -174,7 +223,7 @@ foreach ($s in $selected) {
 if ($fnOrder.Count -gt 0) {
     $md.Add("## Function Status")
     $md.Add("")
-    $colLabels = @($selected | ForEach-Object {
+    $colLabels = @($selectedResolved | ForEach-Object {
         $f = $_.folder
         if ($f.Length -gt 19) { "…" + $f.Substring($f.Length - 16) } else { $f }
     })
@@ -182,7 +231,7 @@ if ($fnOrder.Count -gt 0) {
     $md.Add("| " + ($allCols -join " | ") + " |")
     $md.Add("| " + (($allCols | ForEach-Object { "---" }) -join " | ") + " |")
     foreach ($fn in $fnOrder.Keys) {
-        $cells = @($selected | ForEach-Object {
+        $cells = @($selectedResolved | ForEach-Object {
             if ($_.function_status -and $_.function_status.PSObject.Properties[$fn]) {
                 $st = $_.function_status.PSObject.Properties[$fn].Value
                 if ($st -eq "success") { "✅" } elseif ($st -eq "partial") { "⚠️" } else { "❌" }
@@ -213,9 +262,9 @@ $md.Add("---")
 $md.Add("")
 
 # Trends (oldest vs latest in current selection)
-if ($selected.Count -ge 2) {
-    $first = $selected[0]
-    $last  = $selected[-1]
+if ($selectedResolved.Count -ge 2) {
+    $first = $selectedResolved[0]
+    $last  = $selectedResolved[-1]
     $fl = if ($first.folder.Length -gt 19) { "…" + $first.folder.Substring($first.folder.Length - 16) } else { $first.folder }
     $ll = if ($last.folder.Length  -gt 19) { "…" + $last.folder.Substring($last.folder.Length  - 16) } else { $last.folder }
     $md.Add("## Trends")

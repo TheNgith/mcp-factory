@@ -1527,5 +1527,823 @@
                                 "CS_Initialize":  "success"
                             },
         "saved_at":  "2026-03-21T10:45:52.2646761-04:00"
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "ca576e2",
+        "commit_msg":  "fix: prevent schema shrink from partial invocable registration",
+        "job_id":  "920ccd9a-ef98-41a8-a38d-f8cf5b0a5e2f",
+        "component":  "unknown",
+        "note":  "post-schema-fix-rerun",
+        "folder":  "2026-03-21-ca576e2-post-schema-fix-rerun",
+        "finding_counts":  {
+                               "success":  0,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  0
+                           },
+        "gap_count":  0,
+        "known_ids":  "(none recorded)",
+        "vocab_completeness":  null,
+        "vocab_coverage":  null,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  null,
+        "param_desc_quality":  null,
+        "sentinel_calibration":  null,
+        "gap_resolution":  null,
+        "harmonization":  null,
+        "function_status":  null,
+        "saved_at":  "2026-03-21T12:16:25.0406233-04:00"
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "ca576e2",
+        "commit_msg":  "fix: prevent schema shrink from partial invocable registration",
+        "job_id":  "59ef08de",
+        "component":  "contoso_cs",
+        "note":  "schema-fix-validation",
+        "folder":  "2026-03-21-ca576e2-schema-fix-validation",
+        "finding_counts":  {
+                               "success":  7,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  13
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0.07,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  35,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "cross_validate":  2,
+                                               "deterministic_fallback":  20
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  4,
+                                                         "avg":  2.7,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_UnlockAccount":  3,
+                                                                 "CS_ProcessPayment":  3,
+                                                                 "CS_GetDiagnostics":  1,
+                                                                 "CS_GetVersion":  1,
+                                                                 "CS_CalculateInterest":  1,
+                                                                 "CS_GetOrderStatus":  1,
+                                                                 "CS_GetLoyaltyPoints":  1,
+                                                                 "CS_LookupCustomer":  1,
+                                                                 "CS_ProcessRefund":  3,
+                                                                 "CS_GetAccountBalance":  1,
+                                                                 "CS_RedeemLoyaltyPoints":  3,
+                                                                 "entry":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_Initialize"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  2,
+                                   "boilerplate_count":  0,
+                                   "boilerplate_params":  [
+
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  {
+                              "final_phase_suggestion":  "awaiting_clarification",
+                              "patched_count":  0,
+                              "open_questions":  5,
+                              "unanswered_questions":  5,
+                              "counts":  {
+                                             "success":  7,
+                                             "error":  6,
+                                             "other":  0
+                                         }
+                          },
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "error",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "error",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "error",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "error",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T15:28:37.4232422-04:00"
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "48db9b7",
+        "commit_msg":  "fix: add D-12 auto-enrich, version-fn success detection, and LLM error detail logging",
+        "job_id":  "59ef08de",
+        "component":  "contoso_cs",
+        "note":  "d12-autofix-validation",
+        "folder":  "2026-03-21-48db9b7-d12-autofix-validation",
+        "finding_counts":  {
+                               "success":  12,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  26
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0.23,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  89,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "deterministic_fallback":  38,
+                                               "llm_error":  12,
+                                               "calibrate_sentinels":  26,
+                                               "cross_validate":  3,
+                                               "explore":  10
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  4,
+                                                         "max":  12,
+                                                         "avg":  6.8,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_CalculateInterest"
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_UnlockAccount":  6,
+                                                                 "CS_ProcessPayment":  6,
+                                                                 "CS_GetDiagnostics":  2,
+                                                                 "CS_GetVersion":  2,
+                                                                 "CS_CalculateInterest":  6,
+                                                                 "CS_GetOrderStatus":  2,
+                                                                 "CS_GetLoyaltyPoints":  2,
+                                                                 "CS_LookupCustomer":  2,
+                                                                 "CS_ProcessRefund":  6,
+                                                                 "CS_GetAccountBalance":  2,
+                                                                 "CS_RedeemLoyaltyPoints":  6,
+                                                                 "entry":  2,
+                                                                 "CS_Initialize":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  7,
+                                   "boilerplate_count":  0,
+                                   "boilerplate_params":  [
+
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  2,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  {
+                              "final_phase_suggestion":  "awaiting_clarification",
+                              "patched_count":  0,
+                              "open_questions":  5,
+                              "unanswered_questions":  5,
+                              "counts":  {
+                                             "success":  12,
+                                             "error":  14,
+                                             "other":  0
+                                         }
+                          },
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "error",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "error",
+                                "CS_GetLoyaltyPoints":  "error",
+                                "CS_LookupCustomer":  "error",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "error",
+                                "CS_RedeemLoyaltyPoints":  "error",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T16:16:42.4624994-04:00"
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "48db9b7",
+        "commit_msg":  "fix: add D-12 auto-enrich, version-fn success detection, and LLM error detail logging",
+        "job_id":  "44fb7051",
+        "component":  "contoso_cs",
+        "note":  "b1-live-explore-only-a",
+        "folder":  "2026-03-21-48db9b7-b1-live-explore-only-a-2",
+        "finding_counts":  {
+                               "success":  11,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  23
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  20,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  7
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  5,
+                                                         "avg":  1.5,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_Initialize":  1,
+                                                                 "CS_GetVersion":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_CalculateInterest",
+                                                                         "CS_GetAccountBalance",
+                                                                         "CS_GetDiagnostics",
+                                                                         "CS_GetLoyaltyPoints",
+                                                                         "CS_GetOrderStatus",
+                                                                         "CS_LookupCustomer",
+                                                                         "CS_ProcessPayment",
+                                                                         "CS_ProcessRefund",
+                                                                         "CS_RedeemLoyaltyPoints",
+                                                                         "CS_UnlockAccount",
+                                                                         "entry"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  1,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "success",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T18:16:31.5806424-04:00",
+        "contract_valid":  false,
+        "hard_fail":  false,
+        "pipeline_verdict":  "UNKNOWN",
+        "transition_fail_count":  null,
+        "stage_fail_count":  null,
+        "failed_transitions":  null,
+        "failed_stages":  null
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "48db9b7",
+        "commit_msg":  "fix: add D-12 auto-enrich, version-fn success detection, and LLM error detail logging",
+        "job_id":  "44fb7051",
+        "component":  "contoso_cs",
+        "note":  "b1-live-explore-only-b",
+        "folder":  "2026-03-21-48db9b7-b1-live-explore-only-b",
+        "finding_counts":  {
+                               "success":  11,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  23
+                           },
+        "gap_count":  5,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  false,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  20,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  13,
+                                               "explore":  7
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  5,
+                                                         "avg":  1.5,
+                                                         "over_probed_fns":  [
+
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_Initialize":  1,
+                                                                 "CS_GetVersion":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_CalculateInterest",
+                                                                         "CS_GetAccountBalance",
+                                                                         "CS_GetDiagnostics",
+                                                                         "CS_GetLoyaltyPoints",
+                                                                         "CS_GetOrderStatus",
+                                                                         "CS_LookupCustomer",
+                                                                         "CS_ProcessPayment",
+                                                                         "CS_ProcessRefund",
+                                                                         "CS_RedeemLoyaltyPoints",
+                                                                         "CS_UnlockAccount",
+                                                                         "entry"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  24,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "CS_RedeemLoyaltyPoints.param_1",
+                                                              "CS_RedeemLoyaltyPoints.param_2",
+                                                              "CS_RedeemLoyaltyPoints.param_3",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  1,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "error",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "success",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T18:16:33.9658845-04:00",
+        "contract_valid":  false,
+        "hard_fail":  false,
+        "pipeline_verdict":  "UNKNOWN",
+        "transition_fail_count":  null,
+        "stage_fail_count":  null,
+        "failed_transitions":  null,
+        "failed_stages":  null
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "48db9b7",
+        "commit_msg":  "fix: add D-12 auto-enrich, version-fn success detection, and LLM error detail logging",
+        "job_id":  "cfd26cf5",
+        "component":  "contoso_cs",
+        "note":  "b1-live-answer-gaps-a",
+        "folder":  "2026-03-21-48db9b7-b1-live-answer-gaps-a",
+        "finding_counts":  {
+                               "success":  12,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  27
+                           },
+        "gap_count":  3,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  44,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  21,
+                                               "explore":  22,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  13,
+                                                         "avg":  3.4,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_GetLoyaltyPoints":  4,
+                                                                 "CS_Initialize":  1,
+                                                                 "CS_UnlockAccount":  9,
+                                                                 "CS_GetVersion":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_CalculateInterest",
+                                                                         "CS_GetAccountBalance",
+                                                                         "CS_GetDiagnostics",
+                                                                         "CS_GetOrderStatus",
+                                                                         "CS_LookupCustomer",
+                                                                         "CS_ProcessPayment",
+                                                                         "CS_ProcessRefund",
+                                                                         "CS_RedeemLoyaltyPoints",
+                                                                         "entry"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  23,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  5,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFD":  "not initialized",
+                                                      "0xFFFFFFFC":  "account locked or suspended",
+                                                      "0xFFFFFFFB":  "write operation denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "pending_refinement",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "pending_refinement",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T18:16:46.9427275-04:00",
+        "contract_valid":  false,
+        "hard_fail":  false,
+        "pipeline_verdict":  "UNKNOWN",
+        "transition_fail_count":  null,
+        "stage_fail_count":  null,
+        "failed_transitions":  null,
+        "failed_stages":  null
+    },
+    {
+        "date":  "2026-03-21",
+        "commit":  "48db9b7",
+        "commit_msg":  "fix: add D-12 auto-enrich, version-fn success detection, and LLM error detail logging",
+        "job_id":  "cfd26cf5",
+        "component":  "contoso_cs",
+        "note":  "b1-live-answer-gaps-b",
+        "folder":  "2026-03-21-48db9b7-b1-live-answer-gaps-b",
+        "finding_counts":  {
+                               "success":  12,
+                               "partial":  0,
+                               "failed":  0,
+                               "total":  27
+                           },
+        "gap_count":  3,
+        "known_ids":  "CUST-NNN, CUST-001, CUST-042, ORD-YYYYMMDD-NNNN, ORD-20260315-0117",
+        "vocab_completeness":  0,
+        "vocab_coverage":  1,
+        "transcript_present":  true,
+        "mini_transcript_present":  true,
+        "transcript_metrics":  {
+                                   "tool_calls":  0,
+                                   "sentinel_hits":  0,
+                                   "dll_errors":  0
+                               },
+        "probe_summary":  {
+                              "total_probes":  44,
+                              "functions_probed":  13,
+                              "unprobed_functions":  [
+
+                                                     ],
+                              "by_phase":  {
+                                               "calibrate_sentinels":  21,
+                                               "explore":  22,
+                                               "cross_validate":  1
+                                           },
+                              "verify_pass":  0,
+                              "verify_fail":  0,
+                              "probe_distribution":  {
+                                                         "min":  1,
+                                                         "max":  13,
+                                                         "avg":  3.4,
+                                                         "over_probed_fns":  [
+                                                                                 "CS_UnlockAccount"
+                                                                             ]
+                                                     },
+                              "direct_probes_per_function":  {
+                                                                 "CS_GetLoyaltyPoints":  4,
+                                                                 "CS_Initialize":  1,
+                                                                 "CS_UnlockAccount":  9,
+                                                                 "CS_GetVersion":  1
+                                                             },
+                              "sentinels_observed":  [
+                                                         "0xFFFFFFFF",
+                                                         "Returned: 4294967295",
+                                                         "4294967295",
+                                                         "Returned: 4294967294",
+                                                         "4294967294"
+                                                     ],
+                              "direct_probe_floor":  1,
+                              "functions_below_direct_probe_floor":  [
+                                                                         "CS_CalculateInterest",
+                                                                         "CS_GetAccountBalance",
+                                                                         "CS_GetDiagnostics",
+                                                                         "CS_GetOrderStatus",
+                                                                         "CS_LookupCustomer",
+                                                                         "CS_ProcessPayment",
+                                                                         "CS_ProcessRefund",
+                                                                         "CS_RedeemLoyaltyPoints",
+                                                                         "entry"
+                                                                     ],
+                              "no_tool_call_rounds":  0
+                          },
+        "param_desc_quality":  {
+                                   "total_params":  30,
+                                   "named_params":  0,
+                                   "boilerplate_count":  23,
+                                   "boilerplate_params":  [
+                                                              "CS_CalculateInterest.param_1",
+                                                              "CS_CalculateInterest.param_2",
+                                                              "CS_CalculateInterest.param_3",
+                                                              "CS_CalculateInterest.param_4",
+                                                              "CS_GetAccountBalance.param_1",
+                                                              "CS_GetAccountBalance.param_2",
+                                                              "CS_GetLoyaltyPoints.param_1",
+                                                              "CS_GetLoyaltyPoints.param_2",
+                                                              "CS_GetOrderStatus.param_1",
+                                                              "CS_GetOrderStatus.param_2",
+                                                              "CS_GetOrderStatus.param_3",
+                                                              "CS_LookupCustomer.param_1",
+                                                              "CS_LookupCustomer.param_2",
+                                                              "CS_LookupCustomer.param_3",
+                                                              "CS_ProcessPayment.param_1",
+                                                              "CS_ProcessPayment.param_2",
+                                                              "CS_ProcessRefund.param_1",
+                                                              "CS_ProcessRefund.param_2",
+                                                              "CS_ProcessRefund.param_3",
+                                                              "CS_ProcessRefund.param_4",
+                                                              "entry.param_1",
+                                                              "entry.param_2",
+                                                              "entry.param_3"
+                                                          ]
+                               },
+        "sentinel_calibration":  {
+                                     "count":  5,
+                                     "meanings":  {
+                                                      "0xFFFFFFFF":  "not found / invalid input",
+                                                      "0xFFFFFFFE":  "null argument",
+                                                      "0xFFFFFFFD":  "not initialized",
+                                                      "0xFFFFFFFC":  "account locked or suspended",
+                                                      "0xFFFFFFFB":  "write operation denied"
+                                                  }
+                                 },
+        "gap_resolution":  null,
+        "harmonization":  null,
+        "function_status":  {
+                                "CS_UnlockAccount":  "pending_refinement",
+                                "CS_ProcessPayment":  "success",
+                                "CS_GetDiagnostics":  "success",
+                                "CS_GetVersion":  "success",
+                                "CS_CalculateInterest":  "success",
+                                "CS_GetOrderStatus":  "success",
+                                "CS_GetLoyaltyPoints":  "success",
+                                "CS_LookupCustomer":  "success",
+                                "CS_ProcessRefund":  "success",
+                                "CS_GetAccountBalance":  "success",
+                                "CS_RedeemLoyaltyPoints":  "pending_refinement",
+                                "entry":  "error",
+                                "CS_Initialize":  "success"
+                            },
+        "saved_at":  "2026-03-21T18:16:49.0489662-04:00",
+        "contract_valid":  false,
+        "hard_fail":  false,
+        "pipeline_verdict":  "UNKNOWN",
+        "transition_fail_count":  null,
+        "stage_fail_count":  null,
+        "failed_transitions":  null,
+        "failed_stages":  null
     }
 ]
