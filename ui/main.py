@@ -469,11 +469,19 @@ _HTML = r"""<!DOCTYPE html>
         </div>
       </div>
       <div class="form-row">
-        <label>Hints / description (optional)</label>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <label style="margin:0">Hints / description (optional)</label>
+          <button class="btn btn-secondary" id="autofill-hints-btn" type="button"
+            style="padding:5px 10px;font-size:.76rem">Autofill</button>
+        </div>
         <textarea id="hints" placeholder="e.g. calculator CLI, zstd compression library…"></textarea>
       </div>
       <div class="form-row">
-        <label>Use cases (optional)</label>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <label style="margin:0">Use cases (optional)</label>
+          <button class="btn btn-secondary" id="autofill-use-cases-btn" type="button"
+            style="padding:5px 10px;font-size:.76rem">Autofill</button>
+        </div>
         <textarea id="use-cases" placeholder="e.g. Check balance before processing a payment; lock account after failed auth…"></textarea>
       </div>
 
@@ -731,9 +739,13 @@ function _syncModeBadge() {
   badge.textContent = `Mode: ${mode}`;
 }
 
-function _applyDevHintPreset() {
-  if ($('hints')) $('hints').value = DEV_HINTS_PRESET;
-  if ($('use-cases')) $('use-cases').value = DEV_USE_CASES_PRESET;
+function _applyContosoPreset(target = 'all') {
+  if ((target === 'hints' || target === 'all') && $('hints')) {
+    $('hints').value = DEV_HINTS_PRESET;
+  }
+  if ((target === 'use-cases' || target === 'all') && $('use-cases')) {
+    $('use-cases').value = DEV_USE_CASES_PRESET;
+  }
 }
 
 function _syncExploreToggleDefaultsFromMode() {
@@ -744,7 +756,6 @@ function _syncExploreToggleDefaultsFromMode() {
   if ($('probe-floor')) $('probe-floor').value = String(d.floor);
   if ($('toggle-skip-documented')) $('toggle-skip-documented').checked = d.skipDocumented;
   if ($('toggle-deterministic-fallback')) $('toggle-deterministic-fallback').checked = d.deterministicFallback;
-  if (mode === 'dev') _applyDevHintPreset();
   _syncModeBadge();
 }
 
@@ -1090,6 +1101,8 @@ let _explorePoller = null;
 
 _syncExploreToggleDefaultsFromMode();
 $('explore-mode').addEventListener('change', _syncExploreToggleDefaultsFromMode);
+$('autofill-hints-btn').addEventListener('click', () => _applyContosoPreset('hints'));
+$('autofill-use-cases-btn').addEventListener('click', () => _applyContosoPreset('use-cases'));
 
 $('cancel-explore-btn').addEventListener('click', async () => {
   if (!state.jobId) return;
