@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +23,12 @@ from pathlib import Path
 from typing import Any
 
 import requests
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from api import transition_readiness as tr
 
 
 def _now_utc() -> str:
@@ -61,12 +68,36 @@ def _git_commit_msg(repo_root: Path) -> str:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.strip():
+        return None
+    return json.loads(text)
 
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _write_failure_summary(path: Path, error_text: str, run_cfg: RunConfig, commit: str, commit_msg: str) -> None:
+    payload = {
+        "created_at": _now_utc(),
+        "type": "ab_compare_failure",
+        "error": error_text,
+        "run_manifest": {
+            "commit": commit,
+            "commit_msg": commit_msg,
+            "mode": run_cfg.mode,
+            "model": run_cfg.model,
+            "max_rounds": run_cfg.max_rounds,
+            "max_tool_calls": run_cfg.max_tool_calls,
+            "gap_resolution_enabled": run_cfg.gap_resolution_enabled,
+            "hint_variant": run_cfg.hint_variant,
+            "hints_sha256": _sha256_text(run_cfg.hints),
+            "use_cases_sha256": _sha256_text(run_cfg.use_cases),
+        },
+    }
+    _write_json(path, payload)
 
 
 def _parse_hints_file(path: Path) -> tuple[str, str]:
@@ -96,6 +127,7 @@ class RunConfig:
     sessions_root: Path
     run_root: Path
     note_prefix: str
+    hint_variant: str = "default"
 
 
 class PipelineClient:
@@ -133,6 +165,10 @@ class PipelineClient:
                 files=files,
                 data=data,
                 timeout=180,
+            )
+        if r.status_code == 401:
+            raise RuntimeError(
+                "Unauthorized calling /api/analyze. Provide a valid --api-key or set MCP_FACTORY_API_KEY."
             )
         r.raise_for_status()
         payload = r.json()
@@ -177,6 +213,7 @@ def _run_save_session(repo_root: Path, api_url: str, api_key: str, job_id: str, 
         note,
         "-OutDir",
         str(out_dir),
+        "-CompatibilityMode",
     ]
     if api_key:
         cmd.extend(["-ApiKey", api_key])
@@ -333,6 +370,7 @@ def _build_comparison_payload(run_cfg: RunConfig, commit: str, commit_msg: str, 
             "max_rounds": run_cfg.max_rounds,
             "max_tool_calls": run_cfg.max_tool_calls,
             "gap_resolution_enabled": run_cfg.gap_resolution_enabled,
+            "hint_variant": run_cfg.hint_variant,
             "hints_sha256": _sha256_text(run_cfg.hints),
             "use_cases_sha256": _sha256_text(run_cfg.use_cases),
             "hints_preview": run_cfg.hints[:240],
@@ -391,9 +429,14 @@ def _write_markdown_summary(path: Path, payload: dict) -> None:
 def _append_index(index_path: Path, payload: dict) -> None:
     rows: list[dict] = []
     if index_path.exists():
-        rows = _read_json(index_path)
-        if not isinstance(rows, list):
-            raise ValueError("sessions/index.json is not a JSON array")
+        loaded = _read_json(index_path)
+        if loaded is None:
+            rows = []
+        elif isinstance(loaded, list):
+            rows = loaded
+        else:
+            # Keep automation resilient: malformed index should not kill a run.
+            rows = []
 
     a = payload["A"]
     b = payload["B"]
@@ -525,6 +568,8 @@ def main() -> int:
     run_root = sessions_root / "_runs" / f"{datetime.now():%Y-%m-%d}-{commit}-{args.note_prefix}-{ts}"
     run_root.mkdir(parents=True, exist_ok=True)
 
+    hint_variant = hints_file.stem if args.hints_file != "sessions/contoso_cs/contoso_cs.txt" else "default"
+
     run_cfg = RunConfig(
         api_url=args.api_url,
         api_key=api_key,
@@ -539,22 +584,71 @@ def main() -> int:
         sessions_root=sessions_root,
         run_root=run_root,
         note_prefix=args.note_prefix,
+        hint_variant=hint_variant,
     )
 
     print("Launching parallel A/B runs...", flush=True)
     log_lock = threading.Lock()
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_a = pool.submit(_run_one_leg, repo_root, run_cfg, "A", log_lock)
-        f_b = pool.submit(_run_one_leg, repo_root, run_cfg, "B", log_lock)
-        a = f_a.result()
-        b = f_b.result()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_a = pool.submit(_run_one_leg, repo_root, run_cfg, "A", log_lock)
+            f_b = pool.submit(_run_one_leg, repo_root, run_cfg, "B", log_lock)
+            a = f_a.result()
+            b = f_b.result()
+    except Exception as ex:
+        failure_json = run_root / "ab-failure.json"
+        _write_failure_summary(failure_json, str(ex), run_cfg, commit, commit_msg)
+        print(f"A/B run failed: {ex}", flush=True)
+        print(f"Failure JSON: {failure_json}", flush=True)
+        return 1
 
     payload = _build_comparison_payload(run_cfg, commit, commit_msg, a, b)
+
+    a_readiness = tr.evaluate_session(Path(a["session_dir"]))
+    b_readiness = tr.evaluate_session(Path(b["session_dir"]))
+    readiness = tr.build_ab_readiness(
+        leg_a=a_readiness,
+        leg_b=b_readiness,
+        deterministic=payload["deterministic"],
+        require_determinism=True,
+    )
+    payload["transition_readiness"] = {
+        "pass": readiness["pass"],
+        "reasons": readiness["reasons"],
+    }
 
     compare_json = run_root / "ab-compare.json"
     compare_md = run_root / "ab-compare.md"
     _write_json(compare_json, payload)
     _write_markdown_summary(compare_md, payload)
+
+    readiness_json = run_root / "transition-readiness.json"
+    readiness_md = run_root / "transition-readiness.md"
+    tr.write_readiness_json(readiness_json, readiness)
+    tr.write_readiness_markdown(readiness_md, readiness)
+
+    # Phase-gate: evaluate discovery satisfaction for each leg independently.
+    # This tells the autopilot whether discovery produced enough signal to
+    # advance to the gap-resolution phase (rather than retrying discovery).
+    a_dir = Path(a["session_dir"]) if a.get("session_dir") else None
+    b_dir = Path(b["session_dir"]) if b.get("session_dir") else None
+    for leg_dir in filter(None, [a_dir, b_dir]):
+        if leg_dir.exists():
+            disc_sat = tr.evaluate_discovery_satisfaction(leg_dir)
+            tr.write_readiness_json(leg_dir / "discovery-satisfaction.json", disc_sat)
+    a_sat = tr.evaluate_discovery_satisfaction(a_dir) if a_dir and a_dir.exists() else {"pass": False, "reasons": ["no_leg_dir"]}
+    b_sat = tr.evaluate_discovery_satisfaction(b_dir) if b_dir and b_dir.exists() else {"pass": False, "reasons": ["no_leg_dir"]}
+    agg_sat = {
+        "created_at": tr._now_utc(),
+        "type": "discovery_satisfaction_ab",
+        "pass": bool(a_sat.get("pass") and b_sat.get("pass")),
+        "leg_a": a_sat,
+        "leg_b": b_sat,
+    }
+    tr.write_readiness_json(run_root / "discovery-satisfaction.json", agg_sat)
+    print(f"Discovery satisfaction: {'PASS' if agg_sat['pass'] else 'FAIL'} | "
+          f"A findings={a_sat.get('finding_count')} gaps={a_sat.get('gap_count')} | "
+          f"B findings={b_sat.get('finding_count')} gaps={b_sat.get('gap_count')}", flush=True)
 
     if args.append_index:
         _append_index(sessions_root / "index.json", payload)
@@ -565,6 +659,9 @@ def main() -> int:
     print(f"B job: {b['job_id']}  success={b['function_outcome']['success']}  warn={b['cohesion']['transition_warn']}", flush=True)
     print(f"Comparison JSON: {compare_json}", flush=True)
     print(f"Comparison MD:   {compare_md}", flush=True)
+    print(tr.compact_summary_line(readiness), flush=True)
+    print(f"Readiness JSON:  {readiness_json}", flush=True)
+    print(f"Readiness MD:    {readiness_md}", flush=True)
     if payload["differences"]:
         print("Differences:", flush=True)
         for d in payload["differences"]:

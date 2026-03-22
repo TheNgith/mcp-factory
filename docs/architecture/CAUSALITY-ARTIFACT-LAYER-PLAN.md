@@ -467,6 +467,101 @@ Plan:
 - run A: compatibility on, strict gate off
 - run B: compatibility on, strict gate on
 
-Acceptance:
-- save-session integration can be enabled without mutating machine-truth artifacts,
-  and with deterministic contract-first gating semantics.
+---
+
+## Bug Resolution History — D-1 through D-11
+
+> Migrated from docs/PIPELINE-COHESION.md (now deleted). This is the complete
+> record of inter-stage data flow bugs discovered and resolved between 2026-03-20
+> and 2026-03-21. All D-series bugs are now FIXED or MITIGATED.
+> Open issues as of 2026-03-21 are listed in the section below.
+
+| ID | Bug | Files | Final Status | Commit |
+|----|-----|-------|--------------|--------|
+| D-1 | Mini-sessions don't register invocables — `_run_gap_answer_mini_sessions` never called `_register_invocables`, `enrich_invocable` returned "not found in job" | `explore_gap.py:239`, `executor.py:637` | **CLOSED** | Phase A fix (COH-2) |
+| D-2 | Findings append-only — `_save_finding` appended every entry, chat injected all, model saw contradictory signals | `storage.py:279`, `chat.py:218` | **MITIGATED** — chat dedup working; raw JSON still append-only by design | Phase A fix (COH-3/4) |
+| D-3 | Explore worker doesn't register invocables — enrichment silently failed on cold Azure containers | `explore.py:92` | **CLOSED** | Phase A fix (COH-1) |
+| D-4 | Vocab knowledge doesn't flow to schema — symptom of D-1/D-3 | vocab.json → invocables_map.json | **CLOSED** — resolved with D-1/D-3 plus D-5 | |
+| D-5 | Param names never renamed — `enrich_invocable` updated descriptions but never renamed `param_1` → `customer_id` | `storage.py _patch_invocable` | **FIXED** — auto-derive semantic names from descriptions via regex | `9b46b3b` (per-param), `790dd3a` (wholesale) |
+| D-6 | Auto gap-resolution wrote no log — `_attempt_gap_resolution` ran but gap_resolution_log.json was never written | `explore_gap.py _attempt_gap_resolution` | **FIXED** | `9b46b3b` |
+| D-7 | Gap count = 0 despite failed functions — `gap_count` was set from clarification questions, not actual function failures | `main.py` session-snapshot endpoint | **FIXED** | `9b46b3b` |
+| D-8 | Deterministic fallback success not saved — CS_GetVersion-type functions probed correctly but never appeared in findings.json | `explore.py _explore_one` force-record block | **FIXED** | `9b46b3b` |
+| D-9 | Stale invocables snapshot poisoned backfill and gap resolution — refreshed param names were overwritten by old snapshot | `explore.py ~1090`, `explore_vocab.py:300` | **FIXED** | `9b46b3b` |
+| D-10 | Direction inference missing on wholesale param path — Ghidra tagged input strings as `direction: out`, excluded from `required` | `storage.py _patch_invocable` wholesale block | **FIXED** | `5310428` |
+| D-11 | Ground-truth override didn't rewrite finding text — status patched to success but error text remained, synthesis generated no backfill patches | `explore.py` ground-truth block, `storage.py _patch_finding` | **FIXED** | `5310428` |
+| GR-1 | `_clean` stripped byte* string inputs from working_call — direction-based param stripping erased valid call arguments | `explore_gap.py _clean` | **FIXED** | `e5b0507` |
+| GR-2 | Zero-param fallback missing — CS_GetVersion-type functions not resolved by `_attempt_gap_resolution` | `explore_gap.py _attempt_gap_resolution` | **FIXED** | `e5b0507` |
+
+---
+
+## Currently Open Issues (as of 2026-03-21)
+
+These are the bugs confirmed still open after all D-series and GR-series fixes.
+All plumbing (Layer 1) issues are resolved. Remaining issues are Layer 2 (probe
+quality), Layer 3 (structural ceilings), and operational.
+
+### Layer 2 — Probe Quality
+
+| ID | Bug | File | Fix |
+|----|-----|------|-----|
+| Q-1 | Sentinel calibration only covers 2 codes (`0xFFFFFFFF`, `0xFFFFFFFE`). Hint-merged codes (`0xFFFFFFFB`, `0xFFFFFFFC`) still not auto-calibrated at probe time. | `api/explore_phases.py` (calibration phase) | Extend calibration to also seed from `vocab["error_codes"]` |
+| Q-2 | No boundary probing for numeric params — min/max/overflow conditions found only by accident | `api/explore.py` | Add boundary sweep phase: `[0, 1, 0x7FFFFFFF, -1]` per numeric param; record in `vocab["value_semantics"][param].bounds` |
+| Q-3 | Single-ID probing — only CUST-001 tested; CUST-002/003 have different per-record lock state | `api/explore.py` | Multi-sample probing: try 2–3 valid IDs per function, record variance |
+| Q-4 | Shallow probe depth — avg 2.5 probes/function historically; minimum floor enforcement needed | `api/explore.py`, `api/explore_phases.py` | Enforce minimum direct-probe floor (ADD-1 through ADD-4 in ROADMAP.md) |
+| Q-5 | State mutation across probes — payment probes drain CUST-001 balance, later probes fail not because function is broken but because state is depleted | `api/explore.py` | Add re-init step or probe with independent state per function |
+
+### Layer 3 — Structural Ceilings
+
+| ID | Bug | File | Fix |
+|----|-----|------|-----|
+| C-1 | Output buffer params (`undefined*`, `LPSTR`, `DWORD*` out-params) cause access violations — executor allocates nothing for them. Affects CS_GetOrderStatus, CS_LookupCustomer, CS_GetDiagnostics | `api/executor.py`, `api/generate.py` | Add `"out_buffer": true` schema flag; `ctypes.create_string_buffer(N)` pre-call; read back post-call (~1 week) |
+| C-2 | CS_UnlockAccount XOR-folds unlock code and checks `== 0xa5` — undiscoverable by probing | `api/explore_phases.py` | Decompilation-guided probing: surface XOR constants from Capstone/Ghidra; add brute-force for small keyspaces |
+| C-3 | Struct in-params (`CUSTOMER_RECORD*`) — not yet hit but will block real-world DLLs | `api/executor.py`, `api/generate.py` | `ctypes.Structure` subclass generation from schema (~2 weeks) |
+
+### Operational
+
+| ID | Bug | File | Fix |
+|----|-----|------|-----|
+| FW-1 | Answer-gaps mini-session infinite loop — CS_UnlockAccount caused ~80+ iterations, job stuck >15 min (2026-03-21, job 44fb7051) | `api/explore_gap.py` ~L213 | Add `max_mini_session_rounds` (suggest 50) + per-function timeout (300s); emit `diagnostics/mini-session-diagnostics.json` |
+| P1-1 | Model passes invalid IDs (e.g. `"ABC"`, `"LOCKED"`) directly to functions — no pre-call validation against `id_formats` | `api/chat.py _build_system_message` | Add system prompt rule: "validate all ID args against `id_formats` before calling; if invalid, tell user" |
+| P1-2 | Error code vocabulary recall failure — `0xFFFFFFFC` is in vocab as "account locked" but model said "access violation" | `api/chat.py _build_system_message` | Add system prompt rule: "before interpreting any unexpected return value, check `error_codes` in vocab first" |
+| T-04/T-05 warn | `probe_user_message_sample.txt` not emitted — can't verify static hints reached probe user message | `api/explore.py` phase-0b | Persist first probe user message content as `evidence/stage-02-probe-loop/probe_user_message_sample.txt` |
+| T-01 | `id_formats` only seeded when key is absent — if a prior session already set it, updated hints from a new run won't propagate | `api/explore_vocab.py` (hint seed logic) | Change seed from `setdefault` to always overwrite when hints are explicitly provided by the user |
+| P1-3 | `sessions/index.json` shows `component: "unknown"` and `finding_counts: 0/0/0` across all sessions | `scripts/save-session.ps1`, `/api/analyze` upload | Write component into job metadata at upload time; fix findings.json path resolution |
+| MOD-1 | All pipeline layers use the same model — explore should use `gpt-4-1-mini` (faster, tied-best accuracy at 6/13), gap resolution should use `gpt-4o` (deeper reasoning for retries) | `api/config.py`, `api/explore.py`, `api/explore_gap.py` | Add `gap_model` field to `explore_settings`; add per-layer model env-var defaults to `config.py`. Falls back to `explore_settings.model` if not set. |
+
+---
+
+## Stage-by-Stage Reasoning Capture Status
+
+> **This is the core open observability problem.** The pipeline records *what*
+> was probed at each stage. It does not yet record *why* the model made specific
+> choices — which context shaped argument selection, how a return code was
+> interpreted, or what evidence triggered a particular probe strategy.
+>
+> Closing this gap is a **high priority**: without it, a session save only proves
+> execution happened, not that the pipeline was intelligent at each decision point.
+
+| Stage | Context injected | Evidence emitted today | Reasoning captured? | Gap artifact needed |
+|-------|-----------------|----------------------|--------------------|--------------------|
+| S-00 Setup | invocables map, schema t0 | `evidence/stage-00-setup/` | ✅ Yes — schema-t0 + invocables-map fully emitted | — |
+| S-01 Pre-probe | id_formats, vocab, static hints | `evidence/stage-01-pre-probe/` | ⚠️ **Partial** — T-04 warns: `probe_user_message_sample.txt` not emitted; static hints reach the probe **user message** (`explore.py:492`) but no artifact proves they were seen | `evidence/stage-01-pre-probe/probe-user-message-sample.txt` |
+| S-02 Probe-loop | known-good calls, argument templates | `evidence/stage-02-probe-loop/` | ⚠️ **Partial** — T-05 warns: which arguments were chosen and *why* (static ID vs fallback vs known-good) is not recorded | `evidence/stage-02-probe-loop/probe-arg-selection-log.json` — per-call: arg value, source (`static_id|known_good|default_numeric|fallback_string`), and selection reason |
+| S-03 Post-probe | harmonization, sentinel catalog | `evidence/stage-03-post-probe/` | ⚠️ **Partial** — sentinel calibration only caught 2/5 known codes (Q-1); no artifact records why certain codes were skipped | `evidence/stage-03-post-probe/sentinel-coverage-report.json` |
+| S-04 Synthesis | deduplicated findings, vocab | `evidence/stage-04-synthesis/` | ⚠️ **Partial** — synthesis reads `findings` + `vocab` (not schema — T-11 correction). No artifact records the synthesis LLM's input snapshot | `evidence/stage-04-synthesis/synthesis-input-snapshot.json` (findings + vocab at synthesis time) |
+| S-05 Backfill | synthesis output, invocables | `evidence/stage-05-backfill/` | ✅ **With D-1/D-3 fixes applied** — `backfill_result.json` now written (T-07 covered). Param rename decisions still not explained. | `evidence/stage-05-backfill/param-rename-decisions.json` (optional, medium priority) |
+| S-06 Gap resolution | failure patterns, user hints | `evidence/stage-06-gap-resolution/` | ⚠️ **Active bug FW-1** — mini-session loop has no ceiling; plus no artifact records which failure pattern triggered which retry strategy | `diagnostics/mini-session-diagnostics.json` (per FW-1 fix) |
+| S-07 Finalize | full transition index | `evidence/stage-07-finalize/` | ✅ Yes — contract-compliant after commit `43de8df`; T-01..T-16 all evaluated | — |
+| Chat (agentic) | vocab + findings at turn-0 system prompt | `diagnostics/chat-system-context-turn0.txt` | ⚠️ **Only available for explore+gap runs** — emitted when chat stage fires. Never emitted on explore-only runs. Also: turn-0 records the injected context but not the model's reasoning for each tool call. | Per-tool-call trace: already partially in `executor_trace.json`; missing is *why* each tool was selected |
+
+### Priority Order for Closing Reasoning Gaps
+
+These are ordered by: (1) blocking contract transitions, then (2) diagnostic value.
+
+| Priority | What to add | Closes | Effort |
+|----------|------------|--------|--------|
+| **1** | Persist `probe_user_message_sample.txt` — first probe user message per function cohort, including static hints block | T-04 `warn → pass` | ~1 hr — one `write_text` call in `explore.py` phase-0b after user message is built |
+| **2** | Add `arg_source` field to `explore_probe_log.json` entries — tag each arg as `static_id`, `known_good_replay`, `vocab_semantic`, `default_numeric`, or `fallback_string` | T-05 `warn → pass` | ~2 hrs — add classification logic in argument-building code path |
+| **3** | Emit `diagnostics/mini-session-diagnostics.json` per function: rounds used, tool calls used, timeout hit, no-progress stop, exit reason, last tool args | FW-1 fix + gap observability | Bundled with FW-1 fix (~3 hrs total) |
+| **4** | Emit `synthesis-input-snapshot.json` — deduplicated findings + vocab dict at the exact moment `_synthesize` is called | T-11 evidence hardening | ~30 min — snapshot findings/vocab before calling `_synthesize` |
+| **5** | `chat-system-context-turn0.txt` on explore-only runs | T-14/T-15 on explore-only | ~30 min — emit even when no user chat occurs; just write the system message that *would* be built |

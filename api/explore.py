@@ -225,7 +225,7 @@ def _run_phase_0_vocab_seed(ctx: ExploreContext) -> None:
         if _user_hints:
             # Extract ID-like patterns (e.g. CUST-001, ORD-20040301-0042)
             _hint_ids = list(dict.fromkeys(_re.findall(r'[A-Z]{2,6}-[\w-]+', _user_hints)))
-            if _hint_ids and "id_formats" not in ctx.vocab:
+            if _hint_ids:
                 ctx.vocab["id_formats"] = _hint_ids
             # Strip DOMAIN ANSWER entries injected by the answer_gaps endpoint
             # before writing notes so synthetic answers don't pollute the vocab.
@@ -426,6 +426,28 @@ def _run_phase_2_curriculum_order(ctx: ExploreContext) -> None:
                 ctx.job_id, len(ctx.init_invocables), len(_other_invs))
 
 
+def _classify_arg_source(
+    arg_name: str, arg_value, inv: dict, ctx_vocab: dict
+) -> str:
+    """Return a source tag for a single probe argument value.
+
+    Tags: static_id | known_good_replay | default_numeric | fallback_string
+    """
+    id_fmts = ctx_vocab.get("id_formats") or []
+    if isinstance(arg_value, str):
+        for fmt in id_fmts:
+            if "-" in fmt:
+                prefix = fmt[: fmt.index("-") + 1]
+                if arg_value.startswith(prefix):
+                    return "static_id"
+    known_good = ctx_vocab.get("known_good_args") or {}
+    if arg_name in known_good and known_good[arg_name] == arg_value:
+        return "known_good_replay"
+    if isinstance(arg_value, (int, float)):
+        return "default_numeric"
+    return "fallback_string"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  Phase 3 – Per-function probe loop
 # ══════════════════════════════════════════════════════════════════════════════
@@ -495,6 +517,54 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
             ),
         },
     ]
+
+    # T-04: persist first probe user message per job as observability artifact.
+    # Only written once (first function processed) — proves static hints reached
+    # the probe user message and were not silently dropped.
+    try:
+        _sample_blob = f"{ctx.job_id}/evidence/stage-01-pre-probe/probe-user-message-sample.txt"
+        _sample_exists = True
+        try:
+            _download_blob(ARTIFACT_CONTAINER, _sample_blob)
+        except Exception:
+            _sample_exists = False
+        if not _sample_exists:
+            _sample_content = conversation[1]["content"]
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                _sample_blob,
+                _sample_content.encode(),
+            )
+    except Exception as _t04_err:
+        logger.debug("[%s] T-04: probe user message sample write failed: %s",
+                     ctx.job_id, _t04_err)
+
+    # Reasoning artifact: snapshot the vocab state at this function's probe start.
+    # Captures what domain knowledge the model had available before probing began.
+    # Writes to evidence/stage-01-pre-probe/probe-vocab-snapshot.json (appended per function).
+    try:
+        _vocab_snap_entry = {
+            "function": fn_name,
+            "vocab_keys": list(_vocab_snap.keys()),
+            "vocab": _vocab_snap,
+        }
+        _vocab_snap_blob = (
+            f"{ctx.job_id}/evidence/stage-01-pre-probe/probe-vocab-snapshot.json"
+        )
+        try:
+            _existing_vsnaps = json.loads(
+                _download_blob(ARTIFACT_CONTAINER, _vocab_snap_blob)
+            )
+        except Exception:
+            _existing_vsnaps = []
+        _existing_vsnaps.append(_vocab_snap_entry)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER, _vocab_snap_blob,
+            json.dumps(_existing_vsnaps, indent=2).encode(),
+        )
+    except Exception as _vsne:
+        logger.debug("[%s] probe-vocab-snapshot write failed for %s: %s",
+                     ctx.job_id, fn_name, _vsne)
 
     # Per-function local state (not shared; no lock required)
     _observed_successes: list[dict] = []
@@ -671,11 +741,16 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                             f"meaning={classification.get('meaning') or 'unknown'}"
                         )
 
+                    _arg_sources = {
+                        k: _classify_arg_source(k, v, inv, _vocab_snap)
+                        for k, v in tc_args.items()
+                    }
                     _fn_probe_log.append({
                         "probe_id": f"{fn_name}:{_round}:{_fn_tool_call_count + 1}:{tc_name}",
                         "phase": "explore", "function": fn_name, "round": _round,
                         "reasoning": (msg.content or "").strip() or None,
                         "tool": tc_name, "args": tc_args,
+                        "arg_sources": _arg_sources,
                         "result_excerpt": str(tool_result)[:200],
                         "trace": _tc_traced.get("trace"),
                         "classification": classification, "policy": _policy_block,
@@ -797,10 +872,15 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 if not _ok:
                     _pb = {"allowed": False, "stop_reason": _reason, "detail": _detail}
             if _pb:
+                _arg_sources = {
+                    k: _classify_arg_source(k, v, inv, _vocab_snap)
+                    for k, v in _fb_args.items()
+                }
                 _fn_probe_log.append({
                     "phase": "deterministic_fallback", "function": fn_name,
                     "round": _attempt, "reasoning": reason, "tool": fn_name,
                     "args": _fb_args,
+                    "arg_sources": _arg_sources,
                     "arg_selection": _fb_selection,
                     "result_excerpt": f"Policy blocked fallback probe: {_pb['stop_reason']}",
                     "trace": {"backend": "policy", "blocked": True},
@@ -810,11 +890,16 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
             _tc = _execute_tool_traced(ctx.inv_map[fn_name], _fb_args)
             _res = _tc["result_str"]
             _cls = _classify_result_text(str(_res))
+            _arg_sources = {
+                k: _classify_arg_source(k, v, inv, _vocab_snap)
+                for k, v in _fb_args.items()
+            }
             _fn_probe_log.append({
                 "probe_id": f"{fn_name}:fb:{_attempt + 1}",
                 "phase": "deterministic_fallback", "function": fn_name,
                 "round": _attempt, "reasoning": reason, "tool": fn_name,
                 "args": _fb_args, "result_excerpt": str(_res)[:200],
+                "arg_sources": _arg_sources,
                 "arg_selection": _fb_selection,
                 "trace": _tc.get("trace"), "classification": _cls, "policy": None,
             })
@@ -949,6 +1034,38 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 _execute_tool(ctx.inv_map["enrich_invocable"], _eargs)
                 logger.info("[%s] explore_worker: forced enrich_invocable for %s",
                             ctx.job_id, fn_name)
+                # Reasoning artifact: record param rename decisions from forced enrich.
+                # Maps original Ghidra param names to what the model proposed.
+                # Writes to evidence/stage-02-probe-loop/param-rename-decisions.json.
+                try:
+                    _original_params = {
+                        p.get("name", ""): p.get("type", "")
+                        for p in (inv.get("parameters") or [])
+                        if isinstance(p, dict)
+                    }
+                    _rename_entry = {
+                        "function": fn_name,
+                        "original_params": _original_params,
+                        "proposed_description": _eargs.get("description", ""),
+                        "proposed_enrich_args": _eargs,
+                    }
+                    _rename_blob = (
+                        f"{ctx.job_id}/evidence/stage-02-probe-loop/param-rename-decisions.json"
+                    )
+                    try:
+                        _existing_renames = json.loads(
+                            _download_blob(ARTIFACT_CONTAINER, _rename_blob)
+                        )
+                    except Exception:
+                        _existing_renames = []
+                    _existing_renames.append(_rename_entry)
+                    _upload_to_blob(
+                        ARTIFACT_CONTAINER, _rename_blob,
+                        json.dumps(_existing_renames, indent=2).encode(),
+                    )
+                except Exception as _rde:
+                    logger.debug("[%s] param-rename-decisions write failed for %s: %s",
+                                 ctx.job_id, fn_name, _rde)
         except Exception as _ee:
             logger.debug("[%s] forced enrich failed for %s: %s", ctx.job_id, fn_name, _ee)
 
@@ -991,6 +1108,25 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         except Exception as _ce:
             logger.debug("[%s] consistency patch failed for %s: %s", ctx.job_id, fn_name, _ce)
     else:
+        # Reasoning artifact: sentinel calibration decisions with coverage metadata.
+        # Writes to evidence/stage-00-calibrate/sentinel-calibration-decisions.json.
+        try:
+            _calib_decision = {
+                "functions_calibrated": len(ctx.invocables),
+                "sentinel_count": len(ctx.sentinels),
+                "used_defaults": ctx.sentinels == _SENTINEL_DEFAULTS,
+                "sentinels_resolved": {
+                    f"0x{k:08X}": v for k, v in ctx.sentinels.items()
+                },
+            }
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{ctx.job_id}/evidence/stage-00-calibrate/sentinel-calibration-decisions.json",
+                json.dumps(_calib_decision, indent=2).encode(),
+            )
+        except Exception as _cde:
+            logger.debug("[%s] phase0.5: sentinel-calibration-decisions write failed: %s",
+                         ctx.job_id, _cde)
         # Verify the LLM's claimed working_call by re-running it
         _cur = _load_findings(ctx.job_id)
         _ff = next((f for f in reversed(_cur) if f.get("function") == fn_name), None)
@@ -1001,9 +1137,16 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                     _vt = _execute_tool_traced(_vi, _ff["working_call"])
                     _vr = _vt["result_str"]
                     _vr_class = _classify_result_text(str(_vr))
+                    _verify_args = _ff["working_call"]
+                    _arg_sources = {
+                        k: _classify_arg_source(k, v, _vi, _vocab_snap)
+                        for k, v in _verify_args.items()
+                    }
                     _fn_probe_log.append({
                         "phase": "verify", "function": fn_name, "tool": fn_name,
-                        "args": _ff["working_call"], "result_excerpt": str(_vr)[:200],
+                        "args": _verify_args,
+                        "arg_sources": _arg_sources,
+                        "result_excerpt": str(_vr)[:200],
                         "trace": _vt.get("trace"), "classification": _vr_class, "policy": None,
                     })
                     _vm = _re.search(r"Returned:\s*(-?\d+)", _vr or "")
@@ -1097,9 +1240,15 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 _cvt = _execute_tool_traced(_cv_inv, _cv.get("args") or {})
                 _cv_result = _cvt["result_str"]
                 _cv_class = _classify_result_text(str(_cv_result))
+                _cv_args = _cv.get("args") or {}
+                _arg_sources = {
+                    k: _classify_arg_source(k, v, _cv_inv, _vocab_snap)
+                    for k, v in _cv_args.items()
+                }
                 _fn_probe_log.append({
                     "phase": "cross_validate", "function": fn_name,
-                    "tool": _cv["function"], "args": _cv.get("args") or {},
+                    "tool": _cv["function"], "args": _cv_args,
+                    "arg_sources": _arg_sources,
                     "result_excerpt": str(_cv_result)[:200],
                     "trace": _cvt.get("trace"), "classification": _cv_class, "policy": None,
                 })
@@ -1148,6 +1297,132 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 logger.debug("[%s] vocab update failed for %s: %s", ctx.job_id, fn_name, _ve)
 
     # ── Flush probe log for this function ────────────────────────────────────
+
+    # Reasoning artifact: persist model's per-round reasoning text for this function.
+    # Extracts all assistant messages from the conversation that preceded tool calls.
+    # Writes to evidence/stage-02-probe-loop/probe-round-reasoning.json (appended per function).
+    try:
+        _round_reasoning_entries = []
+        _conv_round = 0
+        for _cm in conversation:
+            if _cm.get("role") == "assistant":
+                _reasoning_text = (_cm.get("content") or "").strip()
+                if _reasoning_text:
+                    _round_reasoning_entries.append({
+                        "function": fn_name,
+                        "round": _conv_round,
+                        "reasoning": _reasoning_text,
+                    })
+                _conv_round += 1
+        if _round_reasoning_entries:
+            _reasoning_blob = (
+                f"{ctx.job_id}/evidence/stage-02-probe-loop/probe-round-reasoning.json"
+            )
+            try:
+                _existing_raw = _download_blob(ARTIFACT_CONTAINER, _reasoning_blob)
+                _existing = json.loads(_existing_raw)
+            except Exception:
+                _existing = []
+            _existing.extend(_round_reasoning_entries)
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                _reasoning_blob,
+                json.dumps(_existing, indent=2).encode(),
+            )
+    except Exception as _rre:
+        logger.debug("[%s] probe-round-reasoning write failed for %s: %s",
+                     ctx.job_id, fn_name, _rre)
+
+    # Reasoning artifact: persist probe stop reason for this function.
+    # Writes to evidence/stage-02-probe-loop/probe-stop-reasons.json (appended per function).
+    try:
+        # Determine stop reason from local state
+        if _policy_stop_reason:
+            _computed_stop_reason = _policy_stop_reason
+        elif _fn_tool_call_count >= ctx.runtime.max_tool_calls:
+            _computed_stop_reason = "cap_hit_tool_calls"
+        elif _cancel_requested(ctx.job_id):
+            _computed_stop_reason = "cancel"
+        else:
+            _computed_stop_reason = "natural"
+
+        # Get model's final summary sentence (last assistant message)
+        _final_summary = ""
+        for _cm in reversed(conversation):
+            if _cm.get("role") == "assistant" and (_cm.get("content") or "").strip():
+                _final_summary = (_cm.get("content") or "").strip()
+                break
+
+        _stop_entry = {
+            "function": fn_name,
+            "stop_reason": _computed_stop_reason,
+            "rounds_used": sum(1 for _cm in conversation if _cm.get("role") == "assistant"),
+            "tool_calls_used": _fn_tool_call_count,
+            "direct_target_calls": _direct_target_tool_calls,
+            "final_summary": _final_summary[:300] if _final_summary else None,
+        }
+        _stop_blob = (
+            f"{ctx.job_id}/evidence/stage-02-probe-loop/probe-stop-reasons.json"
+        )
+        try:
+            _existing_stops_raw = _download_blob(ARTIFACT_CONTAINER, _stop_blob)
+            _existing_stops = json.loads(_existing_stops_raw)
+        except Exception:
+            _existing_stops = []
+        _existing_stops.append(_stop_entry)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            _stop_blob,
+            json.dumps(_existing_stops, indent=2).encode(),
+        )
+    except Exception as _sre:
+        logger.debug("[%s] probe-stop-reasons write failed for %s: %s",
+                     ctx.job_id, fn_name, _sre)
+
+    # Reasoning artifact: probe strategy summary — which strategies fired per function.
+    # Writes to evidence/stage-02-probe-loop/probe-strategy-summary.json (appended per function).
+    try:
+        _phases_used = sorted({e.get("phase", "unknown") for e in _fn_probe_log})
+        _strategy_entry = {
+            "function": fn_name,
+            "phases_used": _phases_used,
+            "rounds_used": sum(1 for m in conversation if m.get("role") == "assistant"),
+            "tool_calls_used": _fn_tool_call_count,
+            "direct_target_calls": _direct_target_tool_calls,
+            "no_tool_call_rounds": _no_tool_call_rounds,
+            "deterministic_fallback_fired": any(
+                e.get("phase") == "deterministic_fallback" for e in _fn_probe_log
+            ),
+            "cross_validation_ran": any(
+                e.get("phase") == "cross_validate" for e in _fn_probe_log
+            ),
+            "hypothesis_ran": bool(_best_raw_result),
+            "is_write_fn": _is_write_fn,
+            "enrich_called": _enrich_called,
+            "finding_recorded": _finding_recorded,
+            "stop_reason": _policy_stop_reason or (
+                "cap_hit_tool_calls"
+                if _fn_tool_call_count >= ctx.runtime.max_tool_calls
+                else "natural"
+            ),
+        }
+        _strategy_blob = (
+            f"{ctx.job_id}/evidence/stage-02-probe-loop/probe-strategy-summary.json"
+        )
+        try:
+            _existing_strats = json.loads(
+                _download_blob(ARTIFACT_CONTAINER, _strategy_blob)
+            )
+        except Exception:
+            _existing_strats = []
+        _existing_strats.append(_strategy_entry)
+        _upload_to_blob(
+            ARTIFACT_CONTAINER, _strategy_blob,
+            json.dumps(_existing_strats, indent=2).encode(),
+        )
+    except Exception as _psume:
+        logger.debug("[%s] probe-strategy-summary write failed for %s: %s",
+                     ctx.job_id, fn_name, _psume)
 
     if _fn_probe_log:
         try:
@@ -1363,6 +1638,24 @@ def _run_phase_6_synthesize(ctx: ExploreContext) -> str | None:
                     ctx.job_id, len(_syn_findings))
         _set_explore_status(ctx.job_id, ctx._state["explored"], ctx.total,
                             "Synthesizing API reference…")
+        # Reasoning artifact: snapshot synthesis inputs before the LLM call.
+        # Writes to evidence/stage-04-synthesis/synthesis-input-snapshot.json
+        try:
+            _syn_snapshot = {
+                "function_count": len(ctx.invocables),
+                "findings_count": len(_syn_findings),
+                "findings": _syn_findings,
+                "vocab": ctx.vocab,
+            }
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{ctx.job_id}/evidence/stage-04-synthesis/synthesis-input-snapshot.json",
+                json.dumps(_syn_snapshot, indent=2).encode(),
+            )
+        except Exception as _snap_e:
+            logger.debug("[%s] synthesis-input-snapshot write failed: %s",
+                         ctx.job_id, _snap_e)
+
         _report = _synthesize(
             ctx.client, ctx.model, _syn_findings,
             vocab=ctx.vocab, sentinels=ctx.sentinels,
@@ -1376,6 +1669,34 @@ def _run_phase_6_synthesize(ctx: ExploreContext) -> str | None:
             _report.encode("utf-8"),
         )
         logger.info("[%s] phase6: api_reference.md saved to blob", ctx.job_id)
+
+        # Reasoning artifact: check which functions appear in the synthesis text.
+        # Coverage < 100% means the synthesis LLM silently dropped functions.
+        # Writes to evidence/stage-04-synthesis/synthesis-coverage-check.json.
+        try:
+            _fn_names_found = [f.get("function", "") for f in _syn_findings if f.get("function")]
+            _coverage_entries = [
+                {"function": _fn_c, "in_api_reference": bool(_fn_c and _fn_c in _report)}
+                for _fn_c in _fn_names_found
+            ]
+            _covered_count = sum(1 for e in _coverage_entries if e["in_api_reference"])
+            _cov_check = {
+                "total_functions": len(_fn_names_found),
+                "covered_in_report": _covered_count,
+                "coverage_pct": (
+                    round(100.0 * _covered_count / len(_fn_names_found), 1)
+                    if _fn_names_found else 0.0
+                ),
+                "functions": _coverage_entries,
+            }
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{ctx.job_id}/evidence/stage-04-synthesis/synthesis-coverage-check.json",
+                json.dumps(_cov_check, indent=2).encode(),
+            )
+        except Exception as _cc_e:
+            logger.debug("[%s] phase6: synthesis-coverage-check write failed: %s",
+                         ctx.job_id, _cc_e)
 
         # Refresh invocables from the in-memory registry so backfill and gap
         # resolution see discovery enrichments, not the stale worker-start snapshot.

@@ -299,6 +299,72 @@ Progression path should be staged, not overhauled:
 2. raise S-06 structural-classification quality second,
 3. enable clarification tier only when S-02 and S-06 are stable.
 
+---
+
+## 13. Configuration Profiles
+
+> Migrated from docs/EXPLORE-ENGINE.md (now deleted).
+
+| Profile | Rounds | Tool Calls/fn | Use Case |
+|---------|--------|---------------|----------|
+| `dev` | 3 | 5 | Fast iteration, diagnostic runs |
+| `stabilize` | 5 | 10 | Quality runs before a real session capture |
+| `deploy` | 8 | 15 | Production — maximum probe depth |
+
+Current default for A/B automation runs: `dev` (`--mode dev --max-rounds 2 --max-tool-calls 5`).
+
+---
+
+## 14. Key Source Files
+
+> Migrated from docs/EXPLORE-ENGINE.md (now deleted).
+
+| File | Role |
+|------|------|
+| `api/explore.py` | Orchestrator — per-function probe loop, ground-truth overrides, checkpoint persistence, all 8 phases |
+| `api/explore_phases.py` | Sentinel calibration, write-unlock probe, boundary probing strategies |
+| `api/explore_vocab.py` | Vocabulary accumulation — `_vocab_block`, `_update_vocabulary`, priority-ordering |
+| `api/explore_prompts.py` | LLM prompt construction for each probe phase, synthesis, clarification |
+| `api/explore_gap.py` | Gap question generation, `_attempt_gap_resolution`, `_run_gap_answer_mini_sessions` |
+| `api/explore_helpers.py` | Shared utilities: JSON parsing, finding merges, schema diffing |
+| `api/executor.py` | Tool dispatch: `_execute_dll`, `_execute_cli`, `_execute_gui`, `_call_execute_bridge`; `_execute_tool_traced` |
+| `api/chat.py` | Agentic SSE loop, `stream_chat`, `_build_system_message`, conversation window management |
+| `api/static_analysis.py` | PE analysis, Capstone sentinel harvest, IAT capabilities, binary string extraction |
+| `api/storage.py` | Blob helpers: `_save_finding`, `_load_findings`, `_append_transcript`, `_patch_invocable` |
+| `api/generate.py` | MCP schema generation from enriched invocables, `run_generate`, tier logic |
+| `api/cohesion.py` | Transition evaluator, `evaluate_cohesion`, contract artifact emission |
+
+---
+
+## 15. Vocab.json Reference Structure
+
+> Migrated from docs/WORKFLOW.md (now deleted). Live example from contoso_cs.dll.
+
+```json
+{
+  "description":   "Customer loyalty management system handling orders, balances, refunds, and tier tracking.",
+  "user_context":  "Legacy CRM DLL used by the payments team — needs wrapping for new microservice.",
+  "id_formats":    ["CUST-NNN", "ORD-YYYYMMDD-NNNN"],
+  "value_semantics": {
+    "balance":     "Balance in cents — divide by 100 to get dollar amount",
+    "param_4":     "Refund amount in cents",
+    "tier":        "Loyalty tier — membership level of the customer"
+  },
+  "error_codes": {
+    "0xFFFFFFFB":  "Write denied",
+    "0xFFFFFFFC":  "Account locked",
+    "0xFFFFFFFE":  "Invalid argument",
+    "0xFFFFFFFF":  "Generic failure"
+  },
+  "notes": "Order IDs follow the format ORD-YYYYMMDD-NNNN",
+  "write_blocked_by": "Sentinel error codes indicating write denied"
+}
+```
+
+`description` is synthesized at end of Discover stage by LLM from accumulated semantics + `user_context`.
+`user_context` is the verbatim `use_cases` field the developer enters at job creation — it persists through to chat time.
+vocab.json grows incrementally as each function is probed. Gap answers are merged on top during Refine stage.
+
 Target progression envelope:
 
 1. dev profile: 8/13 to 10/13,

@@ -1,0 +1,4 @@
+# hints
+Customer IDs: CUST-NNN (e.g. CUST-001).
+Order IDs: ORD-YYYYMMDD-NNNN (e.g. ORD-20260315-0117).
+Amounts: integer cents.

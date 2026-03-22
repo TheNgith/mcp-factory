@@ -345,6 +345,25 @@ def _backfill_schema_from_synthesis(
                     logger.debug("[%s] backfill: patch failed for %s: %s", job_id, fn_name, _pe)
 
         logger.info("[%s] backfill_schema: applied patches to %d/%d functions", job_id, patched, len(patches))
+        # Reasoning artifact: persist the full backfill decision log.
+        # Records what the LLM proposed vs. what was actually applied.
+        # Writes to evidence/stage-06-backfill/backfill-decision-log.json.
+        try:
+            from api.storage import _upload_to_blob as _ul_bf
+            from api.config import ARTIFACT_CONTAINER as _AC_bf
+            _backfill_log = {
+                "patches_proposed": len(patches),
+                "patches_applied": patched,
+                "patched_functions": patched_functions,
+                "patches": patches,
+            }
+            _ul_bf(
+                _AC_bf,
+                f"{job_id}/evidence/stage-06-backfill/backfill-decision-log.json",
+                json.dumps(_backfill_log, indent=2).encode(),
+            )
+        except Exception as _bdl_e:
+            logger.debug("[%s] backfill-decision-log write failed: %s", job_id, _bdl_e)
         return {
             "patches_requested": len(patches),
             "patches_applied": patched,

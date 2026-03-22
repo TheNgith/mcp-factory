@@ -1,0 +1,27 @@
+# hints
+Customer IDs follow the format CUST-NNN (3-digit zero-padded number, e.g. CUST-001, CUST-042).
+Order IDs follow the format ORD-YYYYMMDD-NNNN (e.g. ORD-20260315-0117).
+Monetary amounts (payments, refunds, balances) are in integer cents — $25.00 = 2500, $0.01 = 1.
+Loyalty points are plain integers, not dollars.
+CS_Initialize must be called before any other customer operation; calling functions without it returns error sentinels.
+
+Error code 0xFFFFFFFB (4294967291) = write denied — account locked or insufficient permissions.
+Error code 0xFFFFFFFC (4294967292) = account not found — the CUST-NNN ID does not exist.
+Error code 0xFFFFFFFD (4294967293) = invalid argument — wrong ID format or out-of-range value.
+Error code 0xFFFFFFFE (4294967294) = not initialized — CS_Initialize was not called first.
+
+Working example calls discovered in past sessions:
+  CS_Initialize() → returns 0 (success)
+  CS_LookupCustomer("CUST-001") → returns 0 and emits profile data
+  CS_GetAccountBalance("CUST-001") → returns 0 and emits balance in cents
+  CS_ProcessPayment("CUST-001", 2500) → returns 0 (pays $25.00)
+  CS_RedeemLoyaltyPoints("CUST-001", 100) → returns 0 (redeems 100 points)
+
+# use_cases
+Customer service operations for a CRM loyalty system: look up customer profiles, check account status and balances, process payments and refunds, redeem loyalty points, unlock locked accounts, retrieve order status. Customer IDs are CUST-NNN format. Used by call-center agents to handle inbound service requests end-to-end.
+
+Key workflows:
+1. New call: CS_Initialize → CS_LookupCustomer to verify identity → CS_GetAccountBalance for balance inquiry.
+2. Payment: CS_Initialize → CS_LookupCustomer → CS_ProcessPayment(customer_id, amount_cents).
+3. Redemption: CS_Initialize → CS_LookupCustomer → CS_RedeemLoyaltyPoints(customer_id, points).
+4. Locked account: CS_Initialize → CS_LookupCustomer → CS_UnlockAccount(customer_id).

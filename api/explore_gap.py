@@ -211,7 +211,7 @@ def _attempt_gap_resolution(
                         logger.debug("[%s] gap_resolution: verify failed for %s: %s", job_id, fn_name, _ve)
 
 
-def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
+def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict], max_mini_session_rounds: int = 50) -> None:
     """Targeted mini-sessions driven by user gap answers."""
     from api.storage import _load_findings
 
@@ -317,13 +317,48 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                 },
             ]
 
+            # Reasoning artifact: record expert answer interpretation inputs before the mini-session.
+            # Writes to evidence/stage-05-gap-resolution/expert-answer-interpretation.json.
+            try:
+                _expert_entry = {
+                    "function": fn_name,
+                    "answer_text": answer_text,
+                    "technical_question": technical_q,
+                    "prev_finding": prev_finding.get("finding") if prev_finding else None,
+                    "prev_status": prev_finding.get("status") if prev_finding else None,
+                }
+                _expert_blob = (
+                    f"{job_id}/evidence/stage-05-gap-resolution/expert-answer-interpretation.json"
+                )
+                try:
+                    _existing_exp = json.loads(
+                        _download_blob(ARTIFACT_CONTAINER, _expert_blob)
+                    )
+                except Exception:
+                    _existing_exp = []
+                _existing_exp.append(_expert_entry)
+                _upload_to_blob(
+                    ARTIFACT_CONTAINER, _expert_blob,
+                    json.dumps(_existing_exp, indent=2).encode(),
+                )
+            except Exception as _eae:
+                logger.debug(
+                    "[%s] gap_mini_sessions: expert-answer-interpretation write failed for %s: %s",
+                    job_id, fn_name, _eae,
+                )
+
             _p_lookup = {p.get("name", ""): p for p in (inv.get("parameters") or [])}
             _observed_successes: list[dict] = []
             _mini_tool_log: list[dict] = []
             _mini_traces: list[dict] = []
             _fn_tool_call_count = 0
+            _fn_start = time.time()
 
-            for _round in range(_max_rounds):
+            for _round in range(min(_max_rounds, max_mini_session_rounds)):
+                if time.time() - _fn_start > 300:
+                    logger.warning("[%s] gap_mini_sessions: %s exceeded 300s timeout — aborting",
+                                   job_id, fn_name)
+                    break
                 if _fn_tool_call_count >= _max_tool_calls:
                     logger.info("[%s] gap_mini_sessions: %s hit tool-call cap (%d)",
                                 job_id, fn_name, _max_tool_calls)
@@ -416,6 +451,42 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict]) -> None:
                     logger.info("[%s] gap_mini_sessions: tool=%s result=%s",
                                 job_id, tc_name, str(tool_result)[:120])
                     conversation.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+
+            # Reasoning artifact: extract per-round reasoning from mini-session tool log.
+            # Writes to evidence/stage-05-gap-resolution/mini-session-round-reasoning.json.
+            try:
+                _mini_reasoning_entries = [
+                    {
+                        "function": fn_name,
+                        "call": e["call"],
+                        "args": e.get("args", {}),
+                        "reasoning": e.get("reasoning") or "",
+                        "result_excerpt": str(e.get("result", ""))[:200],
+                    }
+                    for e in _mini_tool_log
+                    if e.get("reasoning")
+                ]
+                if _mini_reasoning_entries:
+                    _mini_reasoning_blob = (
+                        f"{job_id}/evidence/stage-05-gap-resolution/"
+                        "mini-session-round-reasoning.json"
+                    )
+                    try:
+                        _existing_mr = json.loads(
+                            _download_blob(ARTIFACT_CONTAINER, _mini_reasoning_blob)
+                        )
+                    except Exception:
+                        _existing_mr = []
+                    _existing_mr.extend(_mini_reasoning_entries)
+                    _upload_to_blob(
+                        ARTIFACT_CONTAINER, _mini_reasoning_blob,
+                        json.dumps(_existing_mr, indent=2).encode(),
+                    )
+            except Exception as _mrre:
+                logger.debug(
+                    "[%s] gap_mini_sessions: mini-session-round-reasoning write failed for %s: %s",
+                    job_id, fn_name, _mrre,
+                )
 
             try:
                 _mini_user_msg = (

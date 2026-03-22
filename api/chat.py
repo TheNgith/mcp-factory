@@ -29,9 +29,9 @@ from typing import Any, AsyncGenerator
 
 from fastapi import HTTPException
 
-from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_CHAT_MODEL
+from api.config import OPENAI_ENDPOINT, OPENAI_DEPLOYMENT, OPENAI_REASONING_DEPLOYMENT, OPENAI_MAX_TOOLS, OPENAI_API_KEY, OPENAI_MODEL, OPENAI_CHAT_MODEL, ARTIFACT_CONTAINER
 from api.executor import _execute_tool, _execute_tool_traced
-from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable, _append_diagnosis_raw, _append_executor_trace
+from api.storage import _register_invocables, _get_invocable, _load_findings, _save_finding, _patch_invocable, _append_diagnosis_raw, _append_executor_trace, _download_blob, _upload_to_blob
 from api.telemetry import _openai_client
 
 logger = logging.getLogger("mcp_factory.api")
@@ -317,7 +317,13 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "is permanently lost. Similarly, after exhausting all probes on a failing function, call "
             "record_finding with status='error' and note the exact error code(s) observed. "
             "Do NOT call record_finding speculatively or for intermediate/uncertain results — only "
-            "for definitive success (return=0) or confirmed failure (all probes returned sentinels)."
+            "for definitive success (return=0) or confirmed failure (all probes returned sentinels).\n"
+            "8. Before calling any function, validate all ID-format arguments against the "
+            "id_formats list in vocab. If an argument does not match any listed format, "
+            "respond to the user explaining the correct format — do not make the call.\n"
+            "9. Before interpreting any unexpected return value from a function call, "
+            "look it up in the error_codes section of vocab. Always report both the raw "
+            "returned value and its vocab meaning if one exists."
             + init_rule
             + criticality_block
             + vocab_block
@@ -437,6 +443,18 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     if not sys_msgs:
         sys_msgs = [_build_system_message(invocables, job_id)]
     conversation = sys_msgs + user_msgs[-_CONTEXT_WINDOW_TURNS:]
+
+    # Reasoning artifact: persist the full system message for this chat session.
+    # One-time write per session — proves what rules and vocab the agent had loaded.
+    # Writes to diagnostics/chat-system-context.txt.
+    if job_id and sys_msgs:
+        try:
+            from api.storage import _upload_to_blob as _ul_sys
+            from api.config import ARTIFACT_CONTAINER as _AC_sys
+            _sys_content = (sys_msgs[0].get("content") or "").encode("utf-8")
+            _ul_sys(_AC_sys, f"{job_id}/diagnostics/chat-system-context.txt", _sys_content)
+        except Exception:
+            pass  # never fail a chat session over an artifact write
 
     _AI_SEARCH_TOP_K = OPENAI_MAX_TOOLS
     _active_tools = list(tools)
@@ -662,6 +680,33 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                                 None,
                                 lambda te=_trace_entries: _append_executor_trace(job_id, te),
                             )
+                        # Reasoning artifact: persist per-tool-call reasoning text.
+                        # Each entry records what the model said before calling each tool.
+                        _tool_reasoning_entries = [
+                            {
+                                "call": e["call"],
+                                "args": e.get("args", {}),
+                                "reasoning_before_call": e.get("reasoning", ""),
+                                "result_excerpt": str(e.get("result", ""))[:200],
+                            }
+                            for e in _tl_snap
+                            if e.get("call")
+                        ]
+                        if _tool_reasoning_entries:
+                            try:
+                                _tr_blob = f"{job_id}/diagnostics/chat-tool-reasoning.json"
+                                try:
+                                    _tr_existing = json.loads(_download_blob(ARTIFACT_CONTAINER, _tr_blob))
+                                except Exception:
+                                    _tr_existing = []
+                                _tr_existing.extend(_tool_reasoning_entries)
+                                _upload_to_blob(
+                                    ARTIFACT_CONTAINER,
+                                    _tr_blob,
+                                    json.dumps(_tr_existing, indent=2).encode(),
+                                )
+                            except Exception as _tre:
+                                logger.debug("[stream_chat] chat-tool-reasoning write failed: %s", _tre)
                         # Build and persist a per-message diagnosis record
                         _diag_record = {
                             "user_message":  (_last_user_message or "")[:200],
@@ -709,7 +754,6 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
 
             # ── Execute each tool call, streaming result events immediately ─
             _round_reasoning = (msg.content or "").strip()
-            _first_in_round = True
             for tc in msg.tool_calls:
                 fn_name = tc.function.name
                 try:
@@ -718,14 +762,14 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     fn_args = {}
 
                 yield _sse({"type": "tool_call", "name": fn_name, "args": fn_args})
-                # Attach the assistant's reasoning text to the first tool call in
-                # each round so the transcript captures why the model made the call.
+                # Attach the assistant's reasoning text to each tool call in the round
+                # so downstream artifacts can correlate reasoning with every call.
                 _tool_log.append({
                     "call": fn_name, "args": fn_args, "result": None, "trace": None,
-                    "reasoning": _round_reasoning if _first_in_round else None,
+                    "reasoning": _round_reasoning or None,
                 })
-                _first_in_round = False
 
+                _tool_trace: dict | None = None
                 inv = inv_map.get(fn_name)
                 if inv is None and job_id:
                     inv = _get_invocable(job_id, fn_name)
@@ -735,7 +779,6 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     # run in executor so the SSE response stays live.
                     _TOOL_HARD_TIMEOUT = 30  # seconds; DLL/COM/GUI calls can hang
                     _tool_t0 = time.perf_counter()
-                    _tool_trace: dict | None = None
                     _tool_future = loop.run_in_executor(
                         None, lambda i=inv, a=fn_args: _execute_tool_traced(i, a, _vocab_sentinels)
                     )
@@ -792,6 +835,35 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 # if a more capable model is configured.
                 if "4294967295" in tool_result or tool_result.strip() == "-1":
                     _failure_count += 1
+                    # Reasoning artifact: log each sentinel hit with context.
+                    # Writes to diagnostics/chat-error-interpretation.json.
+                    if job_id:
+                        try:
+                            from api.storage import _download_blob as _dlb_err
+                            from api.storage import _upload_to_blob as _ulb_err
+                            from api.config import ARTIFACT_CONTAINER as _AC_err
+                            import json as _jerr
+                            _err_entry = {
+                                "round": _round,
+                                "tool": fn_name,
+                                "args": fn_args,
+                                "result_excerpt": tool_result[:200],
+                                "model_at_failure": _active_model,
+                                "failure_count": _failure_count,
+                                "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            }
+                            _err_blob = f"{job_id}/diagnostics/chat-error-interpretation.json"
+                            try:
+                                _err_existing = _jerr.loads(_dlb_err(_AC_err, _err_blob))
+                            except Exception:
+                                _err_existing = []
+                            _err_existing.append(_err_entry)
+                            _ulb_err(
+                                _AC_err, _err_blob,
+                                _jerr.dumps(_err_existing, indent=2).encode(),
+                            )
+                        except Exception:
+                            pass  # never fail a chat session over an artifact write
                     if (_failure_count >= 3
                             and _active_model != _reasoning_model
                             and _base_model != _reasoning_model):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -17,6 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from api import transition_readiness as tr
 import run_ab_parallel as ab
 
 
@@ -315,6 +321,25 @@ def main() -> int:
     _write_json(out_json, payload)
     _write_markdown(out_md, payload)
 
+    per_leg_readiness: dict[str, dict[str, Any]] = {}
+    failed_legs: list[str] = []
+    for leg in payload["legs"]:
+        if not leg.get("ok"):
+            failed_legs.append(str(leg.get("leg") or "unknown"))
+            continue
+        result = leg.get("result") or {}
+        session_dir = result.get("session_dir")
+        if not session_dir:
+            failed_legs.append(str(leg.get("leg") or "unknown"))
+            continue
+        per_leg_readiness[str(leg.get("leg") or "unknown")] = tr.evaluate_session(Path(str(session_dir)))
+
+    readiness = tr.build_batch_readiness(per_leg=per_leg_readiness, failed_legs=failed_legs)
+    readiness_json = run_root / "transition-readiness.json"
+    readiness_md = run_root / "transition-readiness.md"
+    tr.write_readiness_json(readiness_json, readiness)
+    tr.write_readiness_markdown(readiness_md, readiness)
+
     if args.append_index:
         _append_index(sessions_root / "index.json", payload)
 
@@ -327,6 +352,9 @@ def main() -> int:
     )
     print(f"Batch JSON: {out_json}", flush=True)
     print(f"Batch MD:   {out_md}", flush=True)
+    print(tr.compact_summary_line(readiness), flush=True)
+    print(f"Readiness JSON: {readiness_json}", flush=True)
+    print(f"Readiness MD:   {readiness_md}", flush=True)
 
     return 0
 

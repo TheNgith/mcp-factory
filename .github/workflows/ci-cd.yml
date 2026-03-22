@@ -95,6 +95,17 @@ jobs:
         # (pywinauto, Notepad on the desktop). Those run in the gui-tests job below.
         run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
 
+      - name: Transition readiness checks (non-blocking)
+        continue-on-error: true
+        run: pytest tests/test_transition_readiness.py -v --tb=short --junitxml=transition-readiness-junit.xml
+
+      - name: Upload transition readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transition-readiness-junit
+          path: transition-readiness-junit.xml
+
   # ── 2. GUI automation tests (self-hosted Windows runner) ───────────────────
   gui-tests:
     name: GUI automation tests (Windows)

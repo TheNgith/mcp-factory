@@ -1,0 +1,8 @@
+# hints
+Customer IDs follow the format CUST-NNN (3-digit zero-padded number, e.g. CUST-001, CUST-042).
+Order IDs follow the format ORD-YYYYMMDD-NNNN (e.g. ORD-20260315-0117).
+Monetary amounts (payments, refunds, balances) are in integer cents — $25.00 = 2500, $0.01 = 1.
+Loyalty points are plain integers, not dollars.
+
+# use_cases
+Customer service operations for a CRM loyalty system: look up customer profiles, check account status and balances, process payments and refunds, redeem loyalty points, unlock locked accounts, retrieve order status. Customer IDs are CUST-NNN format. Used by call-center agents to handle inbound service requests end-to-end.

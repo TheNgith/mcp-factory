@@ -306,6 +306,68 @@ This is acceptable IF:
 Once Phase 1 is complete and 2-3 real runs produce complete captures, compatibility mode
 should be disabled and all subsequent captures must meet the complete capture standard.
 
+### 16.9 Reasoning Capture as Iteration Signal
+
+> **Core principle:** A session capture that proves execution happened but not *why the model
+> reasoned as it did* is structurally incomplete for context engineering work. The data flow
+> transitions (T-01..T-16) tell you whether artifacts moved between stages. They do not tell
+> you whether the model *used* the context or *why* it chose the arguments it chose. Without
+> reasoning artifacts, the iteration loop degrades to: "change a prompt, re-run, check if
+> numbers moved" — no causal signal.
+
+**What a reasoning-complete capture adds beyond a data-complete capture:**
+
+| Stage | Key reasoning artifact | What it answers |
+|---|---|---|
+| S-01 | `vocab-update-raw-response.json` | Did the model correctly interpret my hints text into vocab, or did it miss ID patterns? |
+| S-02 | `probe-round-reasoning.json` | Did the model cite the injected hints as the reason for its arg choices? |
+| S-02 | `probe-stop-reasons.json` | Was the model finished probing, or was it cut off by a cap? |
+| S-03 | `sentinel-calibration-decisions.json` | Did the model recognize the error codes I described in hints as sentinels? |
+| S-04 | `synthesis-input-snapshot.json` | Did synthesis receive all findings, or were some dropped before the call? |
+| S-06 | `expert-answer-interpretation.json` | Did the model use the expert answer I provided, or did it retry identical probes? |
+| Chat | `chat-tool-reasoning.json` | Did the model cite vocab (id_formats, error_codes) before making tool calls? |
+
+**The causal chain you need for context engineering iteration:**
+
+```
+Hints text
+  → vocab-update-raw-response.json  (did model extract hints correctly?)
+  → probe-user-message-sample.txt   (did hints reach probe user message?)
+  → probe-round-reasoning.json      (did model CITE hints in its reasoning?)
+  → probe-log.json[arg_sources]     (did model USE hint IDs as args?)
+  → probe-stop-reasons.json         (did model probe enough to find the answer?)
+  → findings.json                   (did model record what it found?)
+  → synthesis-input-snapshot.json   (did findings reach synthesis?)
+  → api-reference.md                (did synthesis cover all functions?)
+```
+
+Each arrow is a transition. Each artifact in the chain is observable. If you change the hints
+text and re-run:
+- `arg_source_distribution` (fraction `static_id` vs `fallback_string`) should increase
+- `probe-round-reasoning.json` should mention the new ID patterns
+- The transition that changed should be identifiable from the delta report
+
+**Minimum reasoning-complete capture definition:**
+
+A capture is considered reasoning-complete (distinct from data-complete) when it additionally contains:
+- `evidence/stage-02-probe-loop/probe-round-reasoning.json`
+- `evidence/stage-02-probe-loop/probe-stop-reasons.json`
+- `evidence/stage-04-synthesis/synthesis-input-snapshot.json`
+- `diagnostics/chat-tool-reasoning.json` (when chat stage fires)
+
+Until these are emitted, `human/session-save-meta.json` should include:
+```json
+"reasoning_capture": "partial"
+```
+
+Once all four are present:
+```json
+"reasoning_capture": "complete"
+```
+
+`reasoning_capture: complete` is the prerequisite for T-17..T-23 transitions to evaluate
+anything other than `warn`.
+
 ### 16.8 Relationship to the Contract Maturity Plan
 
 The contract is only as trustworthy as the data collection that feeds it.
