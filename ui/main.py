@@ -704,6 +704,15 @@ const state = {
   messages: [],        // chat history [{role, content}]
 };
 
+// Temporary hardcoded dev preset pulled from sessions/contoso_cs/contoso_cs.txt
+const DEV_HINTS_PRESET = `Customer IDs follow the format CUST-NNN (3-digit zero-padded number, e.g. CUST-001, CUST-042).
+Order IDs follow the format ORD-YYYYMMDD-NNNN (e.g. ORD-20260315-0117).
+Monetary amounts (payments, refunds, balances) are in integer cents — $25.00 = 2500, $0.01 = 1.
+Loyalty points are plain integers, not dollars.
+CS_Initialize must be called before any other customer operation; calling functions without it returns error sentinels.`;
+
+const DEV_USE_CASES_PRESET = `Customer service operations for a CRM loyalty system: look up customer profiles, check account status and balances, process payments and refunds, redeem loyalty points, unlock locked accounts, retrieve order status. Customer IDs are CUST-NNN format. Used by call-center agents to handle inbound service requests end-to-end.`;
+
 function _modeDefaults(mode) {
   if (mode === 'extended') {
     return { gap: true, clarify: true, floor: 2, skipDocumented: true, deterministicFallback: true };
@@ -722,6 +731,11 @@ function _syncModeBadge() {
   badge.textContent = `Mode: ${mode}`;
 }
 
+function _applyDevHintPreset() {
+  if ($('hints')) $('hints').value = DEV_HINTS_PRESET;
+  if ($('use-cases')) $('use-cases').value = DEV_USE_CASES_PRESET;
+}
+
 function _syncExploreToggleDefaultsFromMode() {
   const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
   const d = _modeDefaults(mode);
@@ -730,6 +744,7 @@ function _syncExploreToggleDefaultsFromMode() {
   if ($('probe-floor')) $('probe-floor').value = String(d.floor);
   if ($('toggle-skip-documented')) $('toggle-skip-documented').checked = d.skipDocumented;
   if ($('toggle-deterministic-fallback')) $('toggle-deterministic-fallback').checked = d.deterministicFallback;
+  if (mode === 'dev') _applyDevHintPreset();
   _syncModeBadge();
 }
 
