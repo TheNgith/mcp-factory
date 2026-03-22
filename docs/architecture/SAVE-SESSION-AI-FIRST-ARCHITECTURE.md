@@ -635,3 +635,343 @@ Across all stages, keep these invariants:
 - transition IDs and semantics remain stable
 - PowerShell remains orchestration-only
 - Python remains the only intelligence layer for capture evaluation
+
+## 19. Coordinator Agent Integration (Q14/Q15/Q16/Q17 Requirements)
+
+> **Why this section exists:** Q14 (tournament selection), Q15 (context ablation),
+> Q16 (adaptive sentinel calibration), and Q17 (autonomous coordinator agent) each
+> depend on save-session producing specific fields that do not yet exist in the
+> compact manifest. This section defines exactly what the coordinator needs to read,
+> what is currently emitted, what is missing, and what changes are required before
+> the Q17 coordinator can operate autonomously.
+
+### 19.1 Coordinator Topology
+
+**One coordinator per component, not one global coordinator.**
+
+A coordinator is scoped to a single component (DLL or target binary). It runs one full
+Q17 playbook for that component. It does not coordinate across components simultaneously;
+multi-component work is Phase F inside the Q17 playbook, deferred until the first
+component reaches ≥10/13 function coverage.
+
+**Agent hierarchy for one coordinator cycle:**
+
+```
+run_coordinator.py (1 instance per component)
+  └─ run_set_orchestrator.py
+        ├─ Pipeline Run 1  (Layer 1 control, profile=baseline)
+        ├─ Pipeline Run 2  (Layer 1 control, profile=baseline)
+        ├─ Pipeline Run 3  (Layer 1 control, profile=baseline)
+        ├─ Pipeline Run 4  (Layer 2 ablation, ablation_variable=prompt_framing, ablation_value=systematic)
+        ├─ Pipeline Run 5  (Layer 2 ablation, ablation_variable=vocab_ordering, ablation_value=ids_first)
+        └─ Pipeline Run 6  (Layer 2 ablation, ablation_variable=tool_budget, ablation_value=8)
+```
+
+Each pipeline run is an existing `explore` API job — not a new agent type. The
+coordinator dispatches existing infrastructure (the same jobs that run_ab_parallel.py
+currently triggers), adds tagging, and waits for all to complete.
+
+**Ratio:** 1 coordinator → 1 orchestrator → N+M pipeline runs per cycle.
+Recommended: N=3 (Layer 1 control), M=3 (Layer 2 ablation) = 6 total per cycle.
+The coordinator runs at most one cycle at a time; cycles are sequential, not parallel.
+
+**Why the coordinator is not subdivided further:**
+- Each pipeline run already contains multi-stage LLM reasoning (probe → sentinel →
+  synthesis → harmonization). The coordinator's job is to read the outputs, not to
+  subdivide the reasoning.
+- A second coordinator (e.g. a "sentinel sub-coordinator" for Q16) would add
+  coordination overhead without adding signal. Q16's adaptive calibration is a
+  capability added to the run-set orchestrator, not a separate agent.
+
+### 19.2 What the Coordinator Reads From Each Session
+
+For the coordinator to make a promotion decision autonomously, it must read each session
+in one pass without traversing the full artifact tree. This requires a compact manifest
+(Q13) that contains ALL of the following fields:
+
+**Group A — Already specified in Q13 (in QUESTIONS.md) and partially emitted:**
+
+| Field | Where emitted | Current status |
+|---|---|---|
+| `job_id` | `session-meta.json` | ✅ Emitted |
+| `component` | `session-meta.json` | ⚠️ Emitted but sometimes `"unknown"` (P1-3 bug) |
+| `saved_at` | `human/session-save-meta.json` | ✅ Emitted |
+| `commit` | `session-meta.json` | ✅ Emitted |
+| `mode`, `model`, `max_rounds`, `max_tool_calls` | `session-meta.json` | ✅ Emitted |
+| `contract_valid`, `hard_fail`, `capture_quality` | `cohesion-report.json` + `human/session-save-meta.json` | ✅ Emitted |
+| `functions_success`, `functions_error` | `findings.json` aggregate | ✅ Emitted |
+| Transition pass/fail/warn counts | `transition-index.json` | ✅ Emitted |
+
+**Group B — Required for Q15 (context ablation) — NOT YET EMITTED:**
+
+| Field | Meaning | Where it must go |
+|---|---|---|
+| `prompt_profile_id` | Name of the prompt profile used (e.g. `"baseline"`, `"systematic-framing"`, `"ids-first"`) | `session-meta.json` + compact manifest |
+| `layer` | `1` (control) or `2` (ablation) | `session-meta.json` + compact manifest |
+| `ablation_variable` | Which variable was changed from baseline (e.g. `"prompt_framing"`) — null for Layer 1 | `session-meta.json` + compact manifest |
+| `ablation_value` | What the variable was set to (e.g. `"systematic"`) — null for Layer 1 | `session-meta.json` + compact manifest |
+| `run_set_id` | UUID shared by all N+M runs in the same coordinator cycle | `session-meta.json` + compact manifest |
+
+Without `prompt_profile_id` + `layer` + `ablation_variable`, the coordinator cannot
+determine which run is a control and which is a variant. It cannot compute a delta.
+It cannot make a promotion decision. These 5 fields are blockers for Q15 Phase 2.
+
+**Group C — Required for Q16 (adaptive sentinel calibration) — NOT YET EMITTED:**
+
+| Field | Meaning | Where it must go |
+|---|---|---|
+| `sentinel_table_snapshot` | The sentinel table as it existed at the START of this run's stage boundary | `session-meta.json` or dedicated `sentinel-calibration-state.json` |
+| `sentinel_table_delta` | List of newly resolved codes at each stage boundary (empty list if none) | `sentinel-calibration-state.json` in evidence/ |
+| `write_unlock_outcome` | `"blocked"`, `"resolved"`, `"not_attempted"` — outcome of write-unlock probe | `session-meta.json` + compact manifest |
+| `write_unlock_sentinel` | The sentinel code that was blocking write-unlock (if applicable) | `sentinel-calibration-state.json` |
+
+Without `sentinel_table_delta`, the coordinator cannot tell whether a subsequent stage
+benefited from a newly resolved sentinel or was still operating under the original sparse
+table. Q16's stage-boundary re-calibration produces no useful signal if the before/after
+sentinel tables are not captured.
+
+**Group D — Required for Q17 (coordinator state) — NOT YET EMITTED:**
+
+| Field | Meaning | Where it must go |
+|---|---|---|
+| `coordinator_cycle` | Which iteration of the Q17 playbook this run belongs to (integer, 1-based) | `session-meta.json` + compact manifest |
+| `playbook_step` | Which playbook phase triggered this run (`"A"`, `"B"`, `"C"`, `"D"`) | `session-meta.json` + compact manifest |
+| `function_coverage_delta` | `functions_success` minus the current baseline `functions_success` | Computed by coordinator at read time; not emitted by pipeline |
+| `union_merge_id` | UUID of the UNION merge artifact this run contributed to | Written by run_set_orchestrator after merge |
+
+`coordinator_cycle` and `playbook_step` allow the coordinator to group runs correctly
+when reading across many session folders. Without them, a re-run of the coordinator on
+the same component would be unable to distinguish cycle 1 ablation runs from cycle 2
+ablation runs.
+
+### 19.3 What Is Currently Readable in One Pass
+
+From the existing session structure, an AI agent can currently determine:
+
+```
+✅ Did the job complete without capture failure?         → human/session-save-meta.json:capture_quality
+✅ Did any stage hard-fail?                             → cohesion-report.json:hard_fail
+✅ Which stage transitions passed / failed / warned?    → transition-index.json (T-01..T-16)
+✅ How many functions succeeded vs. errored?            → findings.json aggregate
+✅ Which functions succeeded (by name)?                 → findings.json per-record status
+✅ What error codes were observed per failing function? → findings.json per-record error_code
+✅ Was the run contract-valid?                          → cohesion-report.json:pipeline_verdict
+✅ What model / settings were used?                     → session-meta.json
+```
+
+From one pass, an AI agent CANNOT currently determine:
+
+```
+❌ Was this a control run or an ablation variant?       → prompt_profile_id, layer NOT emitted
+❌ What context variable was changed and how?           → ablation_variable, ablation_value NOT emitted
+❌ Which batch of N+M runs does this belong to?         → run_set_id NOT emitted
+❌ Did sentinel calibration improve between stages?     → sentinel_table_delta NOT emitted
+❌ Was write-unlock blocked or resolved and by what?    → write_unlock_outcome NOT emitted
+❌ Which coordinator cycle does this run belong to?     → coordinator_cycle NOT emitted
+❌ What was the function coverage delta vs. baseline?   → not computed by pipeline; coordinator must compute
+```
+
+The current save-session output is sufficient for:
+- Human review of individual run outcomes
+- Transition pass/fail tracking
+- A/B comparison between two manually-selected runs
+
+The current save-session output is **NOT sufficient** for:
+- Autonomous coordinator promotion decisions (missing Groups B/C/D)
+- Causal attribution (which prompt change improved which gate)
+- Sentinel table evolution tracking across stage boundaries
+
+### 19.4 What Needs to Change and Where
+
+**Changes required in the API pipeline (not save-session itself):**
+
+1. `api/explore.py` or `api/worker.py` — accept `prompt_profile_id`, `layer`,
+   `ablation_variable`, `ablation_value`, `run_set_id`, `coordinator_cycle`,
+   `playbook_step` as job parameters and write them to `session-meta.json`.
+   - These are pass-through fields; the pipeline does not act on them.
+   - They are set by `run_set_orchestrator.py` when it dispatches each run.
+   - Estimated effort: ~1 hour (add fields to job request schema + persist to session-meta).
+
+2. `api/explore_phases.py` — emit `sentinel-calibration-state.json` after each
+   stage boundary (Phase 0.5 initial + Stage 1/2/3 boundaries).
+   - Fields: `stage`, `sentinel_table_before`, `sentinel_table_after`, `resolved_delta`.
+   - Estimated effort: ~2 hours.
+
+3. `api/explore_phases.py` — emit `write_unlock_outcome` and `write_unlock_sentinel`
+   to `session-meta.json` at write-unlock probe time.
+   - Estimated effort: ~30 minutes.
+
+**Changes required in save-session / collect_session.py:**
+
+4. `scripts/collect_session.py` — when writing `human/dashboard-row.json`, include
+   all Group B/C/D fields by reading from `session-meta.json`.
+   - These fields flow through: pipeline writes them to `session-meta.json`;
+     `collect_session.py` copies them into the compact manifest.
+   - No parsing intelligence required — pure pass-through.
+   - Estimated effort: ~30 minutes.
+
+5. `human/dashboard-row.json` schema — add all Group B/C/D fields to the Q13 compact
+   manifest spec in `docs/AI-FIRST-SNAPSHOT-CONTRACT.md`.
+   - This is a schema version bump (v2 → v3 or a minor extension).
+   - Estimated effort: ~1 hour to update the contract doc.
+
+**No changes required in:**
+- `scripts/save-session.ps1` — pure orchestration, receives no new parameters
+- `sessions/compare.ps1` / `compare_sessions.py` — reads `human/dashboard-row.json`;
+  if the compact manifest is extended, compare automatically gains the new fields
+- `api/explore_prompts.py` — prompt profiles are a separate concern from session tagging
+
+### 19.5 The Enrichment Feed: How Coordinator Output Loops Back Into the Pipeline
+
+The coordinator enriches the pipeline in two directions:
+
+**Direction 1 — Accumulated schema as next-stage seed (Q15 Phase 4):**
+```
+Coordinator cycle N:
+  N+M runs → UNION merger → accumulated-schema-cycle-N.json
+  ↓
+Coordinator cycle N+1:
+  run_set_orchestrator passes accumulated-schema to each new run as seeded_findings
+  Each run starts from the richest possible knowledge base, not cold
+```
+
+This is the "stage-by-stage knowledge pipeline" from Q15. Currently, every run starts
+cold. Once the UNION merger is wired in, each cycle's runs start from the union of all
+prior cycle discoveries.
+
+**Direction 2 — Promoted baseline as new Q15 Layer 1 control (Q17 promotion):**
+```
+If cycle N variant improved ≥1 gate without regression:
+  Promoted variant's prompt_profile_id becomes new Layer 1 baseline
+  coordinator-state.json updated: promoted_profile = "systematic-framing"
+  Next cycle's N control runs use the promoted profile
+  The improvement is compounded, not discarded
+```
+
+The coordinator does NOT modify any `api/*.py` files autonomously. The promotion is:
+- A `coordinator-state.json` record noting what was promoted
+- A `FINDINGS.md` batch entry documenting the delta
+- A `sessions/_runs/baseline/` update (move the promoted run-set folder in)
+
+A human reads the coordinator's structured report and decides whether to commit the
+corresponding prompt profile change as a code edit. The coordinator's autonomous
+authority ends at "record and report"; it does not extend to "edit code."
+
+**Direction 3 — Sentinel table as cumulative session-meta field (Q16):**
+```
+Stage 0: sentinel_table = {hardcoded defaults + vocab error_codes}
+Stage 1 boundary: scan all N+M probe logs → newly_resolved = [0xFFFFFFF9, ...]
+Updated sentinel_table injected into Stage 2 runs as seeded_sentinels
+Stage 2 boundary: scan again → any more newly_resolved codes
+...and so on
+```
+
+This is currently not implemented. The current sentinel table is built once (Phase 0.5)
+and frozen for the rest of the run. Q16's adaptive calibration requires the sentinel
+table to flow through the save-session manifest so the coordinator can see whether
+a given stage boundary produced new sentinel resolutions.
+
+### 19.6 Are These Questions Clearly Laid Out in QUESTIONS.md?
+
+**What is clearly covered:**
+- Q13: compact manifest fields for single-run AI review — clear, specified to field level
+- Q14: tournament selection logic for per-function winner selection — clear
+- Q15: N+M run structure, Layer 1/2 distinction, UNION merger, promotion decision rule — clear
+- Q16: stage-boundary re-calibration, write-unlock re-gating, cascade exploitation — clear
+- Q17: coordinator operating contract, playbook phases A–F, stopping conditions, report format — clear
+
+**What is NOT yet explicitly covered in QUESTIONS.md (gaps):**
+
+1. The specific session-meta.json field additions required (Groups B/C/D above).
+   Q13 lists what the compact manifest should contain but does not specify the ablation
+   tagging fields that Q15/Q16/Q17 require. These are implied by Q15 but not named.
+
+2. The coordinator topology (1 per component, N=3 M=3 ratio, sequential cycles).
+   Q17 describes the coordinator's behavior but does not specify how many coordinators
+   run concurrently or what the N+M ratio is per cycle. This is intentional — it is
+   left as a runtime decision — but it should be documented as a parameter here.
+
+3. The enrichment feed (accumulated schema as next-cycle seed, sentinel table as
+   cumulative field). Q15 §4 in QUESTIONS.md describes the stage-by-stage pipeline
+   but does not describe how save-session captures the state needed to resume from
+   the correct point after an interruption.
+
+4. Whether `reasoning_capture: complete` (§16.9 above) is required before a
+   coordinator promotion decision is valid. Currently in QUESTIONS.md, Q15 promotion
+   criteria are based on gate outcomes (T-xx pass/fail). If the coordinator promotes
+   a variant that improved T-05 but the promotion was based on a reasoning-incomplete
+   capture (a capture where the model's reasoning chain is opaque), the improvement
+   may not be reproducible. This is the boundary between Q15 and Q13/§16.9 that no
+   question currently makes explicit.
+
+**Recommendation:** The four gaps above do not require new QUESTIONS.md entries.
+They are implementation preconditions that belong in this document as amendments to
+§16.9 (reasoning capture) and in `docs/AI-FIRST-SNAPSHOT-CONTRACT.md` as a field
+table extension. No new open questions — these are engineering decisions with clear
+answers, not architectural debates.
+
+### 19.7 Minimum Viable Coordinator Read Configuration
+
+For the coordinator to start a cycle autonomously, it must be able to read one file
+per session and determine everything needed for a promotion decision. The target
+`human/dashboard-row.json` shape for Q14/Q15/Q16/Q17 readiness:
+
+```json
+{
+  "schema_version": "3.0",
+  "job_id": "...",
+  "component": "contoso_cs",
+  "saved_at": "2026-03-22T...",
+  "commit": "11f289d",
+  "model": "gpt-4o",
+  "mode": "dev",
+  "max_rounds": 6,
+  "max_tool_calls": 16,
+
+  "contract_valid": true,
+  "hard_fail": false,
+  "capture_quality": "complete",
+  "reasoning_capture": "complete",
+
+  "functions_success": 4,
+  "functions_error": 9,
+  "functions_success_names": ["CS_GetVersion", "CS_GetDiagnostics", "CS_Initialize", "CS_CalculateInterest"],
+  "functions_error_names": ["CS_GetAccountBalance", "CS_LookupCustomer", "..."],
+
+  "gate_pass": 10,
+  "gate_fail": 2,
+  "gate_warn": 4,
+  "gate_partial": 0,
+
+  "prompt_profile_id": "baseline",
+  "layer": 1,
+  "ablation_variable": null,
+  "ablation_value": null,
+  "run_set_id": "runset-2026-03-22-abc123",
+  "coordinator_cycle": 1,
+  "playbook_step": "A",
+
+  "write_unlock_outcome": "blocked",
+  "write_unlock_sentinel": "0xFFFFFFFB",
+
+  "sentinel_table_size": 3,
+  "sentinel_new_codes_this_run": 0
+}
+```
+
+This is approximately 35 fields. An AI agent or coordinator can read this one file and
+know:
+1. Whether this capture is trustworthy (groups: contract + capture + reasoning)
+2. What the run produced (groups: functions, gates)
+3. What context it ran under (groups: model, profile, ablation)
+4. Where it fits in the coordinator's cycle (groups: run_set, cycle, playbook_step)
+5. Whether sentinels or write-unlock are blocking progress (groups: sentinels)
+
+All five groups are necessary for autonomous promotion. Missing any one group forces
+the coordinator back to manual (human reads the full artifact tree).
+
+**Current status vs. target:**
+- Groups 1–2: ✅ mostly emitted today (modulo P1-3 component bug)
+- Group 3 (model settings): ✅ emitted in session-meta.json, needs pass-through to dashboard-row
+- Group 4 (ablation/cycle): ❌ not emitted — requires Q15 Phase 2 job parameter extension
+- Group 5 (sentinels): ❌ not emitted — requires Q16 sentinel-calibration-state.json emitter
