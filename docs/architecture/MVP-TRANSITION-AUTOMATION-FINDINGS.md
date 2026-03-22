@@ -1,22 +1,82 @@
 # MVP Transition Automation Findings
 
-Date: 2026-03-21
+Date: 2026-03-21 (last updated: 2026-03-22)
 Status: Active tracking log
 Related plan: docs/architecture/MVP-TRANSITION-AUTOMATION-EXECUTION-PLAN.md
+
+---
+
+## ⚠ ROOT CAUSE FINDINGS — 2026-03-22T14:00 ET (commit 05f095e)
+
+Discovered after 1,153 overnight A/B runs (image 0d7e125) all showed 0% T-04/T-05 pass.
+Three instrumentation bugs prevented any run from ever passing the gate:
+
+### Bug 1 — T-04: Probe user message sample written to wrong blob path
+- **File:** `api/explore.py`
+- **Problem:** Sample was uploaded to `evidence/stage-01-pre-probe/probe-user-message-sample.txt`
+  but `cohesion.py` reads the flat root path `probe_user_message_sample.txt`.
+- **Effect:** 0 of 1,153 runs had the artifact where the evaluator looked.
+  T-04 was structurally `warn` across all overnight data — never had a path to `pass`.
+- **Fix:** Changed write path to `{job_id}/probe_user_message_sample.txt`.
+
+### Bug 2 — T-05: Fallback probe args never contained real binary-string IDs
+- **File:** `api/explore_helpers.py` + `api/explore.py`
+- **Problem:** `_build_ranked_fallback_probe_args` uses vocab to select values,
+  but `binary_string_ids` (e.g. `CUST-001`, `ORD-20260315-0117`) from static analysis
+  were never injected into `_vocab_snap`. Unmatched string params fell through to `"TEST"`.
+- **Effect:** 0 of 1,166 runs with fallback entries had any real ID in fallback args.
+  T-05 evaluator looks for static IDs in fallback args — never found any.
+- **Fix:** Inject `binary_string_ids` from `ctx.static_analysis_result` into `_vocab_snap`
+  at probe worker start; add ranked candidates in `_ranked_param_candidates` for unmatched
+  string params using those IDs.
+
+### Bug 3 — T-14/T-15: Chat transitions graded as `partial` for explore-only runs
+- **File:** `api/cohesion.py` + `api/transition_readiness.py`
+- **Problem:** T-14/T-15 check for `chat_transcript.txt` / `chat_system_context_turn0.txt`,
+  which only exist in chat executor sessions. Explore-only sessions always lack them.
+  The evaluator returned `partial` instead of `not_applicable`.
+- **Effect:** 1,084 runs had T-14/T-15 both `partial`, causing leg failure regardless
+  of T-04/T-05 result.
+- **Fix:** Return `not_applicable` when chat artifacts absent; `evaluate_session` now
+  treats `not_applicable` as neutral pass.
+
+### Evidence coverage statement (pre-fix — image 0d7e125):
+| Metric | Count |
+|---|---|
+| Total overnight A/B run folders with old image | 1,190 |
+| Runs with transition-readiness.json leg-a data | 1,153 |
+| T-04 warn | 1,084 |
+| T-04 pass | 0 |
+| T-05 warn | 1,084 |
+| T-05 pass | 0 |
+| T-14 partial (should have been not_applicable) | 1,084 |
+| T-15 partial (should have been not_applicable) | 1,084 |
+| Runs missing transitions (short/failed runs) | 69 |
+| Fallback probe entries with real IDs (CUST-/ORD-) | 0 of 1,166 |
+
+### Deployment:
+- Fix committed as `05f095e` on 2026-03-22
+- Container revision `mcp-factory-pipeline--0000240` deployed at ~14:17 UTC
+- All new runs after this point should be evaluated against the corrected evaluator
+
+---
 
 ## Current Position
 
 Goal:
 - Convert T-04, T-05, T-14, and T-15 into evidence-backed, automatable checks that can be evaluated in one compact readiness summary.
 
-Current known baseline from strict A/B artifacts:
-- T-04: warn
-- T-05: warn
-- T-14: partial
-- T-15: partial
+Pre-fix baseline (image 0d7e125, 1,153 runs):
+- T-04: warn (100%) — instrumentation bug, not a pipeline capability gap
+- T-05: warn (100%) — instrumentation bug, not a pipeline capability gap
+- T-14: partial (100%) — misclassification bug; explore-only runs don't have chat artifacts
+- T-15: partial (100%) — same as T-14
 
-Interpretation:
-- Runtime determinism is strong, but prompt-path observability is incomplete.
+Post-fix first expectation (image 05f095e, runs after 2026-03-22T14:17 UTC):
+- T-04: should now pass when static_hints_block_length > 0 (present in all overnight runs)
+- T-05: should now pass when fallback args include a static ID — needs first run to confirm
+- T-14: not_applicable (explore-only) → gate pass
+- T-15: not_applicable (explore-only) → gate pass
 
 ## Variable Isolation Strategy
 
@@ -114,10 +174,30 @@ Use one entry per batch run:
 
 ## Immediate Next Action
 
-1. Implement transition gate tests for artifact presence and status contracts.
-2. Extend runner output with one readiness JSON/MD per batch.
-3. Add CI non-blocking report step.
-4. Execute Batch 1 against instrumentation family and log findings here.
+1. Run a fresh A/B pair against the deployed fix (commit 05f095e) and record Batch 1 below.
+2. Confirm T-04 and T-05 both show `pass` in the first post-fix transition-readiness.json.
+3. If T-05 still shows warn: inspect fallback probe args for the binary_string_ids branch,
+   check whether the ContosoCRM DLL's parameter names contain "customer"/"account"/"order"
+   so the ranked candidates are chosen over generic scalars.
+4. Once 2-3 consecutive green batches are confirmed, proceed to model sweep.
+
+## Batch 1 (post-fix baseline)
+
+- Batch ID: B1-instrumentation-fix
+- Date/time UTC: pending — first run after 2026-03-22T14:17 UTC
+- Command: pending
+- Variable family changed: none (same config as B0; fixing evaluator/instrumentation only)
+- Control config: dev / gpt-4o / rounds=2 / tool_calls=5 / gap=true
+- Variants tested: n/a (single run to confirm fix)
+- Transition outcomes:
+  - T-04:
+  - T-05:
+  - T-14:
+  - T-15:
+- Readiness summary: pending
+- Evidence paths:
+- Known risks observed:
+- Next minimal change:
 
 ## Batch 1 (Implementation Validation)
 
