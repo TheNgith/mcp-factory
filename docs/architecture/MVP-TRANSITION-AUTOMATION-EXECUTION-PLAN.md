@@ -52,7 +52,30 @@ Keep manual for now:
 - Human semantic quality checks for T-12/T-13.
 - Exploratory provider drift investigations.
 
+## Save-Session Verification Requirement (Added)
+
+Problem to close:
+- save-session has not yet been explicitly verified beyond the gap phase for this MVP track.
+
+Required verification commitment:
+1. Verify save-session behavior after gap-resolution and finalize phases.
+2. Validate adherence to principles in:
+- docs/architecture/CAUSALITY-ARTIFACT-LAYER-PLAN.md
+- docs/architecture/AI-FIRST-SNAPSHOT-CONTRACT.md
+3. Treat save-session outputs as the canonical dataset for run-to-run comparison.
+4. Do not score transition readiness from ad-hoc artifacts when strict save-session captures are available.
+
+Operational policy:
+1. Every readiness evaluation run must include strict save-session capture.
+2. A/B and batch comparisons must reference saved session artifacts first.
+3. Run reports must include explicit artifact pointers to saved session folders.
+
 ## Delivery Plan
+
+Phase 0: Save-session contract verification
+1. Run strict capture on post-gap and post-finalize paths.
+2. Validate required artifacts against causality-layer and AI-first snapshot expectations.
+3. Record pass/fail findings in the MVP transition automation findings log.
 
 Phase 1: Transition gate evaluator and tests
 1. Add a transition gate test module under tests.
@@ -137,9 +160,10 @@ Risk 3: CI spam without action path
 
 ## Immediate Next Steps When Iteration Continues
 
-1. Implement transition gate test module.
-2. Add evaluator layer to runner path.
-3. Add CI workflow report step.
-4. Execute one real run and publish run report doc.
+1. Verify save-session adherence post-gap and post-finalize against causality and AI-first contracts.
+2. Implement transition gate test module.
+3. Add evaluator layer to runner path.
+4. Add CI workflow report step.
+5. Execute one real run and publish run report doc.
 
 This plan is intended as the implementation contract for the next execution pass.
