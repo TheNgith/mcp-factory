@@ -63,7 +63,7 @@ from api.explore_helpers import (
     _GAP_RESOLUTION_ENABLED,
     _WRITE_FN_RE,
     _WRITE_RETRY_BUDGET_BY_CLASS,
-    _build_fallback_probe_args,
+    _build_ranked_fallback_probe_args,
     _build_tool_schemas,
     _classify_result_text,
     _save_stage_context,
@@ -786,7 +786,9 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         for _attempt in range(max_attempts):
             if _fn_tool_call_count >= ctx.runtime.max_tool_calls:
                 break
-            _fb_args = _build_fallback_probe_args(inv, _vocab_snap, attempt=_attempt)
+            _fb_args, _fb_selection = _build_ranked_fallback_probe_args(
+                inv, _vocab_snap, attempt=_attempt
+            )
             _pb: dict | None = None
             if _is_write_fn:
                 _ok, _reason, _detail = _write_policy_precheck(
@@ -799,6 +801,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                     "phase": "deterministic_fallback", "function": fn_name,
                     "round": _attempt, "reasoning": reason, "tool": fn_name,
                     "args": _fb_args,
+                    "arg_selection": _fb_selection,
                     "result_excerpt": f"Policy blocked fallback probe: {_pb['stop_reason']}",
                     "trace": {"backend": "policy", "blocked": True},
                     "classification": {"has_return": False}, "policy": _pb,
@@ -812,6 +815,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 "phase": "deterministic_fallback", "function": fn_name,
                 "round": _attempt, "reasoning": reason, "tool": fn_name,
                 "args": _fb_args, "result_excerpt": str(_res)[:200],
+                "arg_selection": _fb_selection,
                 "trace": _tc.get("trace"), "classification": _cls, "policy": None,
             })
             _fn_tool_call_count += 1

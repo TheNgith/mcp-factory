@@ -252,10 +252,10 @@ Recommended artifact:
 Interpretation of current strict captures:
 
 1. explore-only strict captures are cohesive and contract-valid,
-2. answer-gaps strict captures are currently degraded in your saved evidence due
-   to missing stage-index, transition-index, and cohesion-report.
+2. answer-gaps strict captures are now also cohesive and contract-valid,
+3. repeat A/B captures with unchanged settings are deterministic for gate values.
 
-This indicates runtime/deployment parity is not complete for answer-gaps path.
+This indicates runtime/deployment parity is now complete for strict captures.
 
 ## 10. Should Sessions Use a New Folder
 
@@ -281,5 +281,75 @@ Current state in repo:
 
 Operational caveat:
 
-The strict answer-gaps snapshots you provided still show degraded contract
-artifacts, so live deployment should be re-validated after latest code publish.
+T-04 and T-05 remain warn-tier instrumentation gaps. They do not invalidate
+contract cohesion but do reduce confidence about prompt-path observability.
+
+## 12. Progression Path: Dev 8/13 to Higher Coverage
+
+Observed baseline in current dev-mode strict runs:
+
+1. pre-gap: 4/13 resolved,
+2. post-gap retry: 8/13 resolved,
+3. unresolved functions are primarily state-dependent and require better handle
+   continuity or operator context.
+
+Progression path should be staged, not overhauled:
+
+1. raise S-02 argument quality first,
+2. raise S-06 structural-classification quality second,
+3. enable clarification tier only when S-02 and S-06 are stable.
+
+Target progression envelope:
+
+1. dev profile: 8/13 to 10/13,
+2. stabilize profile: 10/13 to 11/13,
+3. deploy profile with clarification: 11/13 to 12/13,
+4. anything beyond that likely requires non-MVP techniques (dynamic tracing,
+   structure recovery, or external constraints).
+
+## 13. Clarification Questions Enable Criteria
+
+Enable clarification output when all of the following are true:
+
+1. function remains unresolved after bounded S-06 retry,
+2. repeated attempts produce no novel evidence,
+3. last known sentinel/return pattern is stable,
+4. missing information is actionable by operator (ID format, lifecycle step,
+   required ordering, expected units, known good sample).
+
+Do not enable clarification when:
+
+1. failure is still probe-budget-limited,
+2. error patterns are contradictory,
+3. stage diagnostics are incomplete.
+
+Minimum acceptance criteria for a valid clarification question:
+
+1. names one concrete function,
+2. includes one concrete observed failure pattern,
+3. asks for one constrained missing fact,
+4. maps expected answer to a specific retry strategy.
+
+## 14. S-02 Argument Strategy: Generic Catalog + Adaptive Reasoning
+
+Use a two-layer argument strategy:
+
+1. generic DLL argument catalog,
+2. adaptive per-function ranking from observed outcomes.
+
+Generic catalog should include:
+
+1. IDs (customer/order/account style templates),
+2. amount and quantity scales (cents, whole units, edge values),
+3. status/state strings,
+4. null/empty/safe defaults,
+5. prerequisite replay handles from known-good calls.
+
+Selection policy is reasoned, not exhaustive:
+
+1. choose top-N candidates by evidence score,
+2. block exact-call repetition above repeat ceiling,
+3. require one argument mutation dimension per retry,
+4. stop when no progress is detected for configured rounds.
+
+This preserves exploration quality while preventing repetitive brute-force loops.

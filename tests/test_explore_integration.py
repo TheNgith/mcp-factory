@@ -139,6 +139,55 @@ class TestSentinelRangeGate:
         assert self._is_sentinel_candidate(-1)
         assert self._is_sentinel_candidate(-5)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  S-02 fallback arg ranking + selection metadata
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestRankedFallbackArgs:
+    """Verify ranked fallback candidate selection and reason logging metadata."""
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from api.explore_helpers import _build_ranked_fallback_probe_args
+        self.build = _build_ranked_fallback_probe_args
+
+    def test_attempt_uses_ranked_candidates(self):
+        inv = {
+            "name": "CS_ProcessPayment",
+            "parameters": [
+                {"name": "customer_id", "json_type": "string", "direction": "in", "description": "Customer ID"},
+                {"name": "amount_cents", "json_type": "integer", "direction": "in", "description": "Amount in cents"},
+            ],
+        }
+        vocab = {"id_formats": ["CUST-NNN", "ORD-YYYYMMDD-NNNN"]}
+
+        args0, meta0 = self.build(inv, vocab, attempt=0)
+        args1, meta1 = self.build(inv, vocab, attempt=1)
+
+        assert args0["customer_id"] == "CUST-001"
+        assert args1["customer_id"] == "CUST-002"
+        assert args0["amount_cents"] == 2500
+        assert args1["amount_cents"] == 1000
+
+        assert meta0["customer_id"]["rank"] == 1
+        assert meta1["customer_id"]["rank"] == 2
+        assert meta0["amount_cents"]["source"].startswith("heuristic.")
+        assert meta0["amount_cents"]["candidate_count"] >= 2
+
+    def test_out_params_are_excluded_from_args_and_selection(self):
+        inv = {
+            "name": "CS_GetOrderStatus",
+            "parameters": [
+                {"name": "order_id", "json_type": "string", "direction": "in"},
+                {"name": "status_out", "json_type": "string", "direction": "out"},
+            ],
+        }
+        args, meta = self.build(inv, {"id_formats": ["ORD-YYYYMMDD-NNNN"]}, attempt=0)
+        assert "order_id" in args and "order_id" in meta
+        assert "status_out" not in args
+        assert "status_out" not in meta
+
     def test_classify_common_result_code_zero(self):
         """classify_common_result_code(0) must return None (S_OK is not an error)."""
         from api.sentinel_codes import classify_common_result_code

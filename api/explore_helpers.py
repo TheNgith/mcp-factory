@@ -109,13 +109,81 @@ def _default_scalar_value(param_name: str, json_type: str, description: str, voc
     return "TEST"
 
 
-def _build_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> dict:
-    """Build deterministic fallback args for one probe attempt.
+def _ranked_param_candidates(param_name: str, json_type: str, description: str, vocab: dict) -> list[dict]:
+    """Return ranked candidate values for one parameter.
 
-    This is intentionally generic: it uses parameter names/types plus vocabulary
-    seeds rather than component-specific constants.
+    Candidates are generic and vocabulary-driven. They are ordered by score so
+    attempt=0 picks the strongest candidate, attempt=1 picks the next, etc.
     """
+    name = (param_name or "").lower()
+    desc = (description or "").lower()
+    jtype = (json_type or "").lower()
+    id_formats = [str(x) for x in (vocab.get("id_formats") or []) if x]
+
+    ranked: list[dict] = []
+
+    def _add(value: Any, score: float, source: str, reason: str) -> None:
+        ranked.append({
+            "value": value,
+            "score": float(score),
+            "source": source,
+            "reason": reason,
+        })
+
+    if _re.search(r"order", name) or _re.search(r"order", desc):
+        _add(_sample_id_from_vocab(id_formats, "order", attempt=0), 1.0, "vocab.id_formats", "order-like parameter")
+        _add(_sample_id_from_vocab(id_formats, "order", attempt=1), 0.92, "vocab.id_formats", "order-like retry variant")
+        _add(_sample_id_from_vocab(id_formats, "order", attempt=2), 0.85, "vocab.id_formats", "order-like second retry variant")
+    elif _re.search(r"customer|account", name) or _re.search(r"customer|account", desc):
+        _add(_sample_id_from_vocab(id_formats, "customer", attempt=0), 1.0, "vocab.id_formats", "customer/account-like parameter")
+        _add(_sample_id_from_vocab(id_formats, "customer", attempt=1), 0.92, "vocab.id_formats", "customer/account retry variant")
+        _add(_sample_id_from_vocab(id_formats, "customer", attempt=2), 0.85, "vocab.id_formats", "customer/account second retry variant")
+    elif _re.search(r"amount|cents|refund|payment|debit|credit", name) or _re.search(r"amount|cents", desc):
+        _add(2500, 1.0, "heuristic.amount", "common cents baseline")
+        _add(1000, 0.9, "heuristic.amount", "smaller cents baseline")
+        _add(100, 0.8, "heuristic.amount", "low cents probe")
+        _add(1, 0.6, "heuristic.amount", "minimum positive cents")
+    elif _re.search(r"points", name) or _re.search(r"points", desc):
+        _add(100, 1.0, "heuristic.points", "common points baseline")
+        _add(250, 0.85, "heuristic.points", "higher points probe")
+        _add(10, 0.75, "heuristic.points", "low points probe")
+        _add(1, 0.65, "heuristic.points", "minimum positive points")
+    elif _re.search(r"size|count|length|len", name):
+        _add(64, 1.0, "heuristic.buffer", "safe buffer/count baseline")
+        _add(128, 0.85, "heuristic.buffer", "medium buffer/count retry")
+        _add(256, 0.75, "heuristic.buffer", "larger buffer/count retry")
+    elif _re.search(r"mode|flag|enable", name):
+        _add(1, 1.0, "heuristic.flag", "enabled mode baseline")
+        _add(0, 0.9, "heuristic.flag", "disabled mode retry")
+        _add(2, 0.65, "heuristic.flag", "alternate mode probe")
+
+    if jtype in {"integer", "number"}:
+        _add(1, 0.7, "default.numeric", "generic positive numeric")
+        _add(0, 0.6, "default.numeric", "generic zero numeric")
+        _add(2, 0.5, "default.numeric", "generic alternate numeric")
+    elif jtype == "boolean":
+        _add(True, 0.7, "default.boolean", "generic true baseline")
+        _add(False, 0.6, "default.boolean", "generic false retry")
+    else:
+        _add("TEST", 0.7, "default.string", "generic string baseline")
+        _add("A", 0.55, "default.string", "short string retry")
+        _add("0", 0.5, "default.string", "numeric-string retry")
+
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for c in sorted(ranked, key=lambda x: x["score"], reverse=True):
+        key = repr(c["value"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    return deduped
+
+
+def _build_ranked_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> tuple[dict, dict]:
+    """Build deterministic fallback args plus per-parameter selection metadata."""
     args: dict = {}
+    selection: dict = {}
     for p in (inv.get("parameters") or []):
         if isinstance(p, str):
             p = {"name": p, "json_type": "string"}
@@ -125,7 +193,38 @@ def _build_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> dict
             continue
         jtype = str(p.get("json_type") or "string")
         pdesc = str(p.get("description") or p.get("type") or "")
-        args[pname] = _default_scalar_value(pname, jtype, pdesc, vocab, attempt=attempt)
+        candidates = _ranked_param_candidates(pname, jtype, pdesc, vocab)
+        if not candidates:
+            val = _default_scalar_value(pname, jtype, pdesc, vocab, attempt=attempt)
+            args[pname] = val
+            selection[pname] = {
+                "source": "default.scalar",
+                "reason": "no ranked candidates available",
+                "score": 0.0,
+                "rank": 1,
+                "candidate_count": 1,
+            }
+            continue
+        idx = min(max(int(attempt), 0), len(candidates) - 1)
+        chosen = candidates[idx]
+        args[pname] = chosen["value"]
+        selection[pname] = {
+            "source": chosen["source"],
+            "reason": chosen["reason"],
+            "score": chosen["score"],
+            "rank": idx + 1,
+            "candidate_count": len(candidates),
+        }
+    return args, selection
+
+
+def _build_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> dict:
+    """Build deterministic fallback args for one probe attempt.
+
+    This is intentionally generic: it uses parameter names/types plus vocabulary
+    seeds rather than component-specific constants.
+    """
+    args, _ = _build_ranked_fallback_probe_args(inv, vocab, attempt=attempt)
     return args
 
 

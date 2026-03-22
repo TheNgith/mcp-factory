@@ -400,6 +400,44 @@ Plan:
 Acceptance:
 - T-04, T-14, and T-15 evaluate from explicit evidence paths (not inferred-only).
 
+### Instrumentation Gap Note: T-04 and T-05 Are Warn, Not Fail
+
+Current interpretation for strict runs:
+
+1. T-04 and T-05 represent observability gaps, not confirmed broken causality.
+2. Existing evidence is sufficient to infer probable behavior, but insufficient
+  to assert full path proof.
+3. Therefore status should remain `warn` until direct artifacts are emitted.
+
+Why `warn` and not `fail`:
+
+1. `fail` should be reserved for proven false assertions from concrete evidence.
+2. T-04 currently has static-hints presence evidence but incomplete user-prompt
+  snapshot evidence.
+3. T-05 currently has fallback-call evidence but incomplete proof that static IDs
+  were selected by reasoning, not by chance.
+
+Required instrumentation to close T-04:
+
+1. Persist `probe_user_message_sample.txt` from first probe call for each
+  function cohort.
+2. Include static-hints digest/hash in both static-analysis output and probe
+  user message sample for deterministic matching.
+3. Update transition evaluator to require digest match for `pass`.
+
+Required instrumentation to close T-05:
+
+1. Persist per-call argument-candidate ranking and selected candidate source
+  (`static_id`, `known_good_replay`, `default_numeric`, `fallback_string`).
+2. Add selection-reason field in probe-log entries.
+3. Update transition evaluator to require at least one `static_id`-sourced pick
+  on relevant parameter classes for `pass`.
+
+Exit condition for this gap section:
+
+1. T-04 and T-05 move from `warn` to deterministic `pass/fail` with explicit
+  evidence files and no proxy-only assertions.
+
 ### Blocker 3: Contract Layout Parity (Snapshot Path Normalization)
 
 Problem:
