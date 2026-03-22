@@ -146,3 +146,24 @@ Suggested answer direction:
   3. warn-tier transition count trend,
   4. deterministic hard-fail consistency across repeats.
 - Require KPI improvement before expanding system complexity.
+
+## 13) Front-and-Center Metadata: What should be easiest for AI to read first?
+
+Why this question matters:
+- Distributed metadata increases analysis time and creates avoidable ambiguity.
+
+Suggested answer direction:
+- Standardize a compact run-manifest block for every saved session and A/B compare.
+- Put these fields at top-level in one JSON object:
+  1. run identity: `job_id`, `component`, `saved_at`, `commit`, `commit_msg`,
+  2. runtime controls: `mode`, `model`, `max_rounds`, `max_tool_calls`,
+     `gap_resolution_enabled`, `clarification_questions_enabled`,
+  3. input identity: `hints_sha256`, `use_cases_sha256` plus short previews,
+  4. contract gate: `contract_valid`, `hard_fail`, `capture_quality`,
+  5. cohesion totals: stage/transition pass-fail-warn-partial counts,
+  6. outcome totals: `functions_success`, `functions_error`, unresolved function names,
+  7. determinism signals for A/B: `deterministic`, `differences`.
+
+Implementation note:
+- Keep full detailed artifacts for deep diagnosis, but require this compact
+  manifest to be present for every run so models can triage in one read.
