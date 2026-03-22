@@ -456,3 +456,129 @@ Suggested answer direction:
     baseline by reading sentinel constants directly from binary instructions. Q16
     is the runtime complement: harvesting sentinels that Capstone missed because
     they only appear under specific runtime conditions, not in static code paths.
+
+## 17) Autonomous Coordinator Agent: Should a persistent agent own the improvement loop — running batches, applying the UNION merger, evaluating gates, and promoting baselines without human intervention?
+
+Why this question matters:
+- Q15 and Q16 both require repeated cycles: run N+M batch → evaluate → decide
+  whether to promote → update knowledge base → pick next variable → repeat.
+  If a human must initiate each cycle, the system's iteration speed is bounded by
+  human availability, not compute. At scale — multiple DLLs, multiple models,
+  multiple prompt families — this loop cannot be supervised manually.
+- The coordinator agent is not a new concept: it is Q14 + Q15 + Q16 composed into
+  an autonomous decision layer. Q14 defines what "best" means for a function. Q15
+  defines how to vary context and when to promote a variant. Q16 defines how to
+  build and refine the sentinel table. The coordinator agent is the entity that
+  runs all three of these in sequence and decides what to do next.
+- Without a coordinator, Q15 and Q16 are offline analysis tools — a human reads
+  FINDINGS.md and decides what to change. With a coordinator, they become a
+  self-steering improvement engine. The difference is whether the pipeline learns
+  between runs or only within runs.
+
+Suggested answer direction:
+- Yes: build a coordinator agent with a defined operating contract, a playbook it
+  exhausts in order, and a structured report it produces when it has no more
+  autonomous moves to make.
+
+  **Operating contract (what the agent is allowed to do autonomously):**
+  1. Read `docs/architecture/FINDINGS.md`, `QUESTIONS.md`, and `sessions/_runs/baseline/BASELINE.md`
+     as its knowledge base at the start of each decision cycle.
+  2. Read the Q15 context learning log to determine which variables have been tested
+     and what their outcomes were.
+  3. Dispatch N+M run-sets via the run-set orchestrator (Q15 Phase 2).
+  4. Apply the UNION merger (Q15 Phase 3) after each run-set completes.
+  5. Evaluate gate outcomes against the current baseline using the transition
+     readiness evaluator.
+  6. If a variant passes the promotion criteria (Q15 decision rule: improves ≥1 gate,
+     no regressions, confirmed in ≥2/3 ablation runs), promote it to new Layer 1
+     baseline and update FINDINGS.md with a new batch entry.
+  7. Apply Q16 adaptive sentinel re-calibration at each stage boundary automatically.
+  8. Continue until the playbook is exhausted OR a stopping condition is met.
+  9. Emit a structured report (see below) and halt — never take an action outside
+     the playbook without human approval.
+
+  **The playbook (ordered list of moves the coordinator exhausts before stopping):**
+  - Phase A — Robustness confirmation:
+      Run N=3 identical control-baseline runs. If findings converge (Layer 1
+      validated), proceed. If not, flag instability and halt for human review.
+  - Phase B — Highest-impact variable sweep (Q15 Layer 2):
+      For each variable family in priority order (prompt framing → vocab ordering
+      → context density → tool budget), run M=3 ablation variants:
+        B1. Does this variant improve any gate for any function vs. control baseline?
+        B2. If yes and promotion criteria met: promote, update baseline, move to next family.
+        B3. If no improvement after 3 variants: mark this family as exhausted for
+            current baseline, move to next.
+  - Phase C — Sentinel calibration (Q16):
+      After each stage boundary in Phase B runs, apply opportunistic re-calibration.
+      If new sentinel codes are resolved: update accumulated schema, re-run write-unlock,
+      check whether newly unblocked write functions change gate outcomes.
+  - Phase D — Write-unlock exploitation:
+      If any Phase B or C run resolved a write-unlock sentinel, run a dedicated
+      write-function batch (N=3 control + the newly-resolved sentinel context).
+      Record which write functions moved from blocked → success.
+  - Phase E — Model sweep (deferred until budget is available):
+      Repeat Phases A–D with model variant swapped. Keep all other context fixed.
+      Purpose: determine how much of the ceiling is model capability vs. context quality.
+  - Phase F — Multi-DLL generalization (deferred until 10+/13 on contoso_cs.dll):
+      Apply the same playbook to a second DLL of similar complexity. If the same
+      prompt profile achieves similar function coverage without DLL-specific tuning,
+      the technique is generalized.
+
+  **Stopping conditions (the agent halts and reports):**
+  1. All playbook phases are exhausted.
+  2. Function coverage has not improved across 3 consecutive batches (plateau reached).
+  3. A gate regression is observed and cannot be explained by the ablation variable.
+  4. Budget limit reached (configurable: max_batches or max_api_spend).
+  5. A new sentinel is observed that the coordinator cannot classify — requires human
+     domain expert input before proceeding.
+
+  **Structured report format (emitted at halt):**
+  - Cycles run: N
+  - Current baseline: function_success_count / total, gate pass rates
+  - Variables promoted: list with before/after gate deltas
+  - Variables exhausted without improvement: list
+  - Stopping reason: which condition triggered
+  - Recommended human action: one specific next step that requires human judgment
+    (e.g. "provide domain meaning for sentinel 0xFFFFFFF9", or "extend hints file
+    with order ID format for CS_GetOrderStatus")
+  - Artifacts: paths to FINDINGS.md batch entries, UNION-merged schema, ablation log
+
+  **How the coordinator fits into the repository:**
+  - Entry point: `scripts/run_coordinator.py` (new file, ~300 lines)
+  - Knowledge base reads: read-only access to docs/architecture/ + sessions/
+  - Dispatch: calls `scripts/run_set_orchestrator.py` (Q15 Phase 2) → waits for all runs
+  - Merge: calls `scripts/union_merger.py` (Q15 Phase 3) on completed run-set
+  - Evaluate: calls `api/transition_readiness.py` evaluate_session on merged output
+  - Promote: appends batch entry to FINDINGS.md, updates sessions/_runs/baseline/ symlink
+  - Report: writes `sessions/coordinator-report-{timestamp}.md` structured report
+
+  **AI-first design constraint:**
+  - Every artifact the coordinator reads or writes must conform to Q13 (compact manifest
+    block at top-level, machine-readable in one pass).
+  - The coordinator's own state is serialized to `sessions/coordinator-state.json` after
+    each cycle so it can be resumed exactly where it left off after an interruption.
+  - The structured report is written in a format that another AI agent (or the same
+    agent in a future session) can read in one pass to understand exactly what was tried,
+    what was promoted, and what the recommended next action is.
+
+  **What the coordinator does NOT do:**
+  - It does not modify any API code (`api/*.py`). Code changes are always human-initiated
+    based on the coordinator's report. The coordinator's job is to exhaust what the
+    current code can do, not to change the code.
+  - It does not make irreversible decisions. Promotion merely updates a pointer; the
+    prior baseline run-set remains intact in `sessions/_runs/baseline/`.
+  - It does not run Phase E (model sweep) or Phase F (multi-DLL) without explicit human
+    approval, even if the playbook reaches those phases, because they carry significant
+    cost implications.
+
+- Connection to existing questions:
+  - Q13 ("Front-and-Center Metadata") is a prerequisite: the coordinator can only
+    evaluate runs efficiently if the compact manifest is present per run.
+  - Q14 ("Tournament Strategy") defines the per-function selection logic the coordinator
+    uses when building the UNION merged output.
+  - Q15 ("Context Ablation") defines the N+M run structure and promotion criteria the
+    coordinator follows in Phases A–B.
+  - Q16 ("Adaptive Sentinel Calibration") defines the sentinel update logic the
+    coordinator applies in Phase C.
+  - Q9 ("Beyond MVP") north-star: the coordinator is the first concrete step toward
+    an autonomous improvement engine. Phases E and F are the path from MVP to north-star.
