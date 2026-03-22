@@ -184,20 +184,33 @@ Use one entry per batch run:
 ## Batch 1 (post-fix baseline)
 
 - Batch ID: B1-instrumentation-fix
-- Date/time UTC: pending — first run after 2026-03-22T14:17 UTC
-- Command: pending
-- Variable family changed: none (same config as B0; fixing evaluator/instrumentation only)
-- Control config: dev / gpt-4o / rounds=2 / tool_calls=5 / gap=true
-- Variants tested: n/a (single run to confirm fix)
-- Transition outcomes:
-  - T-04:
-  - T-05:
-  - T-14:
-  - T-15:
-- Readiness summary: pending
-- Evidence paths:
+- Date/time UTC: 2026-03-22T14:17 UTC (first run after container revision 0000240 deployed)
+- Command: autopilot_transition_loop.ps1 → isolation matrix (7 cases, 05f095e image)
+- Variable family changed: none (same config as B0; evaluator/instrumentation bugs fixed only)
+- Control config: dev / gpt-4o-mini / rounds=8 / tool_calls=24 / gap=true (autopilot defaults)
+- Variants tested: 7 isolation cases (control-baseline, gap-resolution-off, probe-depth-rounds-3,
+  tool-budget-8, context-verbose, context-minimal, context-no-init)
+- Transition outcomes (16 complete runs out of 20 collected by ~10:21 AM ET):
+  - T-04: pass=13, warn=0, missing=3 (missing = incomplete/failed run) ✅ FIXED
+  - T-05: pass=7, warn=6, missing=3 — partially fixed (see residual below)
+  - T-14: not_applicable=13, missing=3 ✅ FIXED
+  - T-15: not_applicable=13, missing=3 ✅ FIXED
+- Readiness summary: 2/20 full gate pass — improvement confirmed, T-05 residual blocks full pass rate
+- Evidence paths: sessions/_runs/2026-03-22-05f095e-isolation-*/transition-readiness.json
 - Known risks observed:
+  - T-05 residual (~38% of runs): `ctx.inv_map` at session start has CS_LookupCustomer/CS_GetOrderStatus
+    with missing or direction-misclassified string params (param_1 absent at fallback time).
+    The binary_string_ids branch in `_ranked_param_candidates` only fires for string-typed params;
+    if the runtime invocables map omits param_1 (byte*) before enrich_invocable runs, the fallback
+    only uses the integer param (param_3=buffer size), never using "CUST-001" etc. as arg value.
+    The `arg_selection` field in probe-log entries shows `candidate_count: 3` (default.numeric only)
+    for these cases — positive proof that the binary_string_ids branch was not reached.
+  - 3/20 runs still show T-04/T-05/T-14/T-15 all missing (transition-index not built = short run/crash)
 - Next minimal change:
+  - Investigate why ctx.inv_map omits param_1 (byte*) for CS_LookupCustomer at session start.
+    Check whether the Ghidra-extracted invocables blob has param_1 with direction="out" or absent.
+    If so: ensure out→in reclassification for byte* pointer params, OR adjust T-05 pass condition
+    to include check that `id_formats` vocab values appear in LLM-generated (non-fallback) probe args.
 
 ## Batch 1 (Implementation Validation)
 
