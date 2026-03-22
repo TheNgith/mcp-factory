@@ -157,6 +157,14 @@ def _ranked_param_candidates(param_name: str, json_type: str, description: str, 
         _add(0, 0.9, "heuristic.flag", "disabled mode retry")
         _add(2, 0.65, "heuristic.flag", "alternate mode probe")
 
+    # T-05: for unmatched string parameters, use static binary-string IDs as
+    # higher-quality candidates before falling back to generic placeholders.
+    # This ensures IDs found in the binary (e.g. "CUST-001") are exercised.
+    _binary_string_ids = [str(x) for x in (vocab.get("binary_string_ids") or []) if x]
+    if _binary_string_ids and jtype not in {"integer", "number", "boolean"} and not ranked:
+        for _bsi, _bsid in enumerate(_binary_string_ids[:3]):
+            _add(_bsid, 0.72 - _bsi * 0.05, "static_analysis.binary_strings", f"static ID from binary: {_bsid}")
+
     if jtype in {"integer", "number"}:
         _add(1, 0.7, "default.numeric", "generic positive numeric")
         _add(0, 0.6, "default.numeric", "generic zero numeric")

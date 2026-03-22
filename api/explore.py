@@ -469,6 +469,13 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     # Snapshot vocab at function start so this worker sees a consistent view
     # even when parallel workers are concurrently updating the shared vocab.
     _vocab_snap = dict(ctx.vocab)
+    # T-05: inject binary-string IDs from static analysis so fallback probe args
+    # can use real ID values (e.g. "CUST-001") rather than generic placeholders.
+    _sa_ids = (
+        (ctx.static_analysis_result or {}).get("binary_strings") or {}
+    ).get("ids_found") or []
+    if _sa_ids:
+        _vocab_snap["binary_string_ids"] = list(_sa_ids)
 
     # Skip functions already documented in a previous session (thread-safe)
     _skip = False
@@ -522,7 +529,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     # Only written once (first function processed) — proves static hints reached
     # the probe user message and were not silently dropped.
     try:
-        _sample_blob = f"{ctx.job_id}/evidence/stage-01-pre-probe/probe-user-message-sample.txt"
+        _sample_blob = f"{ctx.job_id}/probe_user_message_sample.txt"
         _sample_exists = True
         try:
             _download_blob(ARTIFACT_CONTAINER, _sample_blob)

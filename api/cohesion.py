@@ -595,8 +595,8 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     )
 
     if not chat_system_turn0 and not chat_transcript:
-        t14_status = "partial"
-        t14_reason = "chat context artifacts not present in this run"
+        t14_status = "not_applicable"
+        t14_reason = "chat context artifacts not present in this run (explore-only session)"
     else:
         _ctx = chat_system_turn0 or _first_system_block(chat_transcript)
         fn_hits = [fn for fn in finding_functions[:20] if fn in _ctx]
@@ -610,8 +610,8 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     chat_probe = (chat_system_turn0 or chat_transcript).lower()
     vocab_markers = ["id formats", "error codes", "value semantics"]
     if not chat_system_turn0 and not chat_transcript:
-        t15_status = "partial"
-        t15_reason = "chat context artifacts not present in this run"
+        t15_status = "not_applicable"
+        t15_reason = "chat context artifacts not present in this run (explore-only session)"
     elif any(m in chat_probe for m in vocab_markers):
         t15_status = "pass"
         t15_reason = "vocab sections detected in chat context"

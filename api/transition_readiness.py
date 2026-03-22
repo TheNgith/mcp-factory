@@ -82,7 +82,9 @@ def evaluate_session(
         status = str(row.get("status") or "unknown")
         reason = str(row.get("reason") or "")
         transition_results[tid] = {"status": status, "reason": reason}
-        if status != expected_status:
+        # "not_applicable" means the transition doesn't apply to this run type
+        # (e.g. T-14/T-15 for explore-only runs). Treat it as a neutral pass.
+        if status != expected_status and status != "not_applicable":
             bad_status_ids.append(tid)
 
     reasons: list[str] = []

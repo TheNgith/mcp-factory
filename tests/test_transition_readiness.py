@@ -100,3 +100,19 @@ def test_evaluate_session_uses_collect_session_parsed_transition_index(tmp_path:
 
     assert result["pass"] is True
     assert result["missing_transition_ids"] == []
+
+
+def test_evaluate_session_not_applicable_counts_as_pass(tmp_path: Path):
+    """T-14/T-15 returning 'not_applicable' (explore-only session) should not block the gate."""
+    statuses = {
+        "T-04": "pass",
+        "T-05": "pass",
+        "T-14": "not_applicable",
+        "T-15": "not_applicable",
+    }
+    session_dir = _make_session(tmp_path, statuses)
+
+    result = tr.evaluate_session(session_dir)
+
+    assert result["pass"] is True
+    assert result["bad_status_ids"] == []
