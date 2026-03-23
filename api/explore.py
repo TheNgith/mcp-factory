@@ -1201,7 +1201,91 @@ def _mc6_post_gap_resolution(ctx: ExploreContext) -> None:
         decision["analysis"]["total_sentinel_codes"] = len(ctx.sentinels)
         decision["action"] = "final_comprehensive_attempt"
 
-        # Build the most comprehensive write args possible
+        # ── Phase A: Code-reasoning unlock ──────────────────────────────
+        # Reuse the shared decompilation analysis from explore_phases.
+        from api.explore_phases import _analyze_decompiled_unlock_patterns
+
+        code_analysis = _analyze_decompiled_unlock_patterns(ctx.invocables)
+        decision["analysis"]["code_reasoning"] = code_analysis
+        inv_map = {inv["name"]: inv for inv in ctx.invocables}
+
+        for uf in code_analysis.get("unlock_functions", []):
+            uf_inv = inv_map.get(uf["name"])
+            if not uf_inv:
+                continue
+            params = uf.get("params") or []
+            if not params:
+                continue
+
+            decision["analysis"]["unlock_fn_found"] = uf["name"]
+            decision["analysis"]["xor_checksum_target"] = uf.get("xor_target_hex")
+            decision["analysis"]["xor_codes_generated"] = len(uf.get("xor_codes", []))
+
+            for id_val in all_ids_list[:4]:
+                for code in uf.get("xor_codes", [])[:5]:
+                    args = {}
+                    for i, p in enumerate(params):
+                        pn = p.get("name", f"param_{i+1}")
+                        if i == 0:
+                            args[pn] = id_val
+                        elif i == 1:
+                            args[pn] = code
+                        else:
+                            args[pn] = id_val
+                    try:
+                        for init_inv in ctx.init_invocables or []:
+                            _execute_tool(init_inv, {})
+                        result = _execute_tool(uf_inv, args)
+                        ret_m = _re.match(r"Returned:\s*(\d+)", result or "")
+                        if ret_m and int(ret_m.group(1)) == 0:
+                            decision["analysis"]["unlock_cracked"] = True
+                            decision["analysis"]["unlock_args"] = args
+                            logger.info("[%s] MC-6: %s CRACKED with XOR code: %s",
+                                        ctx.job_id, uf["name"], args)
+                            _mark_unlock_resolved(
+                                ctx, "mc6-code-reasoning",
+                                f"{uf['name']}({args}) → 0 (XOR checksum solved)",
+                            )
+                            decision["result"] = (
+                                f"UNLOCKED via code reasoning: {uf['name']}({args}) "
+                                f"with XOR target {uf['xor_target_hex']}"
+                            )
+                            _persist_mc_decision(ctx, "mc6-post-gap-resolution", decision)
+                            return
+                    except Exception:
+                        continue
+
+        # Also try dependency chains from code analysis
+        for dep in code_analysis.get("dependency_chains", []):
+            src = inv_map.get(dep["source"])
+            if not src:
+                continue
+            try:
+                for init_inv in ctx.init_invocables or []:
+                    _execute_tool(init_inv, {})
+                _execute_tool(src, {})
+                # Build write args and test
+                dep_write_args: dict[str, list[dict]] = {}
+                for inv in ctx.invocables:
+                    if inv["name"] == dep["target"] and _WRITE_FN_PATTERN.search(inv["name"]):
+                        p = inv.get("parameters") or []
+                        if p:
+                            for id_val in all_ids_list[:3]:
+                                a = {}
+                                for j, pp in enumerate(p):
+                                    pn = pp.get("name", f"param_{j+1}")
+                                    a[pn] = id_val if j == 0 else 100
+                                dep_write_args.setdefault(inv["name"], []).append(a)
+                init_seqs = [{"fn": init_inv["name"], "args": {}} for init_inv in (ctx.init_invocables or [])]
+                init_seqs.append({"fn": dep["source"], "args": {}})
+                if dep_write_args and _targeted_unlock_attempt(ctx, init_seqs, dep_write_args, "mc6-dependency-chain"):
+                    decision["result"] = f"UNLOCKED via dependency chain: {dep['source']} → {dep['target']}"
+                    _persist_mc_decision(ctx, "mc6-post-gap-resolution", decision)
+                    return
+            except Exception:
+                continue
+
+        # ── Phase B: Brute-force fallback ─────────────────────────────────
         write_args: dict[str, list[dict]] = {}
         for inv in ctx.invocables:
             if not _WRITE_FN_PATTERN.search(inv["name"]):
@@ -1224,7 +1308,6 @@ def _mc6_post_gap_resolution(ctx: ExploreContext) -> None:
                     combos.append(a)
             write_args[inv["name"]] = combos
 
-        # Try every init mode including ones we may not have tried
         init_names = [inv["name"] for inv in ctx.invocables
                       if _re.search(r"init(ializ)?", inv["name"], _re.I)]
         init_seqs = []
@@ -1234,7 +1317,7 @@ def _mc6_post_gap_resolution(ctx: ExploreContext) -> None:
             init_seqs.append({"fn": init_fn, "args": {}})
 
         if _targeted_unlock_attempt(ctx, init_seqs, write_args, "mc6-post-gap-resolution"):
-            decision["result"] = "UNLOCKED on final comprehensive attempt"
+            decision["result"] = "UNLOCKED on brute-force fallback"
         else:
             decision["result"] = (
                 f"FINAL: still blocked after {len(init_seqs)} init sequences × "

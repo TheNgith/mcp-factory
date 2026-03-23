@@ -158,27 +158,83 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     _is_write_fn = bool(_WRITE_FN_RE.search(fn_name))
     _is_version_fn = bool(_VERSION_FN_RE.search(fn_name))
 
+    # Extract decompiled code for this function (if available from Ghidra)
+    _decompiled = inv.get("doc_comment") or inv.get("doc") or ""
+    _decompiled_block = ""
+    if _decompiled and _is_write_fn:
+        _trunc = _decompiled[:3000]
+        _decompiled_block = (
+            f"\n\nDECOMPILED SOURCE CODE for {fn_name}:\n```c\n{_trunc}\n```\n"
+            "READ THIS CODE CAREFULLY. It tells you exactly what conditions make "
+            "this function return 0 (success) vs a sentinel error code.\n"
+        )
+
+    # For write functions, also gather decompiled code from related functions
+    # (init functions and any functions this one might depend on)
+    _dependency_block = ""
+    if _is_write_fn:
+        _dep_parts = []
+        for other_inv in ctx.invocables:
+            if other_inv["name"] == fn_name:
+                continue
+            other_doc = other_inv.get("doc_comment") or other_inv.get("doc") or ""
+            if not other_doc:
+                continue
+            other_name = other_inv["name"]
+            is_init = bool(_INIT_RE.search(other_name))
+            is_unlock = "unlock" in other_name.lower()
+            if is_init or is_unlock:
+                _dep_parts.append(
+                    f"\nRELATED FUNCTION — {other_name}:\n```c\n{other_doc[:2000]}\n```\n"
+                )
+        if _dep_parts:
+            _dependency_block = (
+                "\nDEPENDENCY ANALYSIS — These functions may need to be called "
+                "before the target function will succeed:\n"
+                + "".join(_dep_parts[:3])
+            )
+
+    # Build known ID hints from vocab
+    _known_ids = []
+    if ctx.vocab and ctx.vocab.get("id_formats"):
+        _known_ids = [str(f) for f in ctx.vocab["id_formats"] if f][:4]
+    _id_hint = ", ".join(_known_ids) if _known_ids else "CUST-001, ORD-001, ACCT-001"
+
+    # Find init function names dynamically (not hardcoded to CS_Initialize)
+    _init_names = [i["name"] for i in ctx.init_invocables] if ctx.init_invocables else ["the init function"]
+    _init_call_hint = _init_names[0] if _init_names else "the init function"
+
     if ctx.runtime.instruction_fragment:
         _instruction = ctx.runtime.instruction_fragment
     elif _is_write_fn:
-        _known_ids = []
-        if ctx.vocab and ctx.vocab.get("id_formats"):
-            _known_ids = [str(f) for f in ctx.vocab["id_formats"] if f][:4]
-        _id_hint = ", ".join(_known_ids) if _known_ids else "CUST-001, ORD-001, ACCT-001"
         _instruction = (
-            "Your PRIMARY GOAL is to find the init sequence that makes this write function "
-            "return 0 instead of a sentinel error code.\n"
-            "STRATEGY — try each step, check the return value after EACH attempt:\n"
-            "  1. Call CS_Initialize() with NO args, then call this function with real args.\n"
-            "  2. Call CS_Initialize(param_1=0), then this function with real args.\n"
-            "  3. Call CS_Initialize(param_1=1), then this function with real args.\n"
-            "  4. Call CS_Initialize(param_1=2), then this function with real args.\n"
-            f"  Use these IDs as args: {_id_hint}. For amounts try 100, 500, 1000.\n"
-            "  5. If still failing, try other init modes: 4, 8, 16.\n"
-            "After EACH init+write attempt, check: did the write function return 0?\n"
+            "Your PRIMARY GOAL is to make this function return 0 (success).\n\n"
+            "STEP 1 — READ THE DECOMPILED CODE below. It shows you:\n"
+            "  - What conditions cause error returns (sentinel codes)\n"
+            "  - What conditions lead to return 0 (success path)\n"
+            "  - Whether this function depends on another function being called first\n"
+            "  - Whether there are checksums, XOR validations, or flag checks\n\n"
+            "STEP 2 — REASON about what inputs satisfy the success path:\n"
+            "  - If the code checks a flag/bit set by another function, call that function first\n"
+            "  - If the code has a checksum (XOR, hash), compute the correct input value\n"
+            "  - If the code validates string format, use the format shown in the code\n"
+            "  - If the code checks a balance/count, ensure the prerequisite state exists\n\n"
+            "STEP 3 — EXECUTE your plan:\n"
+            f"  a. Call {_init_call_hint}() first (always)\n"
+            "  b. Call any prerequisite functions identified in Step 2\n"
+            "  c. Call this function with the inputs you reasoned about\n"
+            f"  Use these IDs as args: {_id_hint}. For amounts try 100, 500, 1000.\n\n"
+            "STEP 4 — If still failing, try variations:\n"
+            f"  - Different init modes: {_init_call_hint}(param_1=0), (param_1=1), (param_1=2)\n"
+            "  - Different ID values from the static analysis hints\n"
+            "  - If you see 0xFFFFFFFC (-4), that means 'locked' — look for an Unlock function\n"
+            "  - If you see 0xFFFFFFFB (-5), that means 'insufficient balance' — the amount is too high\n\n"
+            "After EACH attempt, check: did the function return 0?\n"
             "  - If YES: call record_finding(status='success', working_call=<the args that worked>)\n"
             "  - If NO after all attempts: call record_finding(status='error') with the sentinel codes seen.\n"
             "Do NOT waste tool calls on enrich_invocable until you find a working call.\n"
+            + _decompiled_block
+            + _dependency_block
         )
     else:
         _instruction = (
