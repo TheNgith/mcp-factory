@@ -554,52 +554,586 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Write-unlock re-probe helper (called at 4 stage boundaries)
+#  Micro Coordinator System — intelligent decision points at stage boundaries
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _try_write_unlock_reprobe(ctx: ExploreContext, trigger: str) -> None:
-    """Re-attempt write-unlock with current accumulated knowledge.
+_WRITE_FN_PATTERN = _re.compile(
+    r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", _re.I
+)
 
-    Called at stage boundaries where the pipeline has gained new knowledge
-    that might help crack the write-unlock sequence. Only acts if write is
-    still blocked.
 
-    trigger: human-readable label for logs (e.g. "post-phase4", "post-synthesis")
+def _persist_mc_decision(ctx: ExploreContext, mc_id: str, decision: dict) -> None:
+    """Write a micro coordinator decision artifact for observability."""
+    try:
+        blob_key = f"{ctx.job_id}/mc-decisions/{mc_id}.json"
+        existing: list = []
+        try:
+            existing = json.loads(_download_blob(ARTIFACT_CONTAINER, blob_key))
+        except Exception:
+            pass
+        existing.append(decision)
+        _upload_to_blob(ARTIFACT_CONTAINER, blob_key,
+                        json.dumps(existing, indent=2).encode())
+    except Exception as exc:
+        logger.debug("[%s] %s: decision artifact write failed: %s",
+                     ctx.job_id, mc_id, exc)
+
+
+def _mark_unlock_resolved(ctx: ExploreContext, trigger: str, notes: str) -> None:
+    """Update context and job status when write-unlock is cracked."""
+    ctx.write_unlock_block = (
+        f"\nWRITE MODE ACTIVE (resolved at {trigger}): "
+        "The write-unlock sequence has been executed. Write functions "
+        "should now succeed. Probe with real ID values from "
+        "STATIC ANALYSIS HINTS.\n"
+    )
+    logger.info("[%s] %s: WRITE UNLOCKED: %s", ctx.job_id, trigger, notes)
+    try:
+        _cur = _get_job_status(ctx.job_id) or {}
+        _persist_job_status(ctx.job_id, {
+            **_cur,
+            "write_unlock_outcome": "resolved",
+            "write_unlock_sentinel": None,
+            "write_unlock_resolved_at": trigger,
+        })
+    except Exception:
+        pass
+
+
+def _targeted_unlock_attempt(
+    ctx: ExploreContext,
+    init_sequences: list[dict],
+    write_test_args: dict[str, list[dict]],
+    label: str,
+) -> bool:
+    """Try specific init→write sequences. Returns True if any write returns 0."""
+    inv_map = {inv["name"]: inv for inv in ctx.invocables}
+    write_fns = [n for n in inv_map if _WRITE_FN_PATTERN.search(n)]
+    _SENTINEL_SET = {0xFFFFFFFB, 0xFFFFFFFE, 0xFFFFFFFF}
+
+    for seq in init_sequences:
+        init_fn = seq.get("fn", "")
+        init_args = seq.get("args", {})
+        init_inv = inv_map.get(init_fn)
+        if not init_inv:
+            continue
+        try:
+            _execute_tool(init_inv, init_args)
+        except Exception:
+            continue
+
+        for wfn in write_fns:
+            w_inv = inv_map.get(wfn)
+            if not w_inv:
+                continue
+            for args in write_test_args.get(wfn, [{}])[:3]:
+                try:
+                    result = _execute_tool(w_inv, args)
+                    ret_m = _re.match(r"Returned:\s*(\d+)", result or "")
+                    if ret_m:
+                        ret_val = int(ret_m.group(1)) & 0xFFFFFFFF
+                        if ret_val == 0:
+                            ctx.unlock_result = {
+                                "unlocked": True,
+                                "sequence": [{"fn": init_fn, "args": init_args}],
+                                "write_fn_tested": wfn,
+                                "write_fn_args": args,
+                                "notes": f"{label}: {init_fn}({init_args}) → {wfn}({args}) = 0",
+                            }
+                            _mark_unlock_resolved(ctx, label, ctx.unlock_result["notes"])
+                            return True
+                except Exception:
+                    continue
+    return False
+
+
+# ── MC-3: Post-Reconcile Coordinator ────────────────────────────────────────
+
+def _mc3_post_reconcile(ctx: ExploreContext) -> None:
+    """Analyze probe results to classify the write-unlock failure mode.
+
+    READS: explore_probe_log.json, findings
+    REASONS: What sentinel codes did write functions see? Are they uniform
+             (init problem) or varied (mixed problem)? Did any write fn
+             accidentally return 0?
+    ACTS: Adjusts write_unlock_block with diagnostic-specific guidance.
+          Tries targeted init sequences if analysis suggests a specific mode.
+    DOCUMENTS: mc-decisions/mc3-post-reconcile.json
     """
     if ctx.unlock_result.get("unlocked"):
         return
+
+    decision = {"trigger": "mc3-post-reconcile", "analysis": {}, "action": None, "result": None}
+
     try:
-        logger.info("[%s] %s: re-probing write-unlock with accumulated knowledge",
-                    ctx.job_id, trigger)
-        ctx.unlock_result = _probe_write_unlock(
-            ctx.invocables, ctx.dll_strings, ctx.vocab,
-        )
-        if ctx.unlock_result.get("unlocked"):
-            ctx.write_unlock_block = (
-                f"\nWRITE MODE ACTIVE (resolved at {trigger}): "
-                "The write-unlock sequence has been executed. Write functions "
-                "should now succeed. Probe with real ID values from "
-                "STATIC ANALYSIS HINTS.\n"
-            )
-            logger.info("[%s] %s: WRITE UNLOCKED: %s",
-                        ctx.job_id, trigger, ctx.unlock_result.get("notes"))
-            try:
-                current_status = _get_job_status(ctx.job_id) or {}
-                _persist_job_status(ctx.job_id, {
-                    **current_status,
-                    "write_unlock_outcome": "resolved",
-                    "write_unlock_sentinel": None,
-                    "write_unlock_resolved_at": trigger,
+        probe_log: list[dict] = []
+        try:
+            raw = _download_blob(ARTIFACT_CONTAINER, f"{ctx.job_id}/explore_probe_log.json")
+            probe_log = json.loads(raw)
+        except Exception:
+            decision["analysis"]["probe_log"] = "unavailable"
+            _persist_mc_decision(ctx, "mc3-post-reconcile", decision)
+            return
+
+        # Collect sentinel codes seen from write function probes
+        write_sentinels: dict[str, list[int]] = defaultdict(list)
+        write_accidental_success: list[dict] = []
+
+        for entry in probe_log:
+            fn = entry.get("function", "")
+            tool = entry.get("tool", "")
+            if not _WRITE_FN_PATTERN.search(fn):
+                continue
+            clf = entry.get("classification") or {}
+            if not clf.get("has_return"):
+                continue
+            ret_val = int(clf.get("signed", -1))
+            if ret_val == 0 and fn == tool:
+                write_accidental_success.append(entry)
+            elif ret_val != 0:
+                write_sentinels[fn].append(ret_val & 0xFFFFFFFF)
+
+        # Classify the failure mode
+        all_codes = []
+        for codes in write_sentinels.values():
+            all_codes.extend(codes)
+        unique_codes = set(all_codes)
+
+        if write_accidental_success:
+            decision["analysis"]["mode"] = "accidental_success"
+            decision["analysis"]["functions"] = [e.get("function") for e in write_accidental_success]
+            decision["action"] = "extract_working_sequence"
+
+            for entry in write_accidental_success:
+                fn = entry.get("function", "")
+                args = entry.get("args", {})
+                _patch_finding(ctx.job_id, fn, {
+                    "status": "success", "working_call": args,
+                    "notes": "MC-3: write fn returned 0 in probe log — previously missed",
                 })
-            except Exception as exc:
-                logger.debug("[%s] %s: unlock status update failed: %s",
-                             ctx.job_id, trigger, exc)
+            decision["result"] = f"patched {len(write_accidental_success)} write findings to success"
+
+        elif len(unique_codes) == 1:
+            the_code = list(unique_codes)[0]
+            meaning = ctx.sentinels.get(the_code, "unknown")
+            decision["analysis"]["mode"] = "uniform_sentinel"
+            decision["analysis"]["code"] = f"0x{the_code:08X}"
+            decision["analysis"]["meaning"] = meaning
+            decision["analysis"]["interpretation"] = (
+                "All write functions return the same sentinel. "
+                "This strongly suggests an initialization/auth prerequisite, "
+                "not a per-function argument problem."
+            )
+            decision["action"] = "targeted_init_sweep"
+
+            ctx.write_unlock_block = (
+                f"\nWRITE MODE BLOCKED — UNIFORM SENTINEL 0x{the_code:08X} ({meaning}). "
+                "All write functions return the SAME error code. This means the DLL needs "
+                "a specific initialization sequence BEFORE any write operation. "
+                "You MUST call CS_Initialize with different mode values (0, 1, 2, 4, 8) "
+                "and IMMEDIATELY test this write function after EACH init call. "
+                "The mode that changes the error code (or returns 0) is the correct one.\n"
+            )
+
+            # Try targeted init sweep with focused modes
+            init_names = [inv["name"] for inv in ctx.invocables
+                          if _re.search(r"init(ializ)?", inv["name"], _re.I)]
+            init_seqs = []
+            for init_fn in init_names:
+                for mode in (0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64):
+                    init_seqs.append({"fn": init_fn, "args": {"param_1": mode}})
+
+            write_args = {}
+            if ctx.vocab and ctx.vocab.get("id_formats"):
+                ids = [str(f) for f in ctx.vocab["id_formats"] if f][:3]
+                for inv in ctx.invocables:
+                    if _WRITE_FN_PATTERN.search(inv["name"]):
+                        params = inv.get("parameters") or []
+                        if params:
+                            a = {}
+                            for i, p in enumerate(params):
+                                pn = p.get("name", f"param_{i+1}")
+                                if i < len(ids):
+                                    a[pn] = ids[i]
+                                else:
+                                    a[pn] = 100 * (i + 1)
+                            write_args[inv["name"]] = [a]
+
+            if _targeted_unlock_attempt(ctx, init_seqs, write_args, "mc3-post-reconcile"):
+                decision["result"] = "UNLOCKED via targeted init sweep"
+            else:
+                decision["result"] = "still blocked after targeted sweep"
+
+        elif len(unique_codes) > 1:
+            decision["analysis"]["mode"] = "mixed_sentinels"
+            decision["analysis"]["codes"] = [f"0x{c:08X}" for c in unique_codes]
+            decision["analysis"]["interpretation"] = (
+                "Write functions return DIFFERENT sentinel codes. "
+                "This suggests mixed failure causes — some may need init, "
+                "others may need specific arguments."
+            )
+            decision["action"] = "no_retry_mixed"
+            decision["result"] = "deferred — mixed sentinels need per-function strategy"
         else:
-            logger.info("[%s] %s: write-unlock still blocked after re-probe",
-                        ctx.job_id, trigger)
+            decision["analysis"]["mode"] = "no_write_probes"
+            decision["action"] = "fallback_reprobe"
+            ctx.unlock_result = _probe_write_unlock(ctx.invocables, ctx.dll_strings, ctx.vocab)
+            if ctx.unlock_result.get("unlocked"):
+                _mark_unlock_resolved(ctx, "mc3-post-reconcile", ctx.unlock_result.get("notes", ""))
+                decision["result"] = "UNLOCKED via fallback re-probe"
+            else:
+                decision["result"] = "still blocked"
+
     except Exception as exc:
-        logger.debug("[%s] %s: write-unlock re-probe failed: %s",
-                     ctx.job_id, trigger, exc)
+        decision["result"] = f"error: {exc}"
+        logger.debug("[%s] mc3-post-reconcile failed: %s", ctx.job_id, exc)
+
+    _persist_mc_decision(ctx, "mc3-post-reconcile", decision)
+
+
+# ── MC-4: Post-Synthesis Coordinator ────────────────────────────────────────
+
+def _mc4_post_synthesis(ctx: ExploreContext) -> None:
+    """Parse synthesis doc for init sequence clues the LLM may have inferred.
+
+    READS: api-reference.md from blob
+    REASONS: Does the synthesis describe a specific initialization mode?
+             Does it describe function dependencies?
+    ACTS: If synthesis mentions a specific init mode, tries it directly.
+    DOCUMENTS: mc-decisions/mc4-post-synthesis.json
+    """
+    if ctx.unlock_result.get("unlocked"):
+        return
+
+    decision = {"trigger": "mc4-post-synthesis", "analysis": {}, "action": None, "result": None}
+
+    try:
+        api_ref = ""
+        try:
+            raw = _download_blob(ARTIFACT_CONTAINER, f"{ctx.job_id}/api_reference.md")
+            api_ref = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        except Exception:
+            decision["analysis"]["api_reference"] = "unavailable"
+            _persist_mc_decision(ctx, "mc4-post-synthesis", decision)
+            return
+
+        decision["analysis"]["api_ref_length"] = len(api_ref)
+
+        # Look for init mode patterns in synthesis
+        init_mode_matches = _re.findall(
+            r"(?:CS_Initialize|init\w*)\s*\(\s*(?:mode\s*=\s*|param_1\s*=\s*)?(\d+)\s*\)",
+            api_ref, _re.I,
+        )
+        # Also look for prose descriptions of init modes
+        prose_matches = _re.findall(
+            r"mode\s+(\d+)\s+(?:for|enables?|activates?|unlocks?|allows?)\s+(?:write|payment|transaction)",
+            api_ref, _re.I,
+        )
+        all_suggested_modes = list(dict.fromkeys(
+            [int(m) for m in init_mode_matches + prose_matches]
+        ))
+
+        if all_suggested_modes:
+            decision["analysis"]["suggested_modes"] = all_suggested_modes
+            decision["analysis"]["source"] = "synthesis document mentioned specific init modes"
+            decision["action"] = "try_synthesis_suggested_modes"
+
+            init_names = [inv["name"] for inv in ctx.invocables
+                          if _re.search(r"init(ializ)?", inv["name"], _re.I)]
+            init_seqs = []
+            for mode in all_suggested_modes:
+                for init_fn in init_names:
+                    init_seqs.append({"fn": init_fn, "args": {"param_1": mode}})
+
+            write_args = _build_write_args_from_vocab(ctx)
+            if _targeted_unlock_attempt(ctx, init_seqs, write_args, "mc4-post-synthesis"):
+                decision["result"] = f"UNLOCKED via synthesis-suggested mode {all_suggested_modes}"
+            else:
+                decision["result"] = f"tried modes {all_suggested_modes} from synthesis — still blocked"
+        else:
+            # Look for dependency clues
+            dep_patterns = _re.findall(
+                r"(?:must|should|need to|requires?)\s+(?:call|invoke)\s+(\w+)\s+(?:before|first|prior)",
+                api_ref, _re.I,
+            )
+            if dep_patterns:
+                decision["analysis"]["dependencies"] = dep_patterns
+                decision["action"] = "noted_dependencies"
+                decision["result"] = f"synthesis mentions dependencies: {dep_patterns} — logged for MC-5/MC-6"
+            else:
+                decision["analysis"]["init_clues"] = "none found"
+                decision["action"] = "no_action"
+                decision["result"] = "synthesis doc has no actionable init sequence hints"
+
+    except Exception as exc:
+        decision["result"] = f"error: {exc}"
+        logger.debug("[%s] mc4-post-synthesis failed: %s", ctx.job_id, exc)
+
+    _persist_mc_decision(ctx, "mc4-post-synthesis", decision)
+
+
+# ── MC-5: Post-Verification Coordinator ─────────────────────────────────────
+
+def _mc5_post_verification(ctx: ExploreContext) -> None:
+    """Use verified read function outputs as concrete write function arguments.
+
+    READS: verification-report.json, findings
+    REASONS: If CS_GetAccountBalance(CUST-001) returned real data, CUST-001 is
+             confirmed valid. Chain these into write function args.
+    ACTS: Builds concrete write args from verified reads and attempts unlock.
+    DOCUMENTS: mc-decisions/mc5-post-verification.json
+    """
+    if ctx.unlock_result.get("unlocked"):
+        return
+
+    decision = {"trigger": "mc5-post-verification", "analysis": {}, "action": None, "result": None}
+
+    try:
+        from api.storage import _load_findings
+
+        findings = _load_findings(ctx.job_id)
+        verified_reads: list[dict] = []
+        extracted_ids: list[str] = []
+        extracted_amounts: list[int] = []
+
+        for f in findings:
+            fn = f.get("function", "")
+            if _WRITE_FN_PATTERN.search(fn):
+                continue
+            if f.get("status") != "success":
+                continue
+            verification = f.get("verification", "")
+            if verification not in ("verified", ""):
+                continue
+
+            verified_reads.append(f)
+            wc = f.get("working_call")
+            if isinstance(wc, dict):
+                for k, v in wc.items():
+                    sv = str(v).strip()
+                    if _re.match(r"^[A-Z]+-\d+", sv):
+                        extracted_ids.append(sv)
+                    elif _re.match(r"^ORD-", sv):
+                        extracted_ids.append(sv)
+                    elif _re.match(r"^ACCT-", sv):
+                        extracted_ids.append(sv)
+                    elif isinstance(v, (int, float)) and 1 <= v <= 100000:
+                        extracted_amounts.append(int(v))
+
+        extracted_ids = list(dict.fromkeys(extracted_ids))[:6]
+        extracted_amounts = list(dict.fromkeys(extracted_amounts))[:4]
+        if not extracted_amounts:
+            extracted_amounts = [100, 500, 1000]
+
+        decision["analysis"]["verified_read_count"] = len(verified_reads)
+        decision["analysis"]["extracted_ids"] = extracted_ids
+        decision["analysis"]["extracted_amounts"] = extracted_amounts
+
+        if not extracted_ids:
+            decision["action"] = "no_ids_extracted"
+            decision["result"] = "no verified IDs to chain into write functions"
+            _persist_mc_decision(ctx, "mc5-post-verification", decision)
+            return
+
+        decision["action"] = "chain_read_outputs_to_write_inputs"
+
+        # Build write args from verified read data
+        write_args: dict[str, list[dict]] = {}
+        for inv in ctx.invocables:
+            if not _WRITE_FN_PATTERN.search(inv["name"]):
+                continue
+            params = inv.get("parameters") or []
+            if not params:
+                continue
+
+            arg_combos = []
+            for id_val in extracted_ids[:3]:
+                for amt in extracted_amounts[:2]:
+                    a = {}
+                    for i, p in enumerate(params):
+                        pn = p.get("name", f"param_{i+1}")
+                        if i == 0:
+                            a[pn] = id_val
+                        elif i == 1:
+                            a[pn] = amt
+                        else:
+                            a[pn] = id_val if i % 2 == 0 else amt
+                    arg_combos.append(a)
+            write_args[inv["name"]] = arg_combos
+
+        # Try with every init mode the pipeline has seen work
+        init_names = [inv["name"] for inv in ctx.invocables
+                      if _re.search(r"init(ializ)?", inv["name"], _re.I)]
+        init_seqs = []
+        for init_fn in init_names:
+            for mode in range(9):
+                init_seqs.append({"fn": init_fn, "args": {"param_1": mode}})
+
+        if _targeted_unlock_attempt(ctx, init_seqs, write_args, "mc5-post-verification"):
+            decision["result"] = (
+                f"UNLOCKED by chaining verified read outputs "
+                f"(IDs: {extracted_ids}) into write functions"
+            )
+        else:
+            decision["result"] = (
+                f"tried {len(extracted_ids)} verified IDs × {len(extracted_amounts)} "
+                f"amounts × {len(init_seqs)} init sequences — still blocked"
+            )
+
+    except Exception as exc:
+        decision["result"] = f"error: {exc}"
+        logger.debug("[%s] mc5-post-verification failed: %s", ctx.job_id, exc)
+
+    _persist_mc_decision(ctx, "mc5-post-verification", decision)
+
+
+# ── MC-6: Post-Gap-Resolution Coordinator ───────────────────────────────────
+
+def _mc6_post_gap_resolution(ctx: ExploreContext) -> None:
+    """Final comprehensive unlock attempt with ALL accumulated knowledge.
+
+    READS: All findings (including gap-resolved), probe log, vocab, sentinels
+    REASONS: Did gap resolution crack any write function? Did it discover new
+             dependencies? This is the last chance before finalization.
+    ACTS: Combines everything: verified IDs, synthesis hints, all init modes.
+    DOCUMENTS: mc-decisions/mc6-post-gap-resolution.json
+    """
+    if ctx.unlock_result.get("unlocked"):
+        return
+
+    decision = {"trigger": "mc6-post-gap-resolution", "analysis": {}, "action": None, "result": None}
+
+    try:
+        from api.storage import _load_findings
+
+        findings = _load_findings(ctx.job_id)
+
+        # Check if gap resolution cracked any write function
+        gap_resolved_writes = [
+            f for f in findings
+            if _WRITE_FN_PATTERN.search(f.get("function", ""))
+            and f.get("status") == "success"
+            and "gap" in str(f.get("stop_reason", "")).lower()
+        ]
+
+        if gap_resolved_writes:
+            decision["analysis"]["gap_resolved_writes"] = [
+                f.get("function") for f in gap_resolved_writes
+            ]
+            decision["action"] = "gap_resolution_cracked_write"
+            decision["result"] = (
+                f"Gap resolution already cracked {len(gap_resolved_writes)} write functions — "
+                "checking if full unlock is now possible"
+            )
+
+        # Gather ALL known-good data
+        all_ids = set()
+        all_amounts = set()
+        for f in findings:
+            if f.get("status") != "success":
+                continue
+            wc = f.get("working_call")
+            if not isinstance(wc, dict):
+                continue
+            for v in wc.values():
+                sv = str(v).strip()
+                if _re.match(r"^[A-Z]+-", sv):
+                    all_ids.add(sv)
+                elif isinstance(v, (int, float)) and 1 <= v <= 100000:
+                    all_amounts.add(int(v))
+
+        if ctx.vocab:
+            for fmt in (ctx.vocab.get("id_formats") or []):
+                if fmt:
+                    all_ids.add(str(fmt))
+
+        all_ids_list = list(all_ids)[:8]
+        all_amounts_list = list(all_amounts) or [100, 500, 1000, 2500]
+
+        decision["analysis"]["total_known_ids"] = len(all_ids_list)
+        decision["analysis"]["total_known_amounts"] = len(all_amounts_list)
+        decision["analysis"]["total_sentinel_codes"] = len(ctx.sentinels)
+        decision["action"] = "final_comprehensive_attempt"
+
+        # Build the most comprehensive write args possible
+        write_args: dict[str, list[dict]] = {}
+        for inv in ctx.invocables:
+            if not _WRITE_FN_PATTERN.search(inv["name"]):
+                continue
+            params = inv.get("parameters") or []
+            if not params:
+                continue
+            combos = []
+            for id_val in all_ids_list[:4]:
+                for amt in all_amounts_list[:3]:
+                    a = {}
+                    for i, p in enumerate(params):
+                        pn = p.get("name", f"param_{i+1}")
+                        if i == 0:
+                            a[pn] = id_val
+                        elif i == 1:
+                            a[pn] = amt
+                        else:
+                            a[pn] = id_val if i % 2 == 0 else amt
+                    combos.append(a)
+            write_args[inv["name"]] = combos
+
+        # Try every init mode including ones we may not have tried
+        init_names = [inv["name"] for inv in ctx.invocables
+                      if _re.search(r"init(ializ)?", inv["name"], _re.I)]
+        init_seqs = []
+        for init_fn in init_names:
+            for mode in list(range(17)) + [32, 64, 128, 256, 512]:
+                init_seqs.append({"fn": init_fn, "args": {"param_1": mode}})
+            init_seqs.append({"fn": init_fn, "args": {}})
+
+        if _targeted_unlock_attempt(ctx, init_seqs, write_args, "mc6-post-gap-resolution"):
+            decision["result"] = "UNLOCKED on final comprehensive attempt"
+        else:
+            decision["result"] = (
+                f"FINAL: still blocked after {len(init_seqs)} init sequences × "
+                f"{sum(len(v) for v in write_args.values())} write arg combos"
+            )
+
+    except Exception as exc:
+        decision["result"] = f"error: {exc}"
+        logger.debug("[%s] mc6-post-gap-resolution failed: %s", ctx.job_id, exc)
+
+    _persist_mc_decision(ctx, "mc6-post-gap-resolution", decision)
+
+
+# ── Shared helper ───────────────────────────────────────────────────────────
+
+def _build_write_args_from_vocab(ctx: ExploreContext) -> dict[str, list[dict]]:
+    """Build write function test args from vocab id_formats and known values."""
+    write_args: dict[str, list[dict]] = {}
+    ids = []
+    if ctx.vocab and ctx.vocab.get("id_formats"):
+        ids = [str(f) for f in ctx.vocab["id_formats"] if f][:4]
+    if not ids:
+        ids = ["CUST-001", "ACCT-001", "ORD-001"]
+
+    for inv in ctx.invocables:
+        if not _WRITE_FN_PATTERN.search(inv["name"]):
+            continue
+        params = inv.get("parameters") or []
+        if not params:
+            continue
+        combos = []
+        for id_val in ids[:3]:
+            for amt in (100, 500, 1000):
+                a = {}
+                for i, p in enumerate(params):
+                    pn = p.get("name", f"param_{i+1}")
+                    if i == 0:
+                        a[pn] = id_val
+                    elif i == 1:
+                        a[pn] = amt
+                    else:
+                        a[pn] = id_val if i % 2 == 0 else amt
+                combos.append(a)
+        write_args[inv["name"]] = combos
+    return write_args
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1539,21 +2073,21 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, exc)
 
         _run_phase_4_reconcile(ctx)         # AC-1: reconcile probe log vs findings
-        _try_write_unlock_reprobe(ctx, "post-phase4-reconcile")
+        _mc3_post_reconcile(ctx)             # MC-3: analyze write failure mode, targeted retry
         _run_phase_5_sentinel_catalog(ctx)  # Persist + promote sentinel evidence
 
         if not _cancel_requested(job_id):
             report = _run_phase_6_synthesize(ctx)  # LLM → api_reference.md
-            _try_write_unlock_reprobe(ctx, "post-phase6-synthesis")
+            _mc4_post_synthesis(ctx)                # MC-4: parse synthesis for init sequence clues
 
             if report:
                 _run_phase_7_backfill(ctx, report)  # Layer-3 schema enrichment
                 _run_phase_7b_verify_enrichment(ctx)  # Execute working_calls to verify
-                _try_write_unlock_reprobe(ctx, "post-phase7b-verification")
+                _mc5_post_verification(ctx)            # MC-5: chain read outputs → write inputs
 
                 if not _cancel_requested(job_id):
                     _run_phase_8_gap_resolution(ctx)        # Retry + clarification Qs
-                    _try_write_unlock_reprobe(ctx, "post-phase8-gap-resolution")
+                    _mc6_post_gap_resolution(ctx)           # MC-6: final comprehensive attempt
                     _run_phase_9_behavioral_spec(ctx, report)  # Typed Python stub
 
         _run_phase_10_harmonize(ctx)    # Final deterministic reconciliation
