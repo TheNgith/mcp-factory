@@ -43,6 +43,8 @@ class ExploreRuntime:
     clarification_enabled: bool = True
     model_override: str = ""
     concurrency: int = 1
+    instruction_fragment: str = ""
+    context_density: str = "full"
 
     @classmethod
     def from_job_runtime(cls, job_runtime: dict) -> "ExploreRuntime":
@@ -74,6 +76,8 @@ class ExploreRuntime:
             ),
             model_override=str(job_runtime.get("model") or "").strip(),
             concurrency=int(_os.getenv("EXPLORE_CONCURRENCY", "1")),
+            instruction_fragment=str(job_runtime.get("instruction_fragment") or "").strip(),
+            context_density=str(job_runtime.get("context_density") or "full").strip().lower(),
         )
 
 

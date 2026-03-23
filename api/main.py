@@ -104,7 +104,7 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "normal": {
             "cap_profile": "deploy",
             "max_rounds": 5,
-            "max_tool_calls": 10,
+            "max_tool_calls": 8,
             "gap_resolution_enabled": True,
             "clarification_questions_enabled": True,
         },
@@ -126,6 +126,11 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
     # Must be a known deployment name; empty string means use env-var default.
     _model_override = str(raw.get("model") or "").strip()
 
+    _instruction_fragment = str(raw.get("instruction_fragment") or "").strip()
+    _context_density = str(raw.get("context_density") or "full").strip().lower()
+    if _context_density not in {"full", "minimal", "none"}:
+        _context_density = "full"
+
     return {
         "mode": mode,
         "cap_profile": cap_profile,
@@ -141,6 +146,8 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
             bool(defaults["clarification_questions_enabled"]),
         ),
         "model": _model_override,
+        "instruction_fragment": _instruction_fragment,
+        "context_density": _context_density,
     }
 
 

@@ -1,0 +1,71 @@
+# MCP Factory — Cursor Rules
+
+## Project Context
+MCP Factory is a pipeline that takes a Windows DLL, discovers its exported functions
+via static analysis, probes them with an LLM agent loop, and produces an enriched
+schema + Python wrapper + verification report. Azure-hosted, FastAPI backend.
+
+MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a folder of DLLs.
+
+## Canonical Names (use these everywhere, never abbreviate)
+
+### Core data structures
+- `invocables` — list of invocable dicts (the function registry)
+- `inv_map` — dict {name: invocable} (keyed registry)
+- `_JOB_INVOCABLE_MAPS` — module-level registry in storage.py
+- `vocab` / `ctx.vocab` — the cross-function semantic accumulator
+- `findings` — list of per-function probe outcome dicts
+- `ctx` — always an `ExploreContext` instance in the pipeline
+
+### Sentinel / error codes
+- `ctx.sentinels` — runtime sentinel table (int keys)
+- `sentinel_calibration.json` — persisted sentinel table (hex-string keys, JSON limitation)
+- `ctx.sentinel_catalog` — cross-probe evidence catalog (distinct from sentinels)
+- `SENTINEL_DEFAULTS` — static defaults from sentinel_codes.py
+
+### Session artifacts
+- `session-meta.json` — contract artifact from cohesion.py
+- `dashboard-row.json` — compact manifest for humans from collect_session.py
+- `transition-index.json` — 18 cohesion transitions (T-01 through T-18)
+
+### Job status
+- Use `current_status` or `job_status`, never `_cur`, `_wucurrent`, `_gap_current`
+
+## File Layout (api/)
+- `explore.py` — pipeline orchestrator, phases 0-2 & 4-10
+- `explore_probe.py` — per-function LLM agent loop (_explore_one)
+- `explore_phases.py` — sentinel calibration, write-unlock probe
+- `explore_helpers.py` — shared helpers, write policy precheck
+- `explore_types.py` — ExploreContext + ExploreRuntime dataclasses
+- `cohesion.py` — T-01..T-18 transitions, session-meta, stage-index
+- `routes_session.py` — session_snapshot ZIP + report endpoints
+- `main.py` — FastAPI app + job/explore endpoints
+
+## Code Style
+- Never use cryptic abbreviations (_wuo, _hc, _pv, etc.)
+- Never alias imports to shorter names (_JOB_INVOCABLE_MAPS as _jimap)
+- Exception variable names: always `exc`, not `_wue`, `_rle`, `_fb_e`
+- Use `snake_case` for all variables and functions
+- Comments explain WHY, not WHAT
+
+## Pipeline Architecture
+The explore pipeline has 11 phases (0-10). Key phases for write-unlock:
+- Phase 0.5: Sentinel calibration (_calibrate_sentinels)
+- Phase 1: Write-unlock probe (_probe_write_unlock)
+- Phase 3: Probe loop (_explore_one per function)
+- Post-Phase 3: Stage-boundary sentinel recalibration
+- Phase 6: Synthesis
+- Phase 8: Gap resolution
+
+Write functions are: ProcessPayment, ProcessRefund, RedeemLoyaltyPoints, UnlockAccount
+(matched by _WRITE_FN_RE pattern in explore_helpers.py)
+
+## Testing
+- 18 transitions in transition-index.json (T-01 through T-18)
+- Tests parse routes_session.py (not main.py) for ZIP structure
+- Run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
+
+## Azure / Cost
+- Container Apps: min-replicas 0 (scale to zero when idle)
+- VM: deallocate when not testing
+- All CI/CD workflows use min-replicas 0

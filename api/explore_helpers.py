@@ -329,8 +329,10 @@ def _write_policy_precheck(
     if not _WRITE_FN_RE.search(fn_name):
         return True, None, None
 
-    if unlock_result is not None and not unlock_result.get("unlocked"):
-        return False, "dependency_missing", "write path requires initialization/unlock sequence"
+    # Q16§5: allow write probes even when unlock failed — the LLM probe loop
+    # or deterministic fallback may discover the correct init sequence.
+    # Safety is enforced by the per-sentinel-class retry budget in _explore_one.
+    # (Previously this was a hard block that permanently gated all write fns.)
 
     rule = _WRITE_POLICY_RULES.get(fn_name, {})
     required_any = rule.get("required_any", [])

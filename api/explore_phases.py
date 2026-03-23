@@ -29,7 +29,7 @@ logger = logging.getLogger("mcp_factory.api")
 _CAP_PROFILES = {
     "dev": {"rounds": 3, "tool_calls": 5},
     "stabilize": {"rounds": 4, "tool_calls": 8},
-    "deploy": {"rounds": 5, "tool_calls": 10},
+    "deploy": {"rounds": 5, "tool_calls": 8},
 }
 _CAP_PROFILE = _os.getenv("EXPLORE_CAP_PROFILE", "deploy").strip().lower()
 if _CAP_PROFILE not in _CAP_PROFILES:
@@ -244,76 +244,145 @@ def _calibrate_sentinels(
     return resolved or _SENTINEL_DEFAULTS
 
 
-def _probe_write_unlock(invocables: list[dict], dll_strings: dict) -> dict:
+def _probe_write_unlock(invocables: list[dict], dll_strings: dict,
+                        vocab: dict | None = None) -> dict:
     """Phase 1: try to flip the DLL from read-only to write-ready.
-    Tries Init with mode integers, then any Begin/Enable/Auth-style functions,
-    then a credential sweep using strings extracted from the binary.
-    Returns unlock result dict."""
-    _WRITE_SENTINELS = {0xFFFFFFFB}
+
+    Strategy:
+      1. No-param init → test write fn with real args
+      2. Mode-based init (0..512) → test write fn with real args
+      3. Credential sweep from binary strings → test write fn with real args
+
+    The key improvement: test write functions with plausible args derived from
+    vocab id_formats and dll_strings — not empty dicts. A write fn returning
+    a sentinel with {} doesn't mean init failed; it means the args are wrong.
+    """
+    _WRITE_SENTINELS = {0xFFFFFFFB, 0xFFFFFFFE, 0xFFFFFFFF}
     inv_map = {inv["name"]: inv for inv in invocables}
-    _init_names = [n for n in inv_map if _re.search(r"init(ializ)?", n, _re.I)]
-    _write_fn_names = [
+    init_names = [n for n in inv_map if _re.search(r"init(ializ)?", n, _re.I)]
+    write_fn_names = [
         n for n in inv_map
         if _re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)", n, _re.I)
     ]
     tried = []
 
-    # Detect no-param init variants first
-    no_param_inits = [n for n in _init_names if not inv_map[n].get("parameters")]
+    # Build plausible write-function test args from vocab and binary strings
+    test_arg_sets = _build_write_test_args(inv_map, write_fn_names, dll_strings, vocab)
+
+    def _test_write_after_init(init_seq: list[dict]) -> dict | None:
+        """After an init sequence, test each write fn with real args."""
+        for wfn in write_fn_names:
+            arg_candidates = test_arg_sets.get(wfn, [{}])
+            for test_args in arg_candidates[:3]:
+                result = _execute_tool(inv_map[wfn], test_args)
+                tried.append(f"{wfn}({test_args}) -> {result}")
+                ret_match = _re.match(r"Returned:\s*(\d+)", result or "")
+                ret_val = int(ret_match.group(1)) & 0xFFFFFFFF if ret_match else 0xFFFFFFFF
+                if ret_val not in _WRITE_SENTINELS and ret_val == 0:
+                    return {
+                        "unlocked": True, "sequence": init_seq,
+                        "write_fn_tested": wfn, "write_fn_args": test_args,
+                        "notes": f"unlocked — {wfn}({test_args}) returned 0",
+                    }
+        return None
+
+    # 1. No-param init variants
+    no_param_inits = [n for n in init_names if not inv_map[n].get("parameters")]
     if no_param_inits:
         for n in no_param_inits:
-            r = _execute_tool(inv_map[n], {})
-            tried.append(f"{n}() -> {r}")
-        # Test a write function right after no-param init
-        if _write_fn_names:
-            _wfn = _write_fn_names[0]
-            _wr  = _execute_tool(inv_map[_wfn], {})
-            _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
-            _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
-            if _ret not in _WRITE_SENTINELS and _ret == 0:
-                return {"unlocked": True,
-                        "sequence": [{"fn": n, "args": {}} for n in no_param_inits],
-                        "notes": f"unlocked with no-param init: {', '.join(no_param_inits)}"}
+            result = _execute_tool(inv_map[n], {})
+            tried.append(f"{n}() -> {result}")
+        if write_fn_names:
+            hit = _test_write_after_init([{"fn": n, "args": {}} for n in no_param_inits])
+            if hit:
+                return hit
 
-    # Try mode-based init
+    # 2. Mode-based init
     for mode in (0, 1, 2, 4, 8, 16, 256, 512):
-        for n in _init_names:
+        for n in init_names:
             if inv_map[n].get("parameters"):
-                _r = _execute_tool(inv_map[n], {"param_1": mode})
-                tried.append(f"{n}(mode={mode}) -> {_r}")
-                # Test against first write fn
-                if _write_fn_names:
-                    _wfn = _write_fn_names[0]
-                    _wr  = _execute_tool(inv_map[_wfn], {})
-                    _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
-                    _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
-                    if _ret not in _WRITE_SENTINELS and _ret == 0:
-                        return {"unlocked": True, "sequence": [{"fn": n, "args": {"param_1": mode}}],
-                                "notes": f"unlocked with {n}(mode={mode})"}
+                result = _execute_tool(inv_map[n], {"param_1": mode})
+                tried.append(f"{n}(mode={mode}) -> {result}")
+                if write_fn_names:
+                    hit = _test_write_after_init([{"fn": n, "args": {"param_1": mode}}])
+                    if hit:
+                        return hit
 
-    # Credential sweep using strings extracted from the binary
-    _all_strings = dll_strings.get("ids", []) + dll_strings.get("misc", [])
-    _cred_tokens = list(dict.fromkeys([  # preserve order, deduplicate
-        s for s in _all_strings if 3 < len(s) < 40
-    ]))[:28]
-    _canary = _write_fn_names[0] if _write_fn_names else None
-    for n in _init_names:
+    # 3. Credential sweep using strings extracted from the binary
+    all_strings = dll_strings.get("ids", []) + dll_strings.get("misc", [])
+    cred_tokens = list(dict.fromkeys(
+        s for s in all_strings if 3 < len(s) < 40
+    ))[:28]
+    for n in init_names:
         if not inv_map[n].get("parameters"):
             continue
-        for tok in _cred_tokens:
-            _r = _execute_tool(inv_map[n], {"param_1": tok})
-            tried.append(f"{n}(cred={tok!r}) -> {_r}")
-            if _canary:
-                _wr  = _execute_tool(inv_map[_canary], {})
-                _ret_m = _re.match(r"Returned:\s*(\d+)", _wr or "")
-                _ret   = int(_ret_m.group(1)) & 0xFFFFFFFF if _ret_m else 0xFFFFFFFF
-                if _ret not in _WRITE_SENTINELS and _ret == 0:
-                    return {"unlocked": True,
-                            "sequence": [{"fn": n, "args": {"param_1": tok}}],
-                            "notes": f"unlocked with {n}(cred={tok!r})"}
+        for tok in cred_tokens:
+            result = _execute_tool(inv_map[n], {"param_1": tok})
+            tried.append(f"{n}(cred={tok!r}) -> {result}")
+            if write_fn_names:
+                hit = _test_write_after_init([{"fn": n, "args": {"param_1": tok}}])
+                if hit:
+                    return hit
 
-    return {"unlocked": False, "sequence": [], "write_fn_tested": _canary,
+    canary = write_fn_names[0] if write_fn_names else None
+    return {"unlocked": False, "sequence": [], "write_fn_tested": canary,
             "notes": f"write-unlock failed after {len(tried)} attempts"}
+
+
+def _build_write_test_args(
+    inv_map: dict[str, dict],
+    write_fn_names: list[str],
+    dll_strings: dict,
+    vocab: dict | None,
+) -> dict[str, list[dict]]:
+    """Build plausible argument sets for write-function unlock testing.
+
+    Uses vocab id_formats and binary strings to generate realistic args
+    (e.g. CUST-001 for customer_id, 100 for amount) instead of empty dicts.
+    Returns {fn_name: [arg_dict, ...]} with up to 3 candidates per function.
+    """
+    id_samples = []
+    if vocab and vocab.get("id_formats"):
+        for fmt in vocab["id_formats"]:
+            s = str(fmt).strip()
+            if s:
+                id_samples.append(s)
+    for s in dll_strings.get("ids", []):
+        if s and s not in id_samples:
+            id_samples.append(s)
+    if not id_samples:
+        id_samples = ["CUST-001", "ORD-001", "ACCT-001"]
+
+    result: dict[str, list[dict]] = {}
+    for fn_name in write_fn_names:
+        inv = inv_map.get(fn_name)
+        if not inv:
+            continue
+        params = inv.get("parameters") or []
+        if not params:
+            result[fn_name] = [{}]
+            continue
+        candidates: list[dict] = []
+        for id_val in id_samples[:3]:
+            args: dict = {}
+            for p in params:
+                if isinstance(p, str):
+                    p = {"name": p, "type": "string"}
+                pname = p.get("name", "arg")
+                ptype = (p.get("type") or "").lower()
+                if _re.search(r"id|account|customer|order", pname, _re.I):
+                    args[pname] = id_val
+                elif _re.search(r"amount|cents|points|value|price", pname, _re.I):
+                    args[pname] = 100
+                elif "int" in ptype or "dword" in ptype or "long" in ptype:
+                    args[pname] = 1
+                elif "char" in ptype or "str" in ptype:
+                    args[pname] = id_val
+                else:
+                    args[pname] = 1
+            candidates.append(args)
+        result[fn_name] = candidates or [{}]
+    return result
 
 
 def _infer_param_desc(pname: str, ptype: str, fn_findings: list) -> str:

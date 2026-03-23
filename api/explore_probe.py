@@ -139,23 +139,40 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     logger.info("[%s] explore_worker: starting %s (%d/%d)",
                 ctx.job_id, fn_name, ctx._state["explored"] + 1, ctx.total)
 
-    # Build a focused conversation for this function
-    prior = _load_findings(ctx.job_id)
+    # Build a focused conversation for this function.
+    # context_density controls how much prior knowledge is injected:
+    #   full    — all prior findings (default, validated overnight)
+    #   minimal — only the current function's prior finding (if any)
+    #   none    — no prior findings (cold start)
+    _all_prior = _load_findings(ctx.job_id)
+    if ctx.runtime.context_density == "none":
+        prior: list = []
+    elif ctx.runtime.context_density == "minimal":
+        prior = [f for f in _all_prior if f.get("function") == fn_name]
+    else:
+        prior = _all_prior
     sys_msg = _build_explore_system_message(
         ctx.invocables, prior, sentinels=ctx.sentinels,
         vocab=_vocab_snap, use_cases=ctx.use_cases_text,
     )
     _is_write_fn = bool(_WRITE_FN_RE.search(fn_name))
     _is_version_fn = bool(_VERSION_FN_RE.search(fn_name))
+    _instruction = (
+        ctx.runtime.instruction_fragment
+        if ctx.runtime.instruction_fragment
+        else (
+            "Call it with safe probe values, observe the result, "
+            "then call enrich_invocable and record_finding with what you learned. "
+            "Be brief — one summary sentence after you're done."
+        )
+    )
     conversation = [
         sys_msg,
         {
             "role": "user",
             "content": (
                 f"Explore the function '{fn_name}'. "
-                "Call it with safe probe values, observe the result, "
-                "then call enrich_invocable and record_finding with what you learned. "
-                "Be brief — one summary sentence after you're done."
+                + _instruction
                 + ctx.static_hints_block
                 + (ctx.write_unlock_block if _is_write_fn else "")
             ),

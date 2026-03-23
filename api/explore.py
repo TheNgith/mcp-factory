@@ -2,24 +2,27 @@
 
 Pipeline overview
 -----------------
-_explore_worker(job_id, invocables) drives 11 named phases in sequence,
+_explore_worker(job_id, invocables) drives 12 named phases in sequence,
 threading all shared state through an ExploreContext dataclass so data-flow
 between phases is explicit and each phase can be tested in isolation.
 
-  Phase 0.5  _run_phase_05_calibrate      – calibrate DLL-specific sentinel codes
-  Phase 0a   _run_phase_0_vocab_seed      – load/seed the cross-session vocab table
-  Phase 0b   _run_phase_0_static          – binary static analysis (G-4/G-7/G-8/G-9)
-  Phase 1    _run_phase_1_write_unlock    – probe write-unlock prerequisite sequence
-  Phase 2    _run_phase_2_curriculum_order – order: init-first, then by uncertainty
-  Phase 3    _run_phase_3_probe_loop      – per-function LLM probe loops (_explore_one)
-  Phase 4    _run_phase_4_reconcile       – AC-1 probe-log reconciliation
-  Phase 5    _run_phase_5_sentinel_catalog – persist + promote sentinel evidence
-  Phase 6    _run_phase_6_synthesize      – LLM → api_reference.md
-  Phase 7    _run_phase_7_backfill        – enrich schema from synthesis doc
-  Phase 8    _run_phase_8_gap_resolution  – retry failed functions + clarification Qs
-  Phase 9    _run_phase_9_behavioral_spec – typed Python behavioral specification
-  Phase 10   _run_phase_10_harmonize      – final deterministic harmonization pass
-  Finalize   _run_finalize                – vocab description + AC-4 closure gate
+  Phase 0.5  _run_phase_05_calibrate          – calibrate DLL-specific sentinel codes
+  Phase 0a   _run_phase_0_vocab_seed          – load/seed the cross-session vocab table
+  Phase 0b   _run_phase_0_static              – binary static analysis (G-4/G-7/G-8/G-9)
+  Phase 1    _run_phase_1_write_unlock        – probe write-unlock prerequisite sequence
+  Phase 2    _run_phase_2_curriculum_order     – order: init-first, then by uncertainty
+  Phase 3    _run_phase_3_probe_loop          – per-function LLM probe loops (_explore_one)
+           + Q16§4 stage-boundary recalibration – scan probe log for new sentinel codes
+           + Q16§5 write-unlock re-probe       – retry unlock if new sentinels resolve it
+  Phase 4    _run_phase_4_reconcile           – AC-1 probe-log reconciliation
+  Phase 5    _run_phase_5_sentinel_catalog    – persist + promote sentinel evidence
+  Phase 6    _run_phase_6_synthesize          – LLM → api_reference.md
+  Phase 7    _run_phase_7_backfill            – enrich schema from synthesis doc
+  Phase 7b   _run_phase_7b_verify_enrichment  – execute working_calls against the DLL
+  Phase 8    _run_phase_8_gap_resolution      – retry failed functions + clarification Qs
+  Phase 9    _run_phase_9_behavioral_spec     – typed Python behavioral specification
+  Phase 10   _run_phase_10_harmonize          – final deterministic harmonization pass
+  Finalize   _run_finalize                    – vocab description + AC-4 closure gate
 """
 
 from __future__ import annotations
@@ -386,12 +389,12 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
     READS:  ctx.invocables, ctx.dll_strings
     WRITES: ctx.unlock_result, ctx.write_unlock_block
     INVARIANT: ctx.unlock_result is always set (defaults to {unlocked: False})
-    HANDOFF: write_unlock_block is non-empty iff unlock succeeded
+    HANDOFF: write_unlock_block is always non-empty for write functions
     """
     try:
         logger.info("[%s] phase1: write-unlock probe…", ctx.job_id)
         _set_explore_status(ctx.job_id, 0, ctx.total, "Testing write-mode unlock…")
-        ctx.unlock_result = _probe_write_unlock(ctx.invocables, ctx.dll_strings)
+        ctx.unlock_result = _probe_write_unlock(ctx.invocables, ctx.dll_strings, ctx.vocab)
         if ctx.unlock_result.get("unlocked"):
             ctx.write_unlock_block = (
                 "\nWRITE MODE ACTIVE: The write-unlock sequence has already been executed. "
@@ -401,6 +404,13 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
             )
             logger.info("[%s] phase1: UNLOCKED: %s", ctx.job_id, ctx.unlock_result["notes"])
         else:
+            ctx.write_unlock_block = (
+                "\nWRITE MODE NOT YET UNLOCKED. This function modifies state (payments, refunds, etc). "
+                "You MUST call CS_Initialize first (try mode=0, mode=1, mode=2) before probing this function. "
+                "Use real ID values from STATIC ANALYSIS HINTS (e.g. CUST-001, ORD-001) and reasonable "
+                "numeric amounts (e.g. 100, 500). If you get sentinel 0xFFFFFFFB, try a different "
+                "init mode or parameter combination. Do NOT give up after one attempt.\n"
+            )
             logger.info("[%s] phase1: not unlocked: %s", ctx.job_id,
                         ctx.unlock_result.get("notes", ""))
 
@@ -772,6 +782,117 @@ def _run_phase_7_backfill(ctx: ExploreContext, report: str) -> None:
     # Schema checkpoint after initial discovery/backfill but before gap-resolution
     _snapshot_schema_stage(ctx.job_id, "mcp_schema_post_discovery.json")
     _snapshot_schema_stage(ctx.job_id, "mcp_schema_pre_gap_resolution.json")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 7b – Enrichment verification (execute working_calls against the DLL)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_phase_7b_verify_enrichment(ctx: ExploreContext) -> None:
+    """Execute each 'success' finding's working_call against the DLL to verify it.
+
+    Closes the enrichment→verification loop: backfill/enrichment adds plausible
+    args, this phase proves them by actually calling the DLL.  Results:
+      - return=0 → status stays 'success', verification='verified'
+      - return=sentinel → verification='inferred' (enrichment was plausible but unproven)
+      - exception → verification='error'
+
+    READS:  ctx.job_id, ctx.inv_map, ctx.sentinels
+    WRITES: findings patched with 'verification' field; verification-report.json uploaded
+    """
+    from api.storage import _load_findings
+    from api.executor import _execute_tool
+
+    try:
+        logger.info("[%s] phase7b: enrichment verification pass…", ctx.job_id)
+        _set_explore_status(ctx.job_id, ctx._state["explored"], ctx.total,
+                            "Verifying enriched function calls…")
+        findings = _load_findings(ctx.job_id)
+        if not findings:
+            return
+
+        report_entries: list[dict] = []
+        verified_count = 0
+        inferred_count = 0
+
+        for finding in findings:
+            fn_name = finding.get("function", "")
+            status = finding.get("status", "")
+            working_call = finding.get("working_call")
+
+            if status != "success" or not working_call:
+                continue
+
+            inv = ctx.inv_map.get(fn_name)
+            if not inv:
+                continue
+
+            call_args = working_call.get("args") or working_call.get("arguments") or {}
+            if not call_args:
+                report_entries.append({
+                    "function": fn_name, "verification": "skipped",
+                    "reason": "working_call has no args",
+                })
+                continue
+
+            try:
+                # Ensure init has been called
+                for init_inv in ctx.init_invocables:
+                    _execute_tool(init_inv, {})
+
+                result_str = _execute_tool(inv, call_args)
+                ret_match = _re.match(r"Returned:\s*(\d+)", result_str or "")
+                if ret_match:
+                    ret_val = int(ret_match.group(1)) & 0xFFFFFFFF
+                    is_sentinel = ret_val in ctx.sentinels or ret_val > 0x80000000
+                    if ret_val == 0:
+                        verification = "verified"
+                        verified_count += 1
+                    elif is_sentinel:
+                        verification = "inferred"
+                        inferred_count += 1
+                    else:
+                        verification = "verified"
+                        verified_count += 1
+                else:
+                    verification = "inferred"
+                    inferred_count += 1
+
+                _patch_finding(ctx.job_id, fn_name, {"verification": verification})
+                report_entries.append({
+                    "function": fn_name, "verification": verification,
+                    "args": call_args, "result": (result_str or "")[:200],
+                    "return_value": ret_match.group(1) if ret_match else None,
+                })
+
+            except Exception as exc:
+                _patch_finding(ctx.job_id, fn_name, {"verification": "error"})
+                report_entries.append({
+                    "function": fn_name, "verification": "error",
+                    "args": call_args, "error": str(exc)[:200],
+                })
+
+        logger.info("[%s] phase7b: verified=%d, inferred=%d out of %d success findings",
+                    ctx.job_id, verified_count, inferred_count,
+                    verified_count + inferred_count)
+
+        try:
+            _upload_to_blob(
+                ARTIFACT_CONTAINER,
+                f"{ctx.job_id}/verification-report.json",
+                json.dumps({
+                    "verified_count": verified_count,
+                    "inferred_count": inferred_count,
+                    "total_checked": len(report_entries),
+                    "entries": report_entries,
+                }, indent=2).encode(),
+            )
+        except Exception as exc:
+            logger.debug("[%s] phase7b: verification report upload failed: %s",
+                         ctx.job_id, exc)
+
+    except Exception as exc:
+        logger.debug("[%s] phase7b: enrichment verification failed: %s", ctx.job_id, exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1213,6 +1334,36 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         except Exception as exc:
                             logger.debug("[%s] stage-boundary recal log flush failed: %s",
                                          ctx.job_id, exc)
+
+                        # Q16§5: re-probe write-unlock if new sentinel codes explain
+                        # why it was failing (e.g. a code meant "not initialized"
+                        # and we now know the right init args).
+                        if not ctx.unlock_result.get("unlocked"):
+                            logger.info("[%s] stage-boundary: re-probing write-unlock "
+                                        "with %d new sentinel codes",
+                                        ctx.job_id, len(boundary_resolved))
+                            ctx.unlock_result = _probe_write_unlock(
+                                ctx.invocables, ctx.dll_strings, ctx.vocab,
+                            )
+                            if ctx.unlock_result.get("unlocked"):
+                                ctx.write_unlock_block = (
+                                    "\nWRITE MODE ACTIVE (resolved after sentinel recalibration): "
+                                    "The write-unlock sequence has been executed. Write functions "
+                                    "should now succeed. Probe with real ID values from "
+                                    "STATIC ANALYSIS HINTS.\n"
+                                )
+                                logger.info("[%s] stage-boundary: WRITE UNLOCKED after recal: %s",
+                                            ctx.job_id, ctx.unlock_result.get("notes"))
+                                try:
+                                    current_status = _get_job_status(ctx.job_id) or {}
+                                    _persist_job_status(ctx.job_id, {
+                                        **current_status,
+                                        "write_unlock_outcome": "resolved",
+                                        "write_unlock_sentinel": None,
+                                    })
+                                except Exception as exc:
+                                    logger.debug("[%s] stage-boundary unlock status "
+                                                 "update failed: %s", ctx.job_id, exc)
         except Exception as exc:
             logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, exc)
 
@@ -1224,6 +1375,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
             if report:
                 _run_phase_7_backfill(ctx, report)  # Layer-3 schema enrichment
+                _run_phase_7b_verify_enrichment(ctx)  # Execute working_calls to verify
 
                 if not _cancel_requested(job_id):
                     _run_phase_8_gap_resolution(ctx)        # Retry + clarification Qs
