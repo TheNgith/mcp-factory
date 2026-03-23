@@ -26,7 +26,7 @@ MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a fol
 ### Session artifacts
 - `session-meta.json` — contract artifact from cohesion.py
 - `dashboard-row.json` — compact manifest for humans from collect_session.py
-- `transition-index.json` — 18 cohesion transitions (T-01 through T-18)
+- `transition-index.json` — 21 cohesion transitions (T-01 through T-21)
 
 ### Job status
 - Use `current_status` or `job_status`, never `_cur`, `_wucurrent`, `_gap_current`
@@ -37,7 +37,7 @@ MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a fol
 - `explore_phases.py` — sentinel calibration, write-unlock probe
 - `explore_helpers.py` — shared helpers, write policy precheck
 - `explore_types.py` — ExploreContext + ExploreRuntime dataclasses
-- `cohesion.py` — T-01..T-18 transitions, session-meta, stage-index
+- `cohesion.py` — T-01..T-21 transitions, session-meta, stage-index
 - `routes_session.py` — session_snapshot ZIP + report endpoints
 - `main.py` — FastAPI app + job/explore endpoints
 
@@ -51,32 +51,54 @@ MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a fol
 ## Pipeline Architecture
 The explore pipeline has 11 phases (0-10) plus 4 micro coordinator checkpoints.
 
-### Phase sequence:
-- Phase 0.5: Sentinel calibration (_calibrate_sentinels)
-- Phase 0a: Vocab seed (prior session + hints)
-- Phase 0b: Static analysis (Ghidra binary strings)
-- Phase 1: Write-unlock probe (_probe_write_unlock)
-- Phase 2: Curriculum ordering (init-first, then uncertainty-sorted)
-- Phase 3: Probe loop (_explore_one per function) — MAIN WORK
-- Post-Phase 3: Stage-boundary sentinel recalibration (Q16§4/§5)
-- Phase 4: Reconcile → **MC-3** (analyze write failure mode, targeted retry)
-- Phase 5: Sentinel catalog
-- Phase 6: Synthesis → **MC-4** (parse api-reference.md for init clues)
-- Phase 7: Backfill (semantic param names)
-- Phase 7b: Verification → **MC-5** (chain read outputs → write inputs)
-- Phase 8: Gap resolution → **MC-6** (final comprehensive unlock attempt)
-- Phase 9: Behavioral spec
-- Phase 10: Harmonize
-- Finalize: Contract artifacts (T-01 through T-18)
+### Stage and Phase Naming Convention
 
-### Micro Coordinators (MC-3 through MC-6):
+Every pipeline step has a canonical identifier: `S-{stage}.{substep}`
+
+| ID | Function | Stage Name | Cohesion Stage |
+|----|----------|------------|----------------|
+| S-00.1 | `_run_phase_05_calibrate` | Sentinel calibration | S-01 |
+| S-00.2 | `_run_phase_0_vocab_seed` | Vocab seed | S-01 |
+| S-00.3 | `_run_phase_0_static` | Static analysis | S-01 |
+| S-01.1 | `_run_phase_1_write_unlock` | Write-unlock probe | S-01 |
+| S-02.1 | `_run_phase_2_curriculum_order` | Curriculum ordering | S-02 |
+| S-02.2 | `_run_phase_3_probe_loop` | **Probe loop (main work)** | S-02 |
+| S-03.1 | `_run_phase_4_reconcile` | Reconcile probe log | S-03 |
+| S-03.MC | `_mc3_post_reconcile` | **MC: write failure analysis** | S-03 |
+| S-03.2 | `_run_phase_5_sentinel_catalog` | Sentinel catalog | S-03 |
+| S-04.1 | `_run_phase_6_synthesize` | Synthesis (api-reference.md) | S-04 |
+| S-04.MC | `_mc4_post_synthesis` | **MC: parse synthesis for init clues** | S-04 |
+| S-05.1 | `_run_phase_7_backfill` | Schema enrichment | S-05 |
+| S-05.2 | `_run_phase_7b_verify_enrichment` | Verification (execute working_calls) | S-05 |
+| S-05.MC | `_mc5_post_verification` | **MC: chain read → write** | S-05 |
+| S-06.1 | `_run_phase_8_gap_resolution` | Gap resolution | S-06 |
+| S-06.MC | `_mc6_post_gap_resolution` | **MC: final comprehensive unlock** | S-06 |
+| S-07.1 | `_run_phase_9_behavioral_spec` | Behavioral spec | S-07 |
+| S-07.2 | `_run_phase_10_harmonize` | Harmonize | S-07 |
+| S-07.3 | Finalize | Contract artifacts (T-01 through T-21) | S-07 |
+
+MC checkpoints are marked with `.MC` suffix. They always follow the phase they analyze.
+MC decision artifacts: `{job_id}/mc-decisions/mc{N}-{slug}.json`
+
+### Micro Coordinators:
 Each MC reads what the previous phase produced, reasons about it, adjusts strategy,
 and documents its decision in `{job_id}/mc-decisions/mc{N}-*.json`.
 
-- MC-3 classifies write failure mode (uniform sentinel = init problem vs mixed)
-- MC-4 parses synthesis doc for init mode patterns
-- MC-5 chains verified read outputs as concrete write args
-- MC-6 final comprehensive attempt with all accumulated knowledge
+- MC-3 (S-03.MC): classifies write failure mode (uniform sentinel = init problem vs mixed)
+- MC-4 (S-04.MC): parses synthesis doc for init mode patterns
+- MC-5 (S-05.MC): chains verified read outputs as concrete write args
+- MC-6 (S-06.MC): final comprehensive attempt with all accumulated knowledge
+
+When any MC cracks write-unlock, it immediately re-probes all failed write functions
+and persists the winning init sequence to `winning_init_sequence.json`.
+
+### Transitions:
+- T-01..T-16: Original cohesion data flow transitions
+- T-17: sentinel_calibration_outcome (Q16)
+- T-18: write_unlock_probe_outcome (Q16)
+- T-19: mc_coordinator_decisions (MC-3 through MC-6 artifact presence)
+- T-20: enrichment_verification_outcome (Phase 7b verified/inferred/error counts)
+- T-21: winning_init_sequence_persistence (write-unlock crack persisted for future runs)
 
 ### Circular Feedback:
 Pass `prior_job_id` in explore_settings to seed from a previous session.
@@ -88,7 +110,7 @@ ProcessPayment, ProcessRefund, RedeemLoyaltyPoints, UnlockAccount
 Write functions get 14 tool calls (not 8) and targeted init→write testing prompts.
 
 ## Testing
-- 18 transitions in transition-index.json (T-01 through T-18)
+- 21 transitions in transition-index.json (T-01 through T-21)
 - Tests parse routes_session.py (not main.py) for ZIP structure
 - Run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
 - Circular test: scripts/run_circular_test.py (3-iteration cold→warm→hot)
