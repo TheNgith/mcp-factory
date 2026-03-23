@@ -41,7 +41,7 @@ from api.storage import (
     _enqueue_analysis,
     _load_findings,
 )
-from api.storage import _JOB_INVOCABLE_MAPS as _job_inv_maps  # for explore/report
+from api.storage import _JOB_INVOCABLE_MAPS
 from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
 from api.chat import stream_chat
@@ -834,7 +834,7 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
     # Trigger targeted mini-sessions for every function that received an answer,
     # then re-run gap generation to surface any remaining unknowns.
     from api.explore import _run_gap_answer_mini_sessions
-    inv_map = _job_inv_maps.get(job_id)
+    inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
     if not inv_map:
         try:
             raw_inv = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")

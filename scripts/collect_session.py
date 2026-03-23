@@ -136,7 +136,7 @@ def _build_dashboard_row(
         elif bool((cohesion.get("gates") or {}).get("hard_fail")):
             pipeline_verdict = "DEGRADED"
 
-    ablation_fields = {
+    session_meta_fields = {
         "prompt_profile_id": None,
         "layer": None,
         "ablation_variable": None,
@@ -148,11 +148,15 @@ def _build_dashboard_row(
         "write_unlock_outcome": None,
         "write_unlock_sentinel": None,
         "sentinel_new_codes_this_run": 0,
+        # Function outcome counts (used by merger, orchestrator, coordinator)
+        "functions_total": 0,
+        "functions_success": 0,
+        "functions_error": 0,
     }
     if isinstance(session_meta, dict):
-        for key in ablation_fields:
+        for key in session_meta_fields:
             val = session_meta.get(key)
-            ablation_fields[key] = val if val is not None else ablation_fields[key]
+            session_meta_fields[key] = val if val is not None else session_meta_fields[key]
 
     return {
         "date": date,
@@ -169,7 +173,7 @@ def _build_dashboard_row(
         "stage_fail_count": stage_fail_count,
         "failed_transitions": failed_transitions,
         "failed_stages": failed_stages,
-        **ablation_fields,
+        **session_meta_fields,
     }
 
 

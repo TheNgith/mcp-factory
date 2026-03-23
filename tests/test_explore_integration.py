@@ -299,20 +299,22 @@ class TestExploreContext:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSessionSnapshotZipStructure:
-    """Verify that main.py embeds the expected stage-based ZIP paths.
+    """Verify that routes_session.py embeds the expected stage-based ZIP paths.
 
-    We parse main.py as source rather than importing it (which requires a live
+    We parse the source rather than importing it (which requires a live
     FastAPI + Azure environment) so the check runs offline in CI.
+    The session_snapshot endpoint was moved from main.py to routes_session.py
+    in the a2fc8c5 refactor.
     """
 
-    MAIN_PY = ROOT / "api" / "main.py"
+    SESSION_PY = ROOT / "api" / "routes_session.py"
 
     @pytest.fixture(autouse=True)
     def _source(self):
-        self.src = self.MAIN_PY.read_text(encoding="utf-8")
+        self.src = self.SESSION_PY.read_text(encoding="utf-8")
 
     def _assert_present(self, path_fragment: str):
-        assert path_fragment in self.src, f"Expected '{path_fragment}' in main.py session_snapshot"
+        assert path_fragment in self.src, f"Expected '{path_fragment}' in routes_session.py session_snapshot"
 
     def test_stage_00_setup_present(self):
         self._assert_present("stage-00-setup/explore_config.json")

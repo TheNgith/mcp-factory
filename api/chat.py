@@ -362,24 +362,23 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     # This removes the fragile "pass 25 KB of JSON through the PS serializer"
     # dependency and survives container restarts that wipe in-memory state.
     if not invocables and job_id:
-        from api.storage import _JOB_INVOCABLE_MAPS as _jimap  # type: ignore
-        _loaded: dict = {}
-        if job_id in _jimap:
-            _loaded = dict(_jimap[job_id])
+        from api.storage import _JOB_INVOCABLE_MAPS
+        loaded_invocables: dict = {}
+        if job_id in _JOB_INVOCABLE_MAPS:
+            loaded_invocables = dict(_JOB_INVOCABLE_MAPS[job_id])
         else:
             try:
-                import json as _json_fb
-                from api.storage import _download_blob as _dl_fb
-                from api.config import ARTIFACT_CONTAINER as _AC_fb
-                _raw_inv = _dl_fb(_AC_fb, f"{job_id}/invocables_map.json")
-                _loaded = _json_fb.loads(_raw_inv)
-                _jimap[job_id] = _loaded
-                logger.info("[%s] stream_chat: loaded %d invocables from blob fallback", job_id, len(_loaded))
-            except Exception as _fb_e:
-                logger.debug("[%s] stream_chat: blob fallback failed: %s", job_id, _fb_e)
-        if _loaded:
-            invocables = list(_loaded.values())
-            inv_map.update(_loaded)
+                from api.storage import _download_blob
+                from api.config import ARTIFACT_CONTAINER
+                raw_inv = _download_blob(ARTIFACT_CONTAINER, f"{job_id}/invocables_map.json")
+                loaded_invocables = json.loads(raw_inv)
+                _JOB_INVOCABLE_MAPS[job_id] = loaded_invocables
+                logger.info("[%s] stream_chat: loaded %d invocables from blob fallback", job_id, len(loaded_invocables))
+            except Exception as exc:
+                logger.debug("[%s] stream_chat: blob fallback failed: %s", job_id, exc)
+        if loaded_invocables:
+            invocables = list(loaded_invocables.values())
+            inv_map.update(loaded_invocables)
 
     # ── Tool-schema fallback ───────────────────────────────────────────────
     # If the caller sent no tools array (or it was empty), build OpenAI tool
@@ -496,8 +495,8 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     # turns avoids a redundant 2 MB blob upload that would block the async
     # generator before the first SSE event is yielded.
     if job_id and invocables:
-        from api.storage import _JOB_INVOCABLE_MAPS as _jimap  # type: ignore
-        if job_id not in _jimap:
+        from api.storage import _JOB_INVOCABLE_MAPS
+        if job_id not in _JOB_INVOCABLE_MAPS:
             loop.run_in_executor(None, _register_invocables, job_id, invocables)
 
     try:

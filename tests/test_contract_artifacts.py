@@ -121,8 +121,15 @@ def test_emit_contract_artifacts_writes_required_files(monkeypatch):
     transition_index = json.loads(uploaded["job1/transition-index.json"].decode("utf-8"))
     stage_index = json.loads(uploaded["job1/stage-index.json"].decode("utf-8"))
     assert transition_index["version"] == "1.0"
-    assert len(transition_index["transitions"]) == 16
+    assert len(transition_index["transitions"]) == 18
     assert all("severity" in t and "status" in t for t in transition_index["transitions"])
+
+    t17 = next(t for t in transition_index["transitions"] if t["id"] == "T-17")
+    t18 = next(t for t in transition_index["transitions"] if t["id"] == "T-18")
+    assert t17["name"] == "sentinel_calibration_outcome"
+    assert t18["name"] == "write_unlock_probe_outcome"
+    assert t17["status"] in {"pass", "warn", "fail"}
+    assert t18["status"] in {"pass", "warn", "fail", "partial", "not_applicable"}
     assert stage_index["version"] == "1.0"
     for stage in stage_index["stages"]:
         for artifact in stage.get("artifacts") or []:

@@ -176,9 +176,9 @@ def _calibrate_sentinels(
     _prior_sentinels: dict[int, str] = {}
     if _ENABLE_STICKY_SENTINEL_BASELINE and job_id:
         try:
-            from api.storage import _download_blob as _dl_blob
-            from api.config import ARTIFACT_CONTAINER as _AC
-            _prior_raw = json.loads(_dl_blob(_AC, f"{job_id}/sentinel_calibration.json"))
+            from api.storage import _download_blob
+            from api.config import ARTIFACT_CONTAINER
+            _prior_raw = json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/sentinel_calibration.json"))
             for _hk, _mv in _prior_raw.items():
                 try:
                     _prior_sentinels[int(_hk, 16)] = str(_mv)
@@ -198,10 +198,10 @@ def _calibrate_sentinels(
     # from user hints don't need LLM naming and are present even if the empty-
     # arg sweep never triggered them.
     if hints:
-        _hint_codes = _parse_hint_error_codes(hints)
-        for _hc, _hm in _hint_codes.items():
-            if _hc not in candidates:
-                candidates[_hc] = [f"(hint: {_hm})"]
+        hint_codes = _parse_hint_error_codes(hints)
+        for hint_code, hint_meaning in hint_codes.items():
+            if hint_code not in candidates:
+                candidates[hint_code] = [f"(hint: {hint_meaning})"]
 
     if not candidates:
         return _prior_sentinels or _SENTINEL_DEFAULTS

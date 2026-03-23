@@ -405,51 +405,50 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
                         ctx.unlock_result.get("notes", ""))
 
         # Q16: emit write_unlock_outcome + write_unlock_sentinel to session-meta
-        _write_fns = [
+        write_fns = [
             inv for inv in ctx.invocables
             if _re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)",
                           inv["name"], _re.I)
         ]
-        if not _write_fns:
-            _wuo = "not_attempted"
-            _wus: str | None = None
+        if not write_fns:
+            unlock_outcome = "not_attempted"
+            blocking_sentinel: str | None = None
         elif ctx.unlock_result.get("unlocked"):
-            _wuo = "resolved"
-            _wus = None
+            unlock_outcome = "resolved"
+            blocking_sentinel = None
         else:
-            _wuo = "blocked"
-            # Report the highest-priority write-denied sentinel code we know
-            _wus = None
-            for _wc in (0xFFFFFFFB, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC):
-                if _wc in ctx.sentinels:
-                    _wus = f"0x{_wc:08X}"
+            unlock_outcome = "blocked"
+            blocking_sentinel = None
+            for candidate_code in (0xFFFFFFFB, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC):
+                if candidate_code in ctx.sentinels:
+                    blocking_sentinel = f"0x{candidate_code:08X}"
                     break
         try:
-            _wucurrent = _get_job_status(ctx.job_id) or {}
+            current_status = _get_job_status(ctx.job_id) or {}
             _persist_job_status(ctx.job_id, {
-                **_wucurrent,
-                "write_unlock_outcome": _wuo,
-                "write_unlock_sentinel": _wus,
+                **current_status,
+                "write_unlock_outcome": unlock_outcome,
+                "write_unlock_sentinel": blocking_sentinel,
             })
-        except Exception as _wue:
-            logger.debug("[%s] phase1: write-unlock status emit failed: %s", ctx.job_id, _wue)
+        except Exception as exc:
+            logger.debug("[%s] phase1: write-unlock status emit failed: %s", ctx.job_id, exc)
         # Q16/T-18: persist write_unlock_probe.json for cohesion transition evidence
         try:
             _upload_to_blob(
                 ARTIFACT_CONTAINER,
                 f"{ctx.job_id}/write_unlock_probe.json",
                 json.dumps({
-                    "outcome": _wuo,
+                    "outcome": unlock_outcome,
                     "unlocked": ctx.unlock_result.get("unlocked"),
-                    "blocking_sentinel": _wus,
+                    "blocking_sentinel": blocking_sentinel,
                     "sequence": ctx.unlock_result.get("sequence"),
                     "write_fn_tested": ctx.unlock_result.get("write_fn_tested"),
                     "notes": ctx.unlock_result.get("notes"),
                 }, indent=2).encode(),
             )
-        except Exception as _wuae:
+        except Exception as exc:
             logger.debug("[%s] phase1: write_unlock_probe artifact upload failed: %s",
-                         ctx.job_id, _wuae)
+                         ctx.job_id, exc)
     except Exception as _we:
         logger.debug("[%s] phase1: write-unlock probe failed: %s", ctx.job_id, _we)
 
@@ -1174,47 +1173,48 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         # Q16 Task 4: Stage-boundary re-calibration — scan probe log for high-bit
         # return codes observed during probing that weren't in the initial sentinel table.
         try:
-            _probe_raw_bytes = _download_blob(ARTIFACT_CONTAINER,
-                                              f"{ctx.job_id}/explore_probe_log.json")
-            _probe_entries = json.loads(_probe_raw_bytes) if _probe_raw_bytes else []
-            if isinstance(_probe_entries, list):
-                _new_cands: dict[int, list[str]] = {}
-                for _pe in _probe_entries:
-                    _ret_m2 = _re.match(r"Returned:\s*(\d+)",
-                                        str(_pe.get("result_excerpt") or ""))
-                    if _ret_m2:
-                        _pv = int(_ret_m2.group(1)) & 0xFFFFFFFF
-                        if _pv > 0x80000000 and _pv not in ctx.sentinels:
-                            _new_cands.setdefault(_pv, []).append(
-                                str(_pe.get("function") or "")
+            probe_log_bytes = _download_blob(ARTIFACT_CONTAINER,
+                                             f"{ctx.job_id}/explore_probe_log.json")
+            probe_entries = json.loads(probe_log_bytes) if probe_log_bytes else []
+            if isinstance(probe_entries, list):
+                new_sentinel_candidates: dict[int, list[str]] = {}
+                for entry in probe_entries:
+                    return_match = _re.match(r"Returned:\s*(\d+)",
+                                             str(entry.get("result_excerpt") or ""))
+                    if return_match:
+                        return_val = int(return_match.group(1)) & 0xFFFFFFFF
+                        if return_val > 0x80000000 and return_val not in ctx.sentinels:
+                            new_sentinel_candidates.setdefault(return_val, []).append(
+                                str(entry.get("function") or "")
                             )
-                if _new_cands:
-                    _boundary_resolved = _name_sentinel_candidates(_new_cands, ctx.client, ctx.model)
-                    if _boundary_resolved:
-                        ctx.sentinels.update(_boundary_resolved)
-                        ctx.sentinel_new_codes_this_run += len(_boundary_resolved)
+                if new_sentinel_candidates:
+                    boundary_resolved = _name_sentinel_candidates(
+                        new_sentinel_candidates, ctx.client, ctx.model,
+                    )
+                    if boundary_resolved:
+                        ctx.sentinels.update(boundary_resolved)
+                        ctx.sentinel_new_codes_this_run += len(boundary_resolved)
                         logger.info("[%s] stage-boundary recal: %d new codes: %s",
-                                    ctx.job_id, len(_boundary_resolved),
-                                    {f"0x{k:08X}": v for k, v in _boundary_resolved.items()})
-                        # Q16/T-17: log stage-boundary LLM naming decision to probe-log
+                                    ctx.job_id, len(boundary_resolved),
+                                    {f"0x{k:08X}": v for k, v in boundary_resolved.items()})
                         try:
                             _append_explore_probe_log(ctx.job_id, [{
                                 "phase": "stage_boundary_name_sentinel_candidates",
                                 "function": "(all)",
                                 "args": {
-                                    "candidate_codes": [f"0x{v:08X}" for v in sorted(_new_cands.keys(), reverse=True)],
-                                    "candidate_count": len(_new_cands),
+                                    "candidate_codes": [f"0x{v:08X}" for v in sorted(new_sentinel_candidates.keys(), reverse=True)],
+                                    "candidate_count": len(new_sentinel_candidates),
                                 },
                                 "result_excerpt": json.dumps(
-                                    {f"0x{k:08X}": v for k, v in _boundary_resolved.items()}
+                                    {f"0x{k:08X}": v for k, v in boundary_resolved.items()}
                                 )[:400],
                                 "trace": None,
                             }])
-                        except Exception as _rle:
+                        except Exception as exc:
                             logger.debug("[%s] stage-boundary recal log flush failed: %s",
-                                         ctx.job_id, _rle)
-        except Exception as _rce:
-            logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, _rce)
+                                         ctx.job_id, exc)
+        except Exception as exc:
+            logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, exc)
 
         _run_phase_4_reconcile(ctx)         # AC-1: reconcile probe log vs findings
         _run_phase_5_sentinel_catalog(ctx)  # Persist + promote sentinel evidence

@@ -640,19 +640,18 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     )
 
     # T-17: sentinel_calibration_outcome — did Phase 0.5 calibration name DLL-specific codes?
-    # sentinel_calibration.json keys are stored as hex strings like "0xFFFFFFFF"
-    _sentinel_default_hexes = {"0xffffffff", "0xfffffffe", "0xfffffffd", "0xfffffffc", "0xfffffffb"}
+    sentinel_default_hexes = {"0xffffffff", "0xfffffffe", "0xfffffffd", "0xfffffffc", "0xfffffffb"}
     if not isinstance(sentinels, dict) or not sentinels:
         t17_status = "fail"
         t17_reason = "sentinel_calibration.json missing or empty"
     else:
-        _non_default = [k for k in sentinels if str(k).lower() not in _sentinel_default_hexes]
-        _sentinel_new = int(status.get("sentinel_new_codes_this_run") or 0)
-        if _non_default or _sentinel_new > 0:
+        non_default_codes = [k for k in sentinels if str(k).lower() not in sentinel_default_hexes]
+        sentinel_new_count = int(status.get("sentinel_new_codes_this_run") or 0)
+        if non_default_codes or sentinel_new_count > 0:
             t17_status = "pass"
             t17_reason = (
-                f"calibration produced {len(_non_default)} DLL-specific code(s)"
-                + (f"; {_sentinel_new} new code(s) named this run" if _sentinel_new else "")
+                f"calibration produced {len(non_default_codes)} DLL-specific code(s)"
+                + (f"; {sentinel_new_count} new code(s) named this run" if sentinel_new_count else "")
             )
         else:
             t17_status = "warn"
@@ -663,15 +662,15 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     )
 
     # T-18: write_unlock_probe_outcome — did the write-mode unlock probe succeed?
-    _wuo = str(status.get("write_unlock_outcome") or "")
-    if _wuo == "resolved":
+    write_unlock_outcome = str(status.get("write_unlock_outcome") or "")
+    if write_unlock_outcome == "resolved":
         t18_status = "pass"
         t18_reason = "write-unlock probe succeeded; write-mode functions are accessible"
-    elif _wuo == "blocked":
-        _wus_label = str(status.get("write_unlock_sentinel") or "unknown")
+    elif write_unlock_outcome == "blocked":
+        sentinel_label = str(status.get("write_unlock_sentinel") or "unknown")
         t18_status = "warn"
-        t18_reason = f"write-unlock probe could not unlock write mode; blocking sentinel={_wus_label}"
-    elif _wuo == "not_attempted":
+        t18_reason = f"write-unlock probe could not unlock write mode; blocking sentinel={sentinel_label}"
+    elif write_unlock_outcome == "not_attempted":
         t18_status = "not_applicable"
         t18_reason = "no write-style functions detected in this DLL; write-unlock probe skipped"
     else:
@@ -748,6 +747,9 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     except Exception:
         pass
 
+    functions_success = sum(1 for f in latest_findings.values() if f.get("status") == "success")
+    functions_error = sum(1 for f in latest_findings.values() if f.get("status") != "success")
+
     session_meta = {
         "job_id": job_id,
         "component": status.get("component_name", "unknown"),
@@ -756,6 +758,9 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
         "code_commit": code_commit,
         "profile": profile,
         "final_phase": final_phase,
+        "functions_total": len(latest_findings),
+        "functions_success": functions_success,
+        "functions_error": functions_error,
         # Q15: ablation tagging fields (pass-through from job submission)
         "prompt_profile_id": status.get("prompt_profile_id"),
         "layer": status.get("layer"),
