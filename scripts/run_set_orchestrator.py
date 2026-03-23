@@ -395,8 +395,9 @@ def main() -> int:
     if "baseline" not in profiles:
         raise ValueError("profiles file must include baseline profile")
 
-    n_control = int(run_set.get("n_control") or 3)
-    m_ablation = int(run_set.get("m_ablation") or 3)
+    n_control = int(run_set.get("n_control") if run_set.get("n_control") is not None else 3)
+    _m_raw = run_set.get("m_ablation")
+    m_ablation = int(_m_raw) if _m_raw is not None else len(ablation_profiles)
     ablation_profiles = list(run_set.get("ablation_profiles") or [])
     if not all(isinstance(x, str) for x in ablation_profiles):
         raise ValueError("ablation_profiles must be a list of profile IDs")
