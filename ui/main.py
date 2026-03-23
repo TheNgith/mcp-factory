@@ -401,6 +401,75 @@ _HTML = r"""<!DOCTYPE html>
     }
 
     section.hidden { display: none; }
+
+    /* ── Explore settings panel ─────────────────────────── */
+    #discover-bar {
+      border: 1px solid rgba(240,180,60,.3);
+      background: rgba(240,180,60,.04);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .explore-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .mode-badge {
+      background: #dcfce7; color: #166534; font-size: .76rem; font-weight: 600;
+      padding: 2px 8px; border-radius: 12px;
+    }
+    .explore-action-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .preset-btns { display: flex; gap: 6px; }
+    .preset-btn { padding: 5px 12px !important; font-size: .8rem !important; }
+    .preset-btn.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+    .explore-settings-details {
+      border: 1px solid var(--border); border-radius: 7px;
+      background: var(--surface2); overflow: visible;
+    }
+    .explore-settings-details > summary {
+      padding: 10px 14px; cursor: pointer; font-size: .83rem; font-weight: 600;
+      color: var(--muted); list-style: none; display: flex; align-items: center;
+      gap: 8px; user-select: none;
+    }
+    .explore-settings-details > summary::-webkit-details-marker { display: none; }
+    .explore-settings-details > summary::before { content: '▶'; font-size: .65rem; transition: transform .15s; }
+    .explore-settings-details[open] > summary::before { transform: rotate(90deg); }
+    .settings-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;
+      padding: 14px 16px 16px; border-top: 1px solid var(--border);
+    }
+    @media (max-width: 600px) { .settings-grid { grid-template-columns: 1fr; } }
+    .setting-item { display: flex; flex-direction: column; gap: 5px; }
+    .setting-item-full { grid-column: 1 / -1; }
+    .setting-label-row { display: flex; align-items: center; gap: 6px; }
+    .setting-label-row label { margin: 0; font-size: .82rem; color: var(--text); font-weight: 500; }
+    .setting-hint { font-size: .72rem; color: var(--muted); }
+    .why-details { display: inline; position: relative; }
+    .why-details > summary {
+      display: inline; list-style: none; cursor: pointer; font-size: .72rem;
+      color: var(--accent); opacity: .75;
+      text-decoration: underline; text-decoration-style: dotted;
+    }
+    .why-details > summary::-webkit-details-marker { display: none; }
+    .why-details[open] > summary { opacity: 1; }
+    .why-details > p {
+      position: absolute; z-index: 10; left: 0; top: 1.4em;
+      width: 260px; margin: 0;
+      padding: 8px 10px;
+      background: var(--surface);
+      border: 1px solid rgba(91,142,240,.35);
+      border-radius: 6px;
+      font-size: .78rem; line-height: 1.55; color: var(--text);
+      box-shadow: 0 4px 16px rgba(0,0,0,.35);
+    }
+    .toggles-row { display: flex; flex-wrap: wrap; gap: 10px 22px; }
+    .toggle-item {
+      display: flex; align-items: center; gap: 5px;
+      font-size: .83rem; margin: 0; color: var(--text); font-weight: normal; cursor: pointer;
+    }
+    .toggle-item input[type=checkbox] { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+    .toggle-item .why-details { margin-left: 2px; }
+    .explore-download-row { display: flex; gap: 8px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -553,56 +622,152 @@ _HTML = r"""<!DOCTYPE html>
         Review the OpenAI function-call tool schema derived from your selected invocables.
       </p>
 
-      <!-- Discover recommendation bar (shown when schema has only generic param names) -->
-      <div class="explore-bar" id="discover-bar" style="display:none">
-        <span class="amber-badge">⚠ Recommended</span>
-        <span class="status-badge" id="mode-badge" style="display:none;background:#dcfce7;color:#166534">Mode: dev</span>
-        <span class="explore-progress" id="discover-bar-msg">
-          Schema has limited information — run Discover to learn parameter semantics automatically.
-        </span>
-        <span id="last-run-time" style="display:none;font-size:.78rem;color:#334155"></span>
-        <select id="explore-mode" class="input" style="max-width:125px;padding:4px 8px;font-size:.8rem">
-          <option value="dev" selected>Dev</option>
-          <option value="normal">Normal</option>
-          <option value="extended">Extended</option>
-        </select>
-        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
-          <input id="toggle-gap" type="checkbox" /> Gap
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
-          <input id="toggle-clarify" type="checkbox" /> Clarify
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
-          Floor
-          <input id="probe-floor" type="number" min="1" max="5" value="1"
-            style="width:52px;padding:2px 5px;border:1px solid #94a3b8;border-radius:4px" />
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
-          <input id="toggle-skip-documented" type="checkbox" checked /> Skip documented
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#334155">
-          <input id="toggle-deterministic-fallback" type="checkbox" checked /> Deterministic fallback
-        </label>
-        <button class="btn btn-secondary" id="discover-btn"
-          style="white-space:nowrap;padding:7px 14px;font-size:.82rem">
-          🔍 Discover
-        </button>
-        <button class="btn btn-secondary" id="cancel-explore-btn"
-          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem;background:#dc2626;color:#fff;border-color:#dc2626">
-          ⏹ Cancel
-        </button>
-        <button class="btn btn-secondary" id="download-doc-btn"
-          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
-          ⬇ Download Documentation
-        </button>
-        <button class="btn btn-secondary" id="download-spec-btn"
-          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
-          🐍 Download Python Spec
-        </button>
-        <button class="btn btn-secondary" id="download-schema-btn"
-          style="display:none;white-space:nowrap;padding:7px 14px;font-size:.82rem">
-          ⬇ Download Schema JSON
-        </button>
+      <!-- Discover settings panel (shown when schema has only generic param names) -->
+      <div id="discover-bar" style="display:none">
+
+        <!-- Status row -->
+        <div class="explore-status-row">
+          <span class="amber-badge">⚠ Recommended</span>
+          <span class="mode-badge" id="mode-badge" style="display:none">Mode: dev</span>
+          <span class="explore-progress" id="discover-bar-msg">
+            Schema has limited information — run Discover to learn parameter semantics automatically.
+          </span>
+          <span id="last-run-time" style="display:none;font-size:.78rem;color:var(--muted)"></span>
+        </div>
+
+        <!-- Preset + action row -->
+        <div class="explore-action-row">
+          <span style="font-size:.78rem;color:var(--muted);flex-shrink:0">Preset:</span>
+          <div class="preset-btns">
+            <button class="btn btn-secondary preset-btn active" data-preset="fast-triage">Fast Triage</button>
+            <button class="btn btn-secondary preset-btn" data-preset="balanced">Balanced</button>
+            <button class="btn btn-secondary preset-btn" data-preset="deep">Deep</button>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px;flex-shrink:0">
+            <button class="btn btn-primary" id="discover-btn">🔍 Discover</button>
+            <button class="btn btn-danger" id="cancel-explore-btn" style="display:none">⏹ Cancel</button>
+          </div>
+        </div>
+
+        <!-- Collapsible settings grid -->
+        <details class="explore-settings-details" id="explore-settings-details">
+          <summary>⚙ Explore Settings</summary>
+          <div class="settings-grid">
+
+            <!-- Run mode -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="explore-mode">Run mode</label>
+                <details class="why-details"><summary>why?</summary><p>Sets the default budget profile. <code>dev</code> runs quickly (max_rounds=2, max_tool_calls=5) for smoke checks. <code>normal</code> is the daily operational mode. <code>extended</code> maximizes coverage for release-candidate baselines. Selecting a Preset above will set this automatically.</p></details>
+              </div>
+              <select id="explore-mode" class="input">
+                <option value="dev">dev — fast / smoke</option>
+                <option value="normal">normal — daily quality</option>
+                <option value="extended">extended — deep coverage</option>
+              </select>
+            </div>
+
+            <!-- Cap profile -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="cap-profile">Cap profile</label>
+                <details class="why-details"><summary>why?</summary><p>Overrides per-function call-budget caps derived from <code>mode</code>. <code>dev</code> is low for speed. <code>stabilize</code> runs at medium depth for repeatable smoke checks. <code>deploy</code> runs at maximum depth for schema artifacts that will be published or compared against baselines.</p></details>
+              </div>
+              <select id="cap-profile" class="input">
+                <option value="dev">dev</option>
+                <option value="stabilize">stabilize</option>
+                <option value="deploy">deploy</option>
+              </select>
+            </div>
+
+            <!-- Max rounds -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="max-rounds">Max rounds per function</label>
+                <details class="why-details"><summary>why?</summary><p>How many chat rounds the model gets per function before it must finalize. Each round may include multiple tool calls. Higher values improve coverage on complex functions but increase runtime and token cost significantly.</p></details>
+              </div>
+              <input class="input" type="number" id="max-rounds" min="1" max="12" value="2" style="max-width:90px" />
+              <span class="setting-hint">1 – 12</span>
+            </div>
+
+            <!-- Max tool calls -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="max-tool-calls">Max tool calls per function</label>
+                <details class="why-details"><summary>why?</summary><p>Hard cap on total function invocations per function across all rounds. Prevents runaway loops on functions that always return errors. Set higher for write-classified functions that need more probing attempts.</p></details>
+              </div>
+              <input class="input" type="number" id="max-tool-calls" min="1" max="24" value="5" style="max-width:90px" />
+              <span class="setting-hint">1 – 24</span>
+            </div>
+
+            <!-- Max functions -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="max-functions">Max functions per run</label>
+                <details class="why-details"><summary>why?</summary><p>Limits exploration breadth by capping how many functions are probed. Useful for focused runs on a subset of a large binary. Leave blank to probe all selected invocables with no ceiling.</p></details>
+              </div>
+              <input class="input" type="number" id="max-functions" min="1" max="500" placeholder="all" style="max-width:90px" />
+              <span class="setting-hint">1 – 500, blank = all</span>
+            </div>
+
+            <!-- Min direct probes -->
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="probe-floor">Min direct probes per function</label>
+                <details class="why-details"><summary>why?</summary><p>Enforces a floor on direct call attempts before the model is allowed early-stop. A value of <code>1</code> means at least one real call must be made. Increase to <code>2</code>–<code>3</code> for release-quality runs where skipping a function prematurely is costly.</p></details>
+              </div>
+              <input class="input" type="number" id="probe-floor" min="1" max="5" value="1" style="max-width:90px" />
+              <span class="setting-hint">1 – 5</span>
+            </div>
+
+            <!-- Model override (full width) -->
+            <div class="setting-item setting-item-full">
+              <div class="setting-label-row">
+                <label for="model-override">Explore model override</label>
+                <details class="why-details"><summary>why?</summary><p>Optional model deployment name to route this run to a different model (e.g. <code>gpt-4o-mini</code> for cost reduction during dev runs, or a fine-tuned deployment for specialized domains). Leave blank to use the pipeline default <code>gpt-4o</code>.</p></details>
+              </div>
+              <input class="input" type="text" id="model-override" placeholder="leave blank for pipeline default (gpt-4o)" />
+            </div>
+
+            <!-- Feature toggles (full width) -->
+            <div class="setting-item setting-item-full">
+              <div class="setting-label-row" style="margin-bottom:8px">
+                <label>Feature toggles</label>
+              </div>
+              <div class="toggles-row">
+                <label class="toggle-item">
+                  <input type="checkbox" id="toggle-gap" />
+                  <span>Gap resolution</span>
+                  <details class="why-details"><summary>why?</summary><p>When enabled, functions where the model is uncertain trigger a mini-session asking you clarification questions. Required to move functions from "uncertain" to "documented" state. Disable for fast smoke checks where gap quality is not needed.</p></details>
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="toggle-clarify" />
+                  <span>Clarification questions</span>
+                  <details class="why-details"><summary>why?</summary><p>Surfaces unresolved questions to the operator after exploration completes. Without this the model tries to resolve gaps autonomously. Enable when you have domain knowledge the model cannot infer from the binary alone.</p></details>
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="toggle-skip-documented" checked />
+                  <span>Skip documented</span>
+                  <details class="why-details"><summary>why?</summary><p>Skip functions that already have rich parameter documentation from prior findings. Enable for incremental runs. Disable when re-running a full baseline from scratch or after code changes.</p></details>
+                </label>
+                <label class="toggle-item">
+                  <input type="checkbox" id="toggle-deterministic-fallback" checked />
+                  <span>Deterministic fallback</span>
+                  <details class="why-details"><summary>why?</summary><p>When a function returns non-deterministic results across calls, fall back to recording only its deterministic aspects. Keep enabled for stability — disabling produces noisier findings that are harder to compare across runs.</p></details>
+                </label>
+              </div>
+            </div>
+
+          </div>
+        </details>
+
+        <!-- Download row -->
+        <div class="explore-download-row">
+          <button class="btn btn-secondary" id="download-doc-btn" style="display:none">⬇ Documentation</button>
+          <button class="btn btn-secondary" id="download-spec-btn" style="display:none">🐍 Python Spec</button>
+          <button class="btn btn-secondary" id="download-schema-btn" style="display:none">⬇ Schema JSON</button>
+        </div>
+
       </div>
 
       <!-- Confidence gap questions surfaced after exploration -->
@@ -721,14 +886,28 @@ CS_Initialize must be called before any other customer operation; calling functi
 
 const DEV_USE_CASES_PRESET = `Customer service operations for a CRM loyalty system: look up customer profiles, check account status and balances, process payments and refunds, redeem loyalty points, unlock locked accounts, retrieve order status. Customer IDs are CUST-NNN format. Used by call-center agents to handle inbound service requests end-to-end.`;
 
+// ── Preset definitions ─────────────────────────────────
+const _PRESETS = {
+  'fast-triage': {
+    mode: 'dev', capProfile: 'dev', maxRounds: 2, maxToolCalls: 5, maxFunctions: 50,
+    gap: false, clarify: false, floor: 1, skipDocumented: false, deterministicFallback: true,
+  },
+  'balanced': {
+    mode: 'normal', capProfile: 'deploy', maxRounds: 5, maxToolCalls: 10, maxFunctions: 50,
+    gap: true, clarify: true, floor: 1, skipDocumented: true, deterministicFallback: true,
+  },
+  'deep': {
+    mode: 'extended', capProfile: 'deploy', maxRounds: 7, maxToolCalls: 14, maxFunctions: 100,
+    gap: true, clarify: true, floor: 2, skipDocumented: true, deterministicFallback: true,
+  },
+};
+
+function _presetDefaults(name) {
+  return _PRESETS[name] || _PRESETS['fast-triage'];
+}
+
 function _modeDefaults(mode) {
-  if (mode === 'extended') {
-    return { gap: true, clarify: true, floor: 2, skipDocumented: true, deterministicFallback: true };
-  }
-  if (mode === 'normal') {
-    return { gap: true, clarify: true, floor: 1, skipDocumented: true, deterministicFallback: true };
-  }
-  return { gap: false, clarify: false, floor: 1, skipDocumented: false, deterministicFallback: true }; // dev
+  return _presetDefaults(mode === 'extended' ? 'deep' : mode === 'normal' ? 'balanced' : 'fast-triage');
 }
 
 function _syncModeBadge() {
@@ -748,33 +927,54 @@ function _applyContosoPreset(target = 'all') {
   }
 }
 
-function _syncExploreToggleDefaultsFromMode() {
-  const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
-  const d = _modeDefaults(mode);
-  if ($('toggle-gap')) $('toggle-gap').checked = d.gap;
-  if ($('toggle-clarify')) $('toggle-clarify').checked = d.clarify;
-  if ($('probe-floor')) $('probe-floor').value = String(d.floor);
-  if ($('toggle-skip-documented')) $('toggle-skip-documented').checked = d.skipDocumented;
-  if ($('toggle-deterministic-fallback')) $('toggle-deterministic-fallback').checked = d.deterministicFallback;
+function _syncSettingsFromPreset(name) {
+  const p = _presetDefaults(name);
+  if ($('explore-mode'))   $('explore-mode').value = p.mode;
+  if ($('cap-profile'))    $('cap-profile').value = p.capProfile;
+  if ($('max-rounds'))     $('max-rounds').value = String(p.maxRounds);
+  if ($('max-tool-calls')) $('max-tool-calls').value = String(p.maxToolCalls);
+  if ($('max-functions'))  $('max-functions').value = p.maxFunctions > 0 ? String(p.maxFunctions) : '';
+  if ($('toggle-gap'))     $('toggle-gap').checked = p.gap;
+  if ($('toggle-clarify')) $('toggle-clarify').checked = p.clarify;
+  if ($('probe-floor'))    $('probe-floor').value = String(p.floor);
+  if ($('toggle-skip-documented'))        $('toggle-skip-documented').checked = p.skipDocumented;
+  if ($('toggle-deterministic-fallback')) $('toggle-deterministic-fallback').checked = p.deterministicFallback;
   _syncModeBadge();
 }
 
-function _exploreSettingsPayload() {
+function _syncExploreToggleDefaultsFromMode() {
   const mode = ($('explore-mode')?.value || 'dev').toLowerCase();
-  const defaults = _modeDefaults(mode);
-  const gapEnabled = $('toggle-gap') ? $('toggle-gap').checked : defaults.gap;
-  const clarifyEnabled = $('toggle-clarify') ? $('toggle-clarify').checked : defaults.clarify;
-  const probeFloor = $('probe-floor') ? Number($('probe-floor').value || defaults.floor) : defaults.floor;
-  const skipDocumented = $('toggle-skip-documented') ? $('toggle-skip-documented').checked : defaults.skipDocumented;
-  const deterministicFallback = $('toggle-deterministic-fallback') ? $('toggle-deterministic-fallback').checked : defaults.deterministicFallback;
-  return {
+  _syncSettingsFromPreset(mode === 'extended' ? 'deep' : mode === 'normal' ? 'balanced' : 'fast-triage');
+}
+
+function _exploreSettingsPayload() {
+  const mode        = ($('explore-mode')?.value  || 'dev').toLowerCase();
+  const capProfile  = ($('cap-profile')?.value   || 'dev').toLowerCase();
+  const maxRounds   = Number($('max-rounds')?.value   || 2);
+  const maxTCalls   = Number($('max-tool-calls')?.value || 5);
+  const maxFnRaw    = $('max-functions')?.value?.trim() || '';
+  const modelOvr    = $('model-override')?.value?.trim() || '';
+  const gap         = $('toggle-gap')?.checked                  ?? false;
+  const clarify     = $('toggle-clarify')?.checked              ?? false;
+  const floor       = Number($('probe-floor')?.value            || 1);
+  const skipDoc     = $('toggle-skip-documented')?.checked      ?? false;
+  const detFallback = $('toggle-deterministic-fallback')?.checked ?? true;
+
+  const payload = {
     mode,
-    min_direct_probes_per_function: Math.max(1, Math.min(5, Number.isFinite(probeFloor) ? probeFloor : defaults.floor)),
-    skip_documented: !!skipDocumented,
-    deterministic_fallback_enabled: !!deterministicFallback,
-    gap_resolution_enabled: !!gapEnabled,
-    clarification_questions_enabled: !!clarifyEnabled,
+    cap_profile:  capProfile,
+    max_rounds:   Math.max(1, Math.min(12, Number.isFinite(maxRounds)  ? maxRounds  : 2)),
+    max_tool_calls: Math.max(1, Math.min(24, Number.isFinite(maxTCalls) ? maxTCalls  : 5)),
+    min_direct_probes_per_function: Math.max(1, Math.min(5, Number.isFinite(floor)  ? floor : 1)),
+    skip_documented:               !!skipDoc,
+    deterministic_fallback_enabled: !!detFallback,
+    gap_resolution_enabled:         !!gap,
+    clarification_questions_enabled: !!clarify,
   };
+  const maxFn = maxFnRaw ? Number(maxFnRaw) : NaN;
+  if (Number.isFinite(maxFn) && maxFn > 0) payload.max_functions = maxFn;
+  if (modelOvr) payload.model = modelOvr;
+  return payload;
 }
 
 // ── DOM refs ─────────────────────────────────────────────
@@ -1103,6 +1303,15 @@ _syncExploreToggleDefaultsFromMode();
 $('explore-mode').addEventListener('change', _syncExploreToggleDefaultsFromMode);
 $('autofill-hints-btn').addEventListener('click', () => _applyContosoPreset('hints'));
 $('autofill-use-cases-btn').addEventListener('click', () => _applyContosoPreset('use-cases'));
+
+// Preset buttons
+document.querySelectorAll('.preset-btn[data-preset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _syncSettingsFromPreset(btn.dataset.preset);
+  });
+});
 
 $('cancel-explore-btn').addEventListener('click', async () => {
   if (!state.jobId) return;
