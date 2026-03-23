@@ -1031,6 +1031,18 @@ def _run_phase_7b_verify_enrichment(ctx: ExploreContext) -> None:
             logger.debug("[%s] phase7b: verification report upload failed: %s",
                          ctx.job_id, exc)
 
+        _error_count = sum(1 for e in report_entries if e.get("verification") == "error")
+        try:
+            _cur = _get_job_status(ctx.job_id) or {}
+            _persist_job_status(ctx.job_id, {
+                **_cur,
+                "verification_verified": verified_count,
+                "verification_inferred": inferred_count,
+                "verification_error": _error_count,
+            })
+        except Exception:
+            pass
+
     except Exception as exc:
         logger.debug("[%s] phase7b: enrichment verification failed: %s", ctx.job_id, exc)
 
@@ -1392,6 +1404,22 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         ctx = _build_explore_context(job_id, invocables)
         _set_explore_status(job_id, 0, ctx.total, "Starting exploration…")
 
+        # Persist circular feedback metadata into job status for session-meta.json
+        _prior_seeded = sum(
+            1 for f in (getattr(ctx, '_prior_session', {}) or {}).get("findings", [])
+            if f.get("status") == "success"
+        )
+        if ctx.runtime.prior_job_id or _prior_seeded:
+            try:
+                _cur = _get_job_status(job_id) or {}
+                _persist_job_status(job_id, {
+                    **_cur,
+                    "prior_job_id": ctx.runtime.prior_job_id,
+                    "prior_findings_seeded": _prior_seeded,
+                })
+            except Exception:
+                pass
+
         # Persist explore_config so save-session captures the caps used this run
         try:
             _upload_to_blob(
@@ -1402,12 +1430,15 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                     "cap_profile":                     ctx.runtime.cap_profile,
                     "max_rounds_per_function":         ctx.runtime.max_rounds,
                     "max_tool_calls_per_function":     ctx.runtime.max_tool_calls,
+                    "write_fn_tool_calls":             14,
                     "max_functions_per_session":       ctx.runtime.max_functions,
                     "min_direct_probes_per_function":  ctx.runtime.min_direct_probes,
                     "skip_documented":                 ctx.runtime.skip_documented,
                     "deterministic_fallback_enabled":  ctx.runtime.deterministic_fallback_enabled,
                     "gap_resolution_enabled":          ctx.runtime.gap_resolution_enabled,
                     "clarification_questions_enabled": ctx.runtime.clarification_enabled,
+                    "prior_job_id":                    ctx.runtime.prior_job_id,
+                    "prior_findings_seeded":           _prior_seeded,
                 }, indent=2).encode(),
             )
         except Exception as _cfg_e:

@@ -772,7 +772,15 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
         # Q16: sentinel + write-unlock emission fields
         "write_unlock_outcome": status.get("write_unlock_outcome"),
         "write_unlock_sentinel": status.get("write_unlock_sentinel"),
+        "write_unlock_resolved_at": status.get("write_unlock_resolved_at"),
         "sentinel_new_codes_this_run": status.get("sentinel_new_codes_this_run", 0),
+        # Circular feedback fields
+        "prior_job_id": status.get("prior_job_id"),
+        "prior_findings_seeded": status.get("prior_findings_seeded", 0),
+        # Phase 7b verification counts
+        "verification_verified": status.get("verification_verified", 0),
+        "verification_inferred": status.get("verification_inferred", 0),
+        "verification_error": status.get("verification_error", 0),
     }
 
     _upload_to_blob(

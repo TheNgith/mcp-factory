@@ -147,11 +147,19 @@ def _build_dashboard_row(
         # Q16: sentinel + write-unlock emission fields
         "write_unlock_outcome": None,
         "write_unlock_sentinel": None,
+        "write_unlock_resolved_at": None,
         "sentinel_new_codes_this_run": 0,
         # Function outcome counts (used by merger, orchestrator, coordinator)
         "functions_total": 0,
         "functions_success": 0,
         "functions_error": 0,
+        # Circular feedback fields
+        "prior_job_id": None,
+        "prior_findings_seeded": 0,
+        # Phase 7b verification counts
+        "verification_verified": 0,
+        "verification_inferred": 0,
+        "verification_error": 0,
     }
     if isinstance(session_meta, dict):
         for key in session_meta_fields:
