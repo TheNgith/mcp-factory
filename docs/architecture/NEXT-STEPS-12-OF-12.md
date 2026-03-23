@@ -231,11 +231,147 @@ after each init attempt, not `CS_ProcessPayment()`.
 
 3. **Rate limiting (429)** — still kills some LLM probes. Running sequentially helps.
 
+---
+
+## Circular Pipeline Test Results (2026-03-23, commit 4e1f2b6)
+
+### 3-Iteration Test Results
+
+| Metric | Iter 1 (Cold) | Iter 2 (Warm) | Iter 3 (Hot) |
+|--------|---------------|---------------|--------------|
+| Job ID | 2af1a37c | 9157f914 | d954706d |
+| Functions explored | 13/13 | 13/13 | 13/13 |
+| Functions success | 8 | — | — |
+| Write unlock | **resolved** | blocked | blocked |
+| Resolved by | **MC-6** | — | — |
+| Verified functions | 2 | 0 | 2 |
+| Prior findings seeded | 0 | 8 | 0 |
+| Runtime | ~29 min | ~37 min | ~32 min |
+
+### Critical Finding: HOW Write-Unlock Was Cracked
+
+MC-6 (`_mc6_post_gap_resolution`) performed a comprehensive sweep:
+- Tried `CS_Initialize()` with 19+ modes (0-16, 32, 64, 128, 256, 512, and no-args)
+- After each init, tested each write function with real args from vocab (CUST-001, amounts)
+- **CS_ProcessRefund succeeded** — returned 0 with `(param_1="CUST-001", param_2=100)`
+
+**Why CS_ProcessRefund doesn't need the lock**: Reading the Ghidra decompilation:
+- `CS_ProcessPayment` checks `(&DAT_180021b6e)[lVar3 * 0xb8] & 2` — if bit 2 is set (account locked), payment is blocked
+- `CS_RedeemLoyaltyPoints` checks the same lock bit — returns `0xFFFFFFFC` if locked
+- **CS_ProcessRefund does NOT check the lock bit** — it just looks up the customer, adds the refund to their balance, and returns 0
+- `CS_UnlockAccount` is the mechanism that clears bit 2 — requires a param_2 string whose bytes XOR to 0xA5
+
+So the "write-unlock resolved" was really "found a write function that doesn't have the lock gate."
+
+### The Real Lock Mechanism (from Ghidra)
+
+```
+CS_UnlockAccount(param_1=customer_id, param_2=unlock_code):
+  1. strlen(param_2) must be > 3
+  2. XOR all bytes of param_2 together
+  3. If XOR result == 0xA5 (165 decimal):
+     → Clears bit 2 of customer flags (account unlocked)
+     → Returns 0
+  4. Else: returns 0xFFFFFFFE
+```
+
+Functions behind the lock:
+- CS_ProcessPayment (checks bit 2)
+- CS_RedeemLoyaltyPoints (checks bit 2)
+
+Functions NOT behind the lock:
+- CS_ProcessRefund (no bit check — always works with valid customer)
+- CS_UnlockAccount (IS the lock mechanism)
+
+### Sentinel Code Map (from Ghidra, definitive)
+
+| Code | Hex | Meaning | Where |
+|------|-----|---------|-------|
+| 0xFFFFFFFE | -2 | Null argument / invalid parameter | All functions |
+| 0xFFFFFFFF | -1 | Customer/entity not found | Lookup functions |
+| 0xFFFFFFFC | -4 | Account locked (bit 2 set) | ProcessPayment, RedeemLoyaltyPoints |
+| 0xFFFFFFFB | -5 | Insufficient balance/points | RedeemLoyaltyPoints, ProcessPayment |
+| 0xFFFFFFFD | -3 | Overflow (balance would wrap) | ProcessRefund |
+
+### Why Iterations 2 and 3 Failed to Benefit
+
+1. **Write-unlock is per-DLL-instance**: CS_Initialize() populates an in-memory customer database. Each container gets a fresh DLL instance. The `CS_ProcessRefund("CUST-001", 100) → 0` result from iteration 1 isn't automatically available in iteration 2's container.
+
+2. **Missing init replay**: The winning sequence wasn't persisted or replayed. Fix committed in 5eb400d:
+   - `winning_init_sequence.json` now saved to blob after MC cracks write-unlock
+   - Phase 1 of warm/hot starts replays the winning sequence before trying brute-force
+   - If replay succeeds, skips the 13-attempt brute-force sweep entirely
+
+3. **Seeding gap**: Iteration 3 showed `prior_findings_seeded: 0` despite having iteration 2 as its prior. Need to investigate the seeding path.
+
+4. **New: re-probe after unlock**: When any MC cracks write-unlock, all previously-failed write functions are immediately re-probed with the now-active init state. Fix committed in 5eb400d.
+
+---
+
+## HOW to Extrapolate This to ALL DLLs — Generic Strategy
+
+### The 4-Layer Unlock Pattern
+
+Every DLL we've studied follows some combination of these layers:
+
+**Layer 1 — Initialization**: Nearly universal. A global state must be set before functions work.
+- Pattern: function checks a flag (e.g., `DAT_XXX == 0`) and calls an init routine
+- contoso_cs: `CS_Initialize()` → `FUN_180001eb0()` populates database
+- Discovery: Call the init function with no args, then with modes 0-16
+- Time: ~5 seconds of probing
+
+**Layer 2 — Entity Existence**: Functions need valid entity IDs that exist in the database.
+- Pattern: function loops through a table comparing `param_1` against stored IDs
+- contoso_cs: Hardcoded IDs `CUST-001`, `CUST-004`, `ORD-20040301-0042`
+- Discovery: Static analysis extracts string constants (already in the pipeline)
+- Time: Already handled by vocab/hints
+
+**Layer 3 — Access Control / Lock Bits**: Some functions check permission flags on entities.
+- Pattern: function checks a bit flag on the entity record before proceeding
+- contoso_cs: bit 2 of `DAT_180021b6e[customer_idx]` = account locked
+- Discovery: Requires either:
+  a) Finding the unlock function (CS_UnlockAccount) and its checksum mechanism
+  b) Noticing that different write functions have different error codes (0xFFFFFFFC vs 0xFFFFFFFB)
+- Time: This is where most pipeline time is spent
+
+**Layer 4 — Business Logic Guards**: Functions validate business constraints.
+- Pattern: balance checks, overflow guards, format validation
+- contoso_cs: `param_2 <= balance` for ProcessPayment, no overflow for ProcessRefund
+- Discovery: Use known-good values from read functions (Chain Read → Write strategy)
+- Time: Quick once Layer 3 is resolved
+
+### Generic Pipeline Strategy for Any DLL
+
+1. **Phase 0**: Static analysis — extract all string constants, hardcoded IDs, format patterns
+2. **Phase 0.5**: Sentinel calibration — call every function with null/empty args, map return codes
+3. **Phase 1**: Init sweep — try the init function with modes 0-16+ and test a read function
+4. **Phase 3**: Probe loop — probe ALL functions (read first, write second) with extracted IDs
+5. **MC-3**: Classify write-unlock failure — are errors uniform (init issue) or varied (per-function)?
+6. **Phase 7b**: Verify enrichment — execute discovered working_calls against the DLL
+7. **MC-5**: Chain read → write — use verified read outputs as write function args
+8. **MC-6**: Comprehensive unlock — try every init mode × every ID × every amount
+
+**The key insight**: Not all write functions are equally locked. The pipeline should try ALL write functions independently rather than treating "write-unlock" as a single binary state. CS_ProcessRefund was unlockable without CS_UnlockAccount — the pipeline discovered this because MC-6 tried each write function separately.
+
+### What Would Crack the Remaining Functions
+
+For contoso_cs.dll specifically:
+- **CS_ProcessPayment**: Needs CS_UnlockAccount first (bit 2 must be cleared)
+- **CS_RedeemLoyaltyPoints**: Same — needs CS_UnlockAccount first
+- **CS_UnlockAccount**: Needs a string whose bytes XOR to 0xA5. This is discoverable from Ghidra decompilation but impractical to brute-force via API. The pipeline needs to:
+  1. Detect the XOR pattern in the decompiled code
+  2. Generate a valid unlock code (e.g., any 4+ byte string XORing to 0xA5)
+  3. Example: bytes [0xA5, 0x41, 0x41, 0x41, 0x41] XOR to 0xA5^0x41^0x41^0x41^0x41 = 0xA5 (since pairs cancel)
+
+This is a **code-reasoning task**, not a brute-force task. The LLM needs to read the Ghidra decompilation and understand the XOR checksum pattern. This is exactly the kind of insight that should be fed to the LLM as context during the write-function probe.
+
+---
+
 ## .cursorrules
 
 Created at repo root. Contains:
 - Canonical names for all core concepts
 - File layout reference
 - Code style rules (no cryptic abbreviations, no import aliases)
-- Pipeline phase reference
+- Pipeline phase reference (11 phases + 4 MC checkpoints)
 - Testing conventions
