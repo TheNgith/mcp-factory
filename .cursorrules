@@ -49,21 +49,56 @@ MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a fol
 - Comments explain WHY, not WHAT
 
 ## Pipeline Architecture
-The explore pipeline has 11 phases (0-10). Key phases for write-unlock:
-- Phase 0.5: Sentinel calibration (_calibrate_sentinels)
-- Phase 1: Write-unlock probe (_probe_write_unlock)
-- Phase 3: Probe loop (_explore_one per function)
-- Post-Phase 3: Stage-boundary sentinel recalibration
-- Phase 6: Synthesis
-- Phase 8: Gap resolution
+The explore pipeline has 11 phases (0-10) plus 4 micro coordinator checkpoints.
 
-Write functions are: ProcessPayment, ProcessRefund, RedeemLoyaltyPoints, UnlockAccount
-(matched by _WRITE_FN_RE pattern in explore_helpers.py)
+### Phase sequence:
+- Phase 0.5: Sentinel calibration (_calibrate_sentinels)
+- Phase 0a: Vocab seed (prior session + hints)
+- Phase 0b: Static analysis (Ghidra binary strings)
+- Phase 1: Write-unlock probe (_probe_write_unlock)
+- Phase 2: Curriculum ordering (init-first, then uncertainty-sorted)
+- Phase 3: Probe loop (_explore_one per function) — MAIN WORK
+- Post-Phase 3: Stage-boundary sentinel recalibration (Q16§4/§5)
+- Phase 4: Reconcile → **MC-3** (analyze write failure mode, targeted retry)
+- Phase 5: Sentinel catalog
+- Phase 6: Synthesis → **MC-4** (parse api-reference.md for init clues)
+- Phase 7: Backfill (semantic param names)
+- Phase 7b: Verification → **MC-5** (chain read outputs → write inputs)
+- Phase 8: Gap resolution → **MC-6** (final comprehensive unlock attempt)
+- Phase 9: Behavioral spec
+- Phase 10: Harmonize
+- Finalize: Contract artifacts (T-01 through T-18)
+
+### Micro Coordinators (MC-3 through MC-6):
+Each MC reads what the previous phase produced, reasons about it, adjusts strategy,
+and documents its decision in `{job_id}/mc-decisions/mc{N}-*.json`.
+
+- MC-3 classifies write failure mode (uniform sentinel = init problem vs mixed)
+- MC-4 parses synthesis doc for init mode patterns
+- MC-5 chains verified read outputs as concrete write args
+- MC-6 final comprehensive attempt with all accumulated knowledge
+
+### Circular Feedback:
+Pass `prior_job_id` in explore_settings to seed from a previous session.
+Loads: findings, sentinel table, vocab, api-reference.
+
+### Write functions:
+ProcessPayment, ProcessRefund, RedeemLoyaltyPoints, UnlockAccount
+(matched by _WRITE_FN_RE in explore_helpers.py)
+Write functions get 14 tool calls (not 8) and targeted init→write testing prompts.
 
 ## Testing
 - 18 transitions in transition-index.json (T-01 through T-18)
 - Tests parse routes_session.py (not main.py) for ZIP structure
 - Run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
+- Circular test: scripts/run_circular_test.py (3-iteration cold→warm→hot)
+
+## Key Files for Context Strategies
+- `api/explore_probe.py` — LLM prompt and per-function agent loop
+- `api/explore_prompts.py` — system message builders
+- `api/explore_gap.py` — gap resolution second-pass probing
+- `docs/architecture/COLLECTIVE-ARCHITECTURE.md` — macro/micro coordinator design
+- `docs/architecture/PIPELINE-PARAMETERS.md` — all configurable parameters
 
 ## Azure / Cost
 - Container Apps: min-replicas 0 (scale to zero when idle)

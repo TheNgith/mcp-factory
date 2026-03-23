@@ -148,6 +148,13 @@ def _load_prior_session_artifacts(prior_job_id: str) -> dict:
     except Exception:
         pass
 
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{prior_job_id}/winning_init_sequence.json")
+        artifacts["winning_init_sequence"] = json.loads(raw)
+        logger.info("[circular-feedback] loaded winning init sequence from prior session")
+    except Exception:
+        pass
+
     return artifacts
 
 
@@ -484,7 +491,46 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
     try:
         logger.info("[%s] phase1: write-unlock probe…", ctx.job_id)
         _set_explore_status(ctx.job_id, 0, ctx.total, "Testing write-mode unlock…")
-        ctx.unlock_result = _probe_write_unlock(ctx.invocables, ctx.dll_strings, ctx.vocab)
+
+        # If a prior session found the winning init sequence, try it first
+        _prior = getattr(ctx, '_prior_session', {}) or {}
+        _winning = _prior.get("winning_init_sequence")
+        if _winning and _winning.get("sequence"):
+            logger.info("[%s] phase1: replaying winning init sequence from prior session",
+                        ctx.job_id)
+            inv_map = {inv["name"]: inv for inv in ctx.invocables}
+            _SENTINEL_SET = {0xFFFFFFFB, 0xFFFFFFFE, 0xFFFFFFFF}
+            for step in _winning["sequence"]:
+                init_inv = inv_map.get(step.get("fn", ""))
+                if init_inv:
+                    try:
+                        _execute_tool(init_inv, step.get("args", {}))
+                    except Exception:
+                        pass
+
+            # Test if the prior winning sequence still works
+            _prior_wfn = _winning.get("write_fn_tested", "")
+            _prior_args = _winning.get("write_fn_args", {})
+            _wfn_inv = inv_map.get(_prior_wfn)
+            if _wfn_inv and _prior_args:
+                try:
+                    result = _execute_tool(_wfn_inv, _prior_args)
+                    ret_m = _re.match(r"Returned:\s*(\d+)", result or "")
+                    if ret_m and int(ret_m.group(1)) == 0:
+                        ctx.unlock_result = {
+                            "unlocked": True,
+                            "sequence": _winning["sequence"],
+                            "write_fn_tested": _prior_wfn,
+                            "write_fn_args": _prior_args,
+                            "notes": f"Replayed winning sequence from prior session",
+                        }
+                        logger.info("[%s] phase1: UNLOCKED via prior winning sequence!",
+                                    ctx.job_id)
+                except Exception:
+                    pass
+
+        if not ctx.unlock_result.get("unlocked"):
+            ctx.unlock_result = _probe_write_unlock(ctx.invocables, ctx.dll_strings, ctx.vocab)
         if ctx.unlock_result.get("unlocked"):
             ctx.write_unlock_block = (
                 "\nWRITE MODE ACTIVE: The write-unlock sequence has already been executed. "
@@ -588,6 +634,25 @@ def _mark_unlock_resolved(ctx: ExploreContext, trigger: str, notes: str) -> None
         "STATIC ANALYSIS HINTS.\n"
     )
     logger.info("[%s] %s: WRITE UNLOCKED: %s", ctx.job_id, trigger, notes)
+
+    # Persist the winning init sequence for future runs
+    winning_sequence = ctx.unlock_result.get("sequence", [])
+    try:
+        _upload_to_blob(
+            ARTIFACT_CONTAINER,
+            f"{ctx.job_id}/winning_init_sequence.json",
+            json.dumps({
+                "resolved_at": trigger,
+                "sequence": winning_sequence,
+                "write_fn_tested": ctx.unlock_result.get("write_fn_tested"),
+                "write_fn_args": ctx.unlock_result.get("write_fn_args"),
+                "notes": notes,
+            }, indent=2).encode(),
+        )
+        logger.info("[%s] %s: winning init sequence persisted", ctx.job_id, trigger)
+    except Exception:
+        pass
+
     try:
         _cur = _get_job_status(ctx.job_id) or {}
         _persist_job_status(ctx.job_id, {
@@ -598,6 +663,87 @@ def _mark_unlock_resolved(ctx: ExploreContext, trigger: str, notes: str) -> None
         })
     except Exception:
         pass
+
+    # Re-probe all failed write functions now that unlock is cracked
+    _reprobe_write_functions_after_unlock(ctx, trigger)
+
+
+def _reprobe_write_functions_after_unlock(ctx: ExploreContext, trigger: str) -> None:
+    """Re-probe every write function that previously failed, now that unlock is active.
+
+    This closes the gap where MC-6 cracks write-unlock but the findings still
+    show error because the functions were probed before the unlock happened.
+    """
+    from api.storage import _load_findings
+
+    findings = _load_findings(ctx.job_id)
+    failed_writes = [
+        f for f in findings
+        if _WRITE_FN_PATTERN.search(f.get("function", ""))
+        and f.get("status") == "error"
+    ]
+    if not failed_writes:
+        return
+
+    logger.info("[%s] %s: re-probing %d failed write functions after unlock",
+                ctx.job_id, trigger, len(failed_writes))
+
+    # Replay the winning init sequence first
+    inv_map = {inv["name"]: inv for inv in ctx.invocables}
+    for step in ctx.unlock_result.get("sequence", []):
+        init_inv = inv_map.get(step.get("fn", ""))
+        if init_inv:
+            try:
+                _execute_tool(init_inv, step.get("args", {}))
+            except Exception:
+                pass
+
+    # Now probe each failed write function with vocab-derived args
+    write_args = _build_write_args_from_vocab(ctx)
+    reprobe_count = 0
+
+    for finding in failed_writes:
+        fn_name = finding["function"]
+        inv = inv_map.get(fn_name)
+        if not inv:
+            continue
+
+        arg_candidates = write_args.get(fn_name, [])
+        if not arg_candidates:
+            params = inv.get("parameters") or []
+            if params:
+                arg_candidates = [{"param_1": "CUST-001", "param_2": 100}]
+            else:
+                arg_candidates = [{}]
+
+        for args in arg_candidates[:5]:
+            try:
+                # Re-init before each write attempt
+                for step in ctx.unlock_result.get("sequence", []):
+                    init_inv = inv_map.get(step.get("fn", ""))
+                    if init_inv:
+                        _execute_tool(init_inv, step.get("args", {}))
+
+                result = _execute_tool(inv, args)
+                ret_m = _re.match(r"Returned:\s*(\d+)", result or "")
+                if ret_m:
+                    ret_val = int(ret_m.group(1)) & 0xFFFFFFFF
+                    if ret_val == 0:
+                        _patch_finding(ctx.job_id, fn_name, {
+                            "status": "success",
+                            "working_call": args,
+                            "notes": f"Cracked at {trigger}: init sequence + {fn_name}({args}) = 0",
+                            "verification": "verified",
+                        })
+                        reprobe_count += 1
+                        logger.info("[%s] %s: %s CRACKED with args %s",
+                                    ctx.job_id, trigger, fn_name, args)
+                        break
+            except Exception:
+                continue
+
+    logger.info("[%s] %s: re-probe complete — %d/%d write functions now succeed",
+                ctx.job_id, trigger, reprobe_count, len(failed_writes))
 
 
 def _targeted_unlock_attempt(

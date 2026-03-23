@@ -207,6 +207,20 @@ async def session_snapshot(job_id: str):
         _zwrite(zf, "stage-05-finalization/harmonization_report.json",
                 f"{job_id}/harmonization_report.json")
 
+        # ── micro coordinator decisions + winning init sequence ────────────
+        _zwrite(zf, "mc-decisions/mc3-post-reconcile.json",
+                f"{job_id}/mc-decisions/mc3-post-reconcile.json")
+        _zwrite(zf, "mc-decisions/mc4-post-synthesis.json",
+                f"{job_id}/mc-decisions/mc4-post-synthesis.json")
+        _zwrite(zf, "mc-decisions/mc5-post-verification.json",
+                f"{job_id}/mc-decisions/mc5-post-verification.json")
+        _zwrite(zf, "mc-decisions/mc6-post-gap-resolution.json",
+                f"{job_id}/mc-decisions/mc6-post-gap-resolution.json")
+        _zwrite(zf, "mc-decisions/winning-init-sequence.json",
+                f"{job_id}/winning_init_sequence.json")
+        _zwrite(zf, "mc-decisions/verification-report.json",
+                f"{job_id}/verification-report.json")
+
         # ── diagnostics ───────────────────────────────────────────────────────
         _chat_data = _try_blob(f"{job_id}/chat_transcript.txt")
         zf.writestr(

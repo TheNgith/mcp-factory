@@ -74,16 +74,51 @@ def _run_iteration(
     job_id = resp.json()["job_id"]
     print(f"  job_id = {job_id}", flush=True)
 
-    # 2. Wait for analysis to complete
-    time.sleep(5)
+    # 2. Wait for analysis to complete (status goes queued → running → done)
+    print("  Waiting for analysis to complete...", flush=True)
+    for _wait in range(120):
+        time.sleep(5)
+        try:
+            status_resp = requests.get(
+                f"{api_url}/api/jobs/{job_id}", headers=headers, timeout=30,
+            )
+            st = status_resp.json()
+            phase = str(st.get("status") or "")
+            msg = str(st.get("message") or "")
+            if phase == "done":
+                print(f"  Analysis complete: {msg}", flush=True)
+                break
+            if phase == "error":
+                print(f"  Analysis FAILED: {st.get('error')}", flush=True)
+                return job_id
+            if _wait % 6 == 0:
+                print(f"  [{_wait*5}s] analysis status={phase} | {msg}", flush=True)
+        except Exception as exc:
+            print(f"  [analysis poll error: {exc}]", flush=True)
+    else:
+        print("  WARNING: analysis poll timeout (600s), trying explore anyway", flush=True)
 
-    # 3. Start explore with prior_job_id if set
-    explore_body = {
+    # 3. Load invocables from job status result (more reliable than blob on scaled containers)
+    invocables_list = None
+    try:
+        job_resp = requests.get(f"{api_url}/api/jobs/{job_id}", headers=headers, timeout=30)
+        job_data = job_resp.json()
+        result = job_data.get("result") or {}
+        if isinstance(result, dict) and "invocables" in result:
+            invocables_list = result["invocables"]
+            print(f"  Loaded {len(invocables_list)} invocables from job result", flush=True)
+    except Exception as exc:
+        print(f"  [invocables extraction warning: {exc}]", flush=True)
+
+    # 4. Start explore with prior_job_id if set
+    explore_body: dict = {
         "explore_settings": {
             "mode": explore_mode,
             "prior_job_id": prior_job_id,
         },
     }
+    if invocables_list:
+        explore_body["invocables"] = invocables_list
     if hints:
         explore_body["hints"] = hints
 
