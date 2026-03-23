@@ -38,11 +38,11 @@ _WRITE_POLICY_RULES: dict[str, dict] = {
 }
 
 _WRITE_RETRY_BUDGET_BY_CLASS: dict[str, int] = {
-    "write_denied": 2,
-    "not_initialized": 2,
-    "account_locked": 1,
-    "invalid_input": 2,
-    "unknown": 1,
+    "write_denied": 3,
+    "not_initialized": 3,
+    "account_locked": 2,
+    "invalid_input": 3,
+    "unknown": 2,
 }
 
 # Dev-speed switch: disable expensive gap-resolution/mini-session loops while
@@ -334,11 +334,14 @@ def _write_policy_precheck(
     # Safety is enforced by the per-sentinel-class retry budget in _explore_one.
     # (Previously this was a hard block that permanently gated all write fns.)
 
-    rule = _WRITE_POLICY_RULES.get(fn_name, {})
-    required_any = rule.get("required_any", [])
-    if required_any and not any(k in args and str(args.get(k, "")).strip() for k in required_any):
-        return False, "schema_missing", "missing required ID/account argument for write function"
+    # Only block if NO args at all — any non-empty arg set is allowed.
+    # Safety is enforced by the per-sentinel-class retry budget in _explore_one,
+    # not by blocking probes before they can even try.
+    if not args:
+        return False, "schema_missing", "write function probe requires at least one argument"
 
+    # Amount range check — prevent obviously dangerous values
+    rule = _WRITE_POLICY_RULES.get(fn_name, {})
     amount_keys = set(rule.get("amount_keys", []))
     if not amount_keys:
         amount_keys = {k for k in args if _re.search(r"amount|points|cents|value", k, _re.I)}
@@ -348,26 +351,9 @@ def _write_policy_precheck(
         try:
             v = int(args[k])
         except (ValueError, TypeError):
-            return False, "schema_missing", f"{k} must be numeric"
+            continue
         if v <= 0 or v > 1_000_000_000:
             return False, "policy_exhausted", f"{k}={v} outside bounded write-policy range"
-
-    id_patterns = [str(x) for x in (vocab.get("id_formats") or []) if x]
-    id_like_args = {
-        k: str(v) for k, v in args.items()
-        if v is not None and _re.search(r"id|account|order|customer", k, _re.I)
-    }
-    if id_patterns and id_like_args:
-        compiled = []
-        for p in id_patterns:
-            try:
-                compiled.append(_re.compile(_parse_id_format_pattern(p), _re.I))
-            except Exception:
-                continue
-        if compiled:
-            for k, v in id_like_args.items():
-                if not any(rx.match(v) for rx in compiled):
-                    return False, "policy_exhausted", f"{k}='{v}' failed ID format normalization"
 
     return True, None, None
 

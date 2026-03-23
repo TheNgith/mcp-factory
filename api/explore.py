@@ -827,13 +827,14 @@ def _run_phase_7b_verify_enrichment(ctx: ExploreContext) -> None:
             if not inv:
                 continue
 
-            call_args = working_call.get("args") or working_call.get("arguments") or {}
-            if not call_args:
-                report_entries.append({
-                    "function": fn_name, "verification": "skipped",
-                    "reason": "working_call has no args",
-                })
-                continue
+            # working_call is either the args dict itself ({"param_1": "CUST-001"})
+            # or a wrapper with an "args" key. Handle both formats.
+            if "args" in working_call:
+                call_args = working_call["args"] or {}
+            elif "arguments" in working_call:
+                call_args = working_call["arguments"] or {}
+            else:
+                call_args = working_call
 
             try:
                 # Ensure init has been called
