@@ -219,6 +219,24 @@ def _calibrate_sentinels(
         return resolved or _SENTINEL_DEFAULTS
 
     named_by_llm = _name_sentinel_candidates(unresolved, client, model)
+    # Q16/T-17: log the LLM naming decision to probe-log for audit transparency
+    if job_id:
+        try:
+            from api.storage import _append_explore_probe_log
+            _append_explore_probe_log(job_id, [{
+                "phase": "name_sentinel_candidates",
+                "function": "(all)",
+                "args": {
+                    "candidate_codes": [f"0x{v:08X}" for v in sorted(unresolved.keys(), reverse=True)],
+                    "candidate_count": len(unresolved),
+                },
+                "result_excerpt": json.dumps(
+                    {f"0x{k:08X}": v for k, v in named_by_llm.items()}
+                )[:400] if named_by_llm else "(no codes named)",
+                "trace": None,
+            }])
+        except Exception as _nse:
+            logger.debug("[%s] name_sentinel_candidates log flush failed: %s", job_id, _nse)
     if named_by_llm:
         merged = dict(resolved)
         merged.update(named_by_llm)

@@ -13,6 +13,10 @@ from api.storage import _download_blob, _get_job_status, _persist_job_status, _u
 logger = logging.getLogger("mcp_factory.api")
 
 _WRITE_FN_RE = _re.compile(r"(pay|refund|redeem|unlock|process|write|commit|transfer|debit|credit)", _re.I)
+# Shared regex patterns used by explore.py phases AND explore_probe.py (_explore_one).
+# Centralised here so both modules can import without circular dependency.
+_INIT_RE = _re.compile(r"(init(ializ)?|startup|start|setup|open|login|logon|connect)", _re.I)
+_VERSION_FN_RE = _re.compile(r"get(version|version_?string|build|revision|release)", _re.I)
 
 _WRITE_POLICY_RULES: dict[str, dict] = {
     "CS_ProcessPayment": {
@@ -468,3 +472,8 @@ def _set_explore_status(job_id: str, explored: int, total: int, message: str) ->
             "updated_at": time.time(),
         },
     )
+
+
+def _cancel_requested(job_id: str) -> bool:
+    """Return True if the explore worker has been asked to stop early."""
+    return bool((_get_job_status(job_id) or {}).get("explore_cancel_requested"))

@@ -28,6 +28,9 @@ _TRANSITION_SEVERITY: dict[str, str] = {
     "T-14": "high",
     "T-15": "medium",
     "T-16": "high",
+    # Q16: sentinel calibration + write-unlock probe outcome transitions
+    "T-17": "low",
+    "T-18": "low",
 }
 
 
@@ -361,6 +364,7 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     e_schema_evolution = _ev("stage-07-finalize", "schema-evolution.json")
     e_schema_final = _ev("stage-07-finalize", "schema-final.json")
     e_sentinel_calibration = _ev("stage-01-pre-probe", "sentinel-calibration.json")
+    e_write_unlock = _ev("stage-01-pre-probe", "write-unlock-probe.json")
 
     if id_formats and not stale_hint:
         add_transition(
@@ -633,6 +637,49 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     add_transition(
         "T-16", "schema_evolution_present", "pass" if t16_changed else "fail", t16_reason,
         "S-00", "S-07", [e_schema_t0], [e_schema_evolution], [e_schema_final],
+    )
+
+    # T-17: sentinel_calibration_outcome — did Phase 0.5 calibration name DLL-specific codes?
+    # sentinel_calibration.json keys are stored as hex strings like "0xFFFFFFFF"
+    _sentinel_default_hexes = {"0xffffffff", "0xfffffffe", "0xfffffffd", "0xfffffffc", "0xfffffffb"}
+    if not isinstance(sentinels, dict) or not sentinels:
+        t17_status = "fail"
+        t17_reason = "sentinel_calibration.json missing or empty"
+    else:
+        _non_default = [k for k in sentinels if str(k).lower() not in _sentinel_default_hexes]
+        _sentinel_new = int(status.get("sentinel_new_codes_this_run") or 0)
+        if _non_default or _sentinel_new > 0:
+            t17_status = "pass"
+            t17_reason = (
+                f"calibration produced {len(_non_default)} DLL-specific code(s)"
+                + (f"; {_sentinel_new} new code(s) named this run" if _sentinel_new else "")
+            )
+        else:
+            t17_status = "warn"
+            t17_reason = "sentinel calibration present but returned only default fallback codes"
+    add_transition(
+        "T-17", "sentinel_calibration_outcome", t17_status, t17_reason,
+        "S-01", "S-02", [e_sentinel_calibration], [e_probe_ctx], [e_probe_log],
+    )
+
+    # T-18: write_unlock_probe_outcome — did the write-mode unlock probe succeed?
+    _wuo = str(status.get("write_unlock_outcome") or "")
+    if _wuo == "resolved":
+        t18_status = "pass"
+        t18_reason = "write-unlock probe succeeded; write-mode functions are accessible"
+    elif _wuo == "blocked":
+        _wus_label = str(status.get("write_unlock_sentinel") or "unknown")
+        t18_status = "warn"
+        t18_reason = f"write-unlock probe could not unlock write mode; blocking sentinel={_wus_label}"
+    elif _wuo == "not_attempted":
+        t18_status = "not_applicable"
+        t18_reason = "no write-style functions detected in this DLL; write-unlock probe skipped"
+    else:
+        t18_status = "partial"
+        t18_reason = "write_unlock_outcome not recorded (probe may not have run or predates Q16)"
+    add_transition(
+        "T-18", "write_unlock_probe_outcome", t18_status, t18_reason,
+        "S-01", "S-02", [e_write_unlock], [e_probe_log], [e_probe_log],
     )
 
     transition_index = {"version": "1.0", "transitions": transitions}

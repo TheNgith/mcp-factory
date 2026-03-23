@@ -66,6 +66,11 @@ Three instrumentation bugs prevented any run from ever passing the gate:
 Goal:
 - Convert T-04, T-05, T-14, and T-15 into evidence-backed, automatable checks that can be evaluated in one compact readiness summary.
 
+**Declared baseline (2026-03-22):**
+- Evidence location: `sessions/_runs/baseline/` — 364 run folders, all commit `11f289d`.
+- Full stats, container provenance, and gap explanations: `sessions/_runs/baseline/BASELINE.md`.
+- Pre-baseline runs (pre-fix + transitional): `sessions/_runs/pre-baseline/` — 1,579 folders, retained for historical comparison only.
+
 Pre-fix baseline (image 0d7e125, 1,153 runs):
 - T-04: warn (100%) — instrumentation bug, not a pipeline capability gap
 - T-05: warn (100%) — instrumentation bug, not a pipeline capability gap
@@ -460,3 +465,37 @@ These 3 files are required by collect_session.py strict mode but the backend pip
   - improve hint/context quality for unresolved functions
   - reduce A/B nondeterminism
   - drive T-04/T-05/T-14/T-15 from warn/partial to pass
+
+## Batch 2 (Declared Baseline — Scale Validation)
+
+- Batch ID: B2-baseline-scale
+- Date/time UTC: 2026-03-22T14:17 UTC through ~14:30 ET (autopilot stopped, baseline declared)
+- Command: autopilot_transition_loop.ps1 → isolation matrix (7 cases, image 05f095e / repo 11f289d)
+- Variable family changed: none (identical config to Batch 1; scale validation only)
+- Control config: dev / gpt-4o-mini / rounds=8 / tool_calls=24 / gap=true (autopilot defaults)
+- Variants tested: 7 isolation cases (control-baseline, gap-resolution-off, probe-depth-rounds-3,
+  tool-budget-8, context-verbose, context-minimal, context-no-init)
+- Transition outcomes (281 complete runs out of 364 total folders):
+  - T-04: pass=267 (95%), warn=0 ✅ CONFIRMED AT SCALE
+  - T-05: pass=188 (67%), warn=79 (28%) — valid honest signal (see below)
+  - T-14: not_applicable=267 (95%) ✅ CONFIRMED AT SCALE
+  - T-15: not_applicable=267 (95%) ✅ CONFIRMED AT SCALE
+- Leg-A pass: 188/281 (67%)
+- Full A/B gate pass: 106/281 (38%)
+- Leg-B degraded (infra crash/timeout): 18/281 (6%) — not a code bug
+- Readiness summary: **BASELINE DECLARED** — instrumentation honest, no remaining bugs
+- Evidence paths: sessions/_runs/baseline/ (364 folders) — see sessions/_runs/baseline/BASELINE.md
+- Known gaps (structural ceilings, not bugs):
+  - T-05 28% warn: tool-budget-8 variant exhausts budget before CS_ProcessRefund is reached.
+    This is a real ceiling — pipeline can't probe every function under tight budget.
+    Fix path: Q16 (stage-aware function prioritization) or relax budget floor.
+  - Full A/B 38%: Leg-B write-stage non-determinism. One-shot sentinel calibration
+    and one-shot write-unlock probe leave write functions permanently blocked in
+    the 62% of runs where the probe doesn't succeed first try.
+    Fix path: Q16 (adaptive sentinel re-calibration) or Q15 (UNION merger allows
+    partial Leg-B to still contribute).
+- Next steps:
+  - Q-1 fix (~30 min): extend _calibrate_sentinels to seed from vocab["error_codes"]
+  - Q15 Phase 1 (no code): run N=3 identical control-baseline runs, compare convergence
+  - Q15 Phase 2 (~half day): prompt profile mechanism in explore_prompts.py
+  - Q16 design: adaptive sentinel re-calibration after each stage boundary
