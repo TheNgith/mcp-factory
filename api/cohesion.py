@@ -709,6 +709,18 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
         "code_commit": code_commit,
         "profile": profile,
         "final_phase": final_phase,
+        # Q15: ablation tagging fields (pass-through from job submission)
+        "prompt_profile_id": status.get("prompt_profile_id"),
+        "layer": status.get("layer"),
+        "ablation_variable": status.get("ablation_variable"),
+        "ablation_value": status.get("ablation_value"),
+        "run_set_id": status.get("run_set_id"),
+        "coordinator_cycle": status.get("coordinator_cycle"),
+        "playbook_step": status.get("playbook_step"),
+        # Q16: sentinel + write-unlock emission fields
+        "write_unlock_outcome": status.get("write_unlock_outcome"),
+        "write_unlock_sentinel": status.get("write_unlock_sentinel"),
+        "sentinel_new_codes_this_run": status.get("sentinel_new_codes_this_run", 0),
     }
 
     _upload_to_blob(

@@ -115,6 +115,7 @@ def _build_dashboard_row(
     saved_at: str,
 ) -> dict[str, Any]:
     cohesion = contract.parsed.get("cohesion-report.json") if contract.parsed else None
+    session_meta = contract.parsed.get("session-meta.json") if contract.parsed else None
 
     transition_fail_count = None
     stage_fail_count = None
@@ -135,6 +136,24 @@ def _build_dashboard_row(
         elif bool((cohesion.get("gates") or {}).get("hard_fail")):
             pipeline_verdict = "DEGRADED"
 
+    ablation_fields = {
+        "prompt_profile_id": None,
+        "layer": None,
+        "ablation_variable": None,
+        "ablation_value": None,
+        "run_set_id": None,
+        "coordinator_cycle": None,
+        "playbook_step": None,
+        # Q16: sentinel + write-unlock emission fields
+        "write_unlock_outcome": None,
+        "write_unlock_sentinel": None,
+        "sentinel_new_codes_this_run": 0,
+    }
+    if isinstance(session_meta, dict):
+        for key in ablation_fields:
+            val = session_meta.get(key)
+            ablation_fields[key] = val if val is not None else ablation_fields[key]
+
     return {
         "date": date,
         "folder": folder,
@@ -150,6 +169,7 @@ def _build_dashboard_row(
         "stage_fail_count": stage_fail_count,
         "failed_transitions": failed_transitions,
         "failed_stages": failed_stages,
+        **ablation_fields,
     }
 
 

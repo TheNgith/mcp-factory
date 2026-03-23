@@ -25,6 +25,16 @@ from api.telemetry import _ai_span, _warmup_openai
 
 logger = logging.getLogger("mcp_factory.api")
 
+_ABLATION_STATUS_FIELDS = (
+    "prompt_profile_id",
+    "layer",
+    "ablation_variable",
+    "ablation_value",
+    "run_set_id",
+    "coordinator_cycle",
+    "playbook_step",
+)
+
 
 def _analyze_worker(
     job_id: str,
@@ -70,8 +80,10 @@ def _analyze_worker(
         # Re-read current status to pick up explore_phase/explore_questions written
         # by explore.py during the run, then layer the final fields on top.
         _current = _get_job_status(job_id) or _init
+        _ablation_fields = {name: _current.get(name, _init.get(name)) for name in _ABLATION_STATUS_FIELDS}
         _final_payload = {
             **_current,
+            **_ablation_fields,
             "status": "done",
             "progress": 100,
             "message": f"Analysis complete \u2014 {len(result.get('invocables', []))} invocables found",

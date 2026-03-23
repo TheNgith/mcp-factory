@@ -143,6 +143,28 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "model": _model_override,
     }
 
+
+def _normalize_ablation_tags(payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = payload or {}
+
+    def _as_optional_int(value: Any) -> int | None:
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    return {
+        "prompt_profile_id": (payload.get("prompt_profile_id") or None),
+        "layer": _as_optional_int(payload.get("layer")),
+        "ablation_variable": (payload.get("ablation_variable") or None),
+        "ablation_value": (payload.get("ablation_value") or None),
+        "run_set_id": (payload.get("run_set_id") or None),
+        "coordinator_cycle": _as_optional_int(payload.get("coordinator_cycle")),
+        "playbook_step": (payload.get("playbook_step") or None),
+    }
+
 # ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(title="MCP Factory API", version="1.0.0")
 app.add_middleware(
@@ -269,6 +291,7 @@ async def analyze_path(body: dict[str, Any]):
     path_str  = (body.get("path") or "").strip()
     hints     = (body.get("hints") or "").strip()
     use_cases = (body.get("use_cases") or "").strip()
+    ablation_tags = _normalize_ablation_tags(body)
 
     if not path_str:
         raise HTTPException(400, "path is required")
@@ -299,6 +322,7 @@ async def analyze_path(body: dict[str, Any]):
         "hints": hints,
         "use_cases": use_cases,
         "component_name": target.stem,
+        **ablation_tags,
         "result": None,
         "error": None,
         "created_at": time.time(),
@@ -330,6 +354,13 @@ async def analyze(
     hints: str = Form(default=""),
     use_cases: str = Form(default=""),
     skip_cache: str = Form(default=""),
+    prompt_profile_id: str | None = Form(default=None),
+    layer: int | None = Form(default=None),
+    ablation_variable: str | None = Form(default=None),
+    ablation_value: str | None = Form(default=None),
+    run_set_id: str | None = Form(default=None),
+    coordinator_cycle: int | None = Form(default=None),
+    playbook_step: str | None = Form(default=None),
 ):
     """Section 2-3: Upload a binary, start async discovery.
     Returns {job_id, status_url}; poll GET /api/jobs/{id}.
@@ -346,6 +377,17 @@ async def analyze(
 
     original_name = Path(file.filename).name or f"upload{suffix}"
     _skip = skip_cache.lower() in ("1", "true", "yes")
+    ablation_tags = _normalize_ablation_tags(
+        {
+            "prompt_profile_id": prompt_profile_id,
+            "layer": layer,
+            "ablation_variable": ablation_variable,
+            "ablation_value": ablation_value,
+            "run_set_id": run_set_id,
+            "coordinator_cycle": coordinator_cycle,
+            "playbook_step": playbook_step,
+        }
+    )
 
     blob_uploaded = False
     try:
@@ -362,6 +404,7 @@ async def analyze(
         "hints": hints,
         "use_cases": use_cases,
         "component_name": Path(file.filename).stem,
+        **ablation_tags,
         "result": None,
         "error": None,
         "created_at": time.time(),

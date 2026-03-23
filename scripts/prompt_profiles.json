@@ -1,0 +1,104 @@
+{
+  "baseline": {
+    "description": "Control profile -- no changes from default explore settings",
+    "ablation_variable": null,
+    "ablation_value": null,
+    "overrides": {}
+  },
+  "framing-systematic": {
+    "description": "Prompt framing: systematic exploration instruction",
+    "ablation_variable": "prompt_framing",
+    "ablation_value": "systematic",
+    "overrides": {
+      "instruction_fragment": "Explore this function systematically. Try all argument type combinations before concluding."
+    }
+  },
+  "framing-explore": {
+    "description": "Prompt framing: open-ended exploration instruction",
+    "ablation_variable": "prompt_framing",
+    "ablation_value": "explore",
+    "overrides": {
+      "instruction_fragment": "Treat this function as unknown territory. Discover what it does by probing broadly."
+    }
+  },
+  "framing-find-combos": {
+    "description": "Prompt framing: argument combination search instruction",
+    "ablation_variable": "prompt_framing",
+    "ablation_value": "find-combos",
+    "overrides": {
+      "instruction_fragment": "Your goal is to find valid argument combinations. Try every plausible input type."
+    }
+  },
+  "vocab-ids-first": {
+    "description": "Vocab ordering: static IDs listed before other context",
+    "ablation_variable": "vocab_ordering",
+    "ablation_value": "ids_first",
+    "overrides": {
+      "vocab_order": "ids_first"
+    }
+  },
+  "vocab-ids-last": {
+    "description": "Vocab ordering: static IDs listed after other context",
+    "ablation_variable": "vocab_ordering",
+    "ablation_value": "ids_last",
+    "overrides": {
+      "vocab_order": "ids_last"
+    }
+  },
+  "vocab-ids-omit": {
+    "description": "Vocab ordering: static IDs omitted entirely",
+    "ablation_variable": "vocab_ordering",
+    "ablation_value": "ids_omit",
+    "overrides": {
+      "vocab_order": "ids_omit"
+    }
+  },
+  "density-full": {
+    "description": "Context density: full prior findings injected (current default)",
+    "ablation_variable": "context_density",
+    "ablation_value": "full",
+    "overrides": {
+      "context_density": "full"
+    }
+  },
+  "density-minimal": {
+    "description": "Context density: only current-stage facts, no prior run findings",
+    "ablation_variable": "context_density",
+    "ablation_value": "minimal",
+    "overrides": {
+      "context_density": "minimal"
+    }
+  },
+  "density-none": {
+    "description": "Context density: no prior context at all (cold start per function)",
+    "ablation_variable": "context_density",
+    "ablation_value": "none",
+    "overrides": {
+      "context_density": "none"
+    }
+  },
+  "budget-8": {
+    "description": "Tool budget: max 8 tool calls per function",
+    "ablation_variable": "tool_budget",
+    "ablation_value": "8",
+    "overrides": {
+      "max_tool_calls": 8
+    }
+  },
+  "budget-16": {
+    "description": "Tool budget: max 16 tool calls (current default)",
+    "ablation_variable": "tool_budget",
+    "ablation_value": "16",
+    "overrides": {
+      "max_tool_calls": 16
+    }
+  },
+  "budget-24": {
+    "description": "Tool budget: max 24 tool calls",
+    "ablation_variable": "tool_budget",
+    "ablation_value": "24",
+    "overrides": {
+      "max_tool_calls": 24
+    }
+  }
+}

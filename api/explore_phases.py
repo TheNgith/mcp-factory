@@ -78,8 +78,52 @@ def _parse_hint_error_codes(hints: str) -> dict[int, str]:
     return codes
 
 
+def _name_sentinel_candidates(
+    candidates: dict[int, list[str]], client, model: str
+) -> dict[int, str]:
+    """Q16: Ask the LLM to assign short meanings to unresolved high-bit return codes.
+
+    candidates: {int_code: [function_names_that_returned_it]}
+    Returns {int_code: meaning_string} for codes the LLM could name.
+    Extracted from _calibrate_sentinels so stage-boundary re-calibration can
+    reuse the same naming logic without a full empty-arg sweep.
+    """
+    if not candidates:
+        return {}
+    cand_lines = "\n".join(
+        f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
+        for v, fns in sorted(candidates.items(), reverse=True)
+    )
+    prompt = (
+        "Assign a SHORT plain-English meaning (3-8 words) to each of these "
+        "32-bit return codes from an undocumented Windows DLL.\n"
+        f"{cand_lines}\n"
+        "Output ONLY a JSON object: {\"0xFFFFFF..\": \"meaning\", ...}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = (resp.choices[0].message.content or "{}").strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
+        named: dict[str, str] = json.loads(raw)
+        result_map: dict[int, str] = {}
+        for k, meaning in named.items():
+            try:
+                result_map[int(k, 16)] = str(meaning)
+            except (ValueError, TypeError):
+                pass
+        return result_map
+    except Exception as exc:
+        logger.debug("[explore] sentinel candidate naming LLM call failed: %s", exc)
+        return {}
+
+
 def _calibrate_sentinels(
-    invocables: list[dict], client, model: str, job_id: str = ""
+    invocables: list[dict], client, model: str, job_id: str = "", hints: str = ""
 ) -> dict[int, str]:
     """Phase 0.5: probe every exported function with no args and cluster the
     non-zero high-bit return values to discover this DLL's sentinel error codes.
@@ -150,6 +194,15 @@ def _calibrate_sentinels(
             if _pv not in candidates and _pv not in _success_values and _pv >= 0x80000000:
                 candidates[_pv] = [f"(prior-session: {_pm})"]
 
+    # Q-1 fix: pre-seed from hint-derived error codes so codes already known
+    # from user hints don't need LLM naming and are present even if the empty-
+    # arg sweep never triggered them.
+    if hints:
+        _hint_codes = _parse_hint_error_codes(hints)
+        for _hc, _hm in _hint_codes.items():
+            if _hc not in candidates:
+                candidates[_hc] = [f"(hint: {_hm})"]
+
     if not candidates:
         return _prior_sentinels or _SENTINEL_DEFAULTS
 
@@ -165,38 +218,11 @@ def _calibrate_sentinels(
     if not unresolved:
         return resolved or _SENTINEL_DEFAULTS
 
-    cand_lines = "\n".join(
-        f"  0x{v:08X} (decimal {v}) — returned by: {', '.join(fns[:6])}"
-        for v, fns in sorted(unresolved.items(), reverse=True)
-    )
-    prompt = (
-        "Assign a SHORT plain-English meaning (3-8 words) to each of these "
-        "32-bit return codes from an undocumented Windows DLL.\n"
-        f"{cand_lines}\n"
-        "Output ONLY a JSON object: {\"0xFFFFFF..\": \"meaning\", ...}"
-    )
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-        raw = (resp.choices[0].message.content or "{}").strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.splitlines()[1:]).rstrip("`").strip()
-        named: dict[str, str] = json.loads(raw)
-        result_map = {}
-        for k, meaning in named.items():
-            try:
-                result_map[int(k, 16)] = str(meaning)
-            except (ValueError, TypeError):
-                pass
-        if result_map:
-            merged = dict(resolved)
-            merged.update(result_map)
-            return merged
-    except Exception as exc:
-        logger.debug("[explore] sentinel calibration LLM call failed: %s", exc)
+    named_by_llm = _name_sentinel_candidates(unresolved, client, model)
+    if named_by_llm:
+        merged = dict(resolved)
+        merged.update(named_by_llm)
+        return merged
     return resolved or _SENTINEL_DEFAULTS
 
 

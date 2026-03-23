@@ -50,6 +50,7 @@ from api.explore_phases import (
     _SENTINEL_DEFAULTS, _CAP_PROFILE,
     _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
     _calibrate_sentinels, _probe_write_unlock, _infer_param_desc,
+    _name_sentinel_candidates,
 )
 from api.explore_vocab import (
     _update_vocabulary, _generate_hypothesis, _backfill_schema_from_synthesis,
@@ -161,16 +162,26 @@ def _run_phase_05_calibrate(ctx: ExploreContext) -> None:
     """Auto-calibrate DLL-specific sentinel error codes.
 
     READS:  ctx.job_id, ctx.invocables, ctx.client, ctx.model
-    WRITES: ctx.sentinels
+    WRITES: ctx.sentinels, ctx.sentinel_new_codes_this_run
     INVARIANT: ctx.sentinels always contains at least _SENTINEL_DEFAULTS keys
     HANDOFF: sentinel_calibration.json uploaded to blob
     """
     try:
         logger.info("[%s] phase0.5: calibrating sentinels…", ctx.job_id)
         _set_explore_status(ctx.job_id, 0, ctx.total, "Calibrating error codes…")
+
+        # Q16: load hints for Q-1 pre-seeding inside _calibrate_sentinels
+        _hints = ""
+        try:
+            _hints = str((_get_job_status(ctx.job_id) or {}).get("hints") or "")
+        except Exception:
+            pass
+
+        _prev_sentinel_count = len(ctx.sentinels)
         ctx.sentinels = _calibrate_sentinels(
-            ctx.invocables, ctx.client, ctx.model, job_id=ctx.job_id,
+            ctx.invocables, ctx.client, ctx.model, job_id=ctx.job_id, hints=_hints,
         )
+        ctx.sentinel_new_codes_this_run += max(0, len(ctx.sentinels) - _prev_sentinel_count)
         logger.info("[%s] phase0.5: sentinels: %s", ctx.job_id,
                     {f"0x{k:08X}": v for k, v in ctx.sentinels.items()})
         try:
@@ -399,6 +410,36 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
         else:
             logger.info("[%s] phase1: not unlocked: %s", ctx.job_id,
                         ctx.unlock_result.get("notes", ""))
+
+        # Q16: emit write_unlock_outcome + write_unlock_sentinel to session-meta
+        _write_fns = [
+            inv for inv in ctx.invocables
+            if _re.search(r"(pay|redeem|unlock|process|write|commit|transfer|debit|credit)",
+                          inv["name"], _re.I)
+        ]
+        if not _write_fns:
+            _wuo = "not_attempted"
+            _wus: str | None = None
+        elif ctx.unlock_result.get("unlocked"):
+            _wuo = "resolved"
+            _wus = None
+        else:
+            _wuo = "blocked"
+            # Report the highest-priority write-denied sentinel code we know
+            _wus = None
+            for _wc in (0xFFFFFFFB, 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD, 0xFFFFFFFC):
+                if _wc in ctx.sentinels:
+                    _wus = f"0x{_wc:08X}"
+                    break
+        try:
+            _wucurrent = _get_job_status(ctx.job_id) or {}
+            _persist_job_status(ctx.job_id, {
+                **_wucurrent,
+                "write_unlock_outcome": _wuo,
+                "write_unlock_sentinel": _wus,
+            })
+        except Exception as _wue:
+            logger.debug("[%s] phase1: write-unlock status emit failed: %s", ctx.job_id, _wue)
     except Exception as _we:
         logger.debug("[%s] phase1: write-unlock probe failed: %s", ctx.job_id, _we)
 
@@ -2090,6 +2131,7 @@ def _run_finalize(ctx: ExploreContext) -> None:
             "explore_phase": _final_phase,
             "explore_progress": f"{ctx._state['explored']}/{ctx.total}",
             "explore_last_run_seconds": round(_elapsed_s, 2),
+            "sentinel_new_codes_this_run": ctx.sentinel_new_codes_this_run,
             "updated_at": time.time(),
         },
         sync=True,
@@ -2168,6 +2210,34 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         _run_phase_2_curriculum_order(ctx)  # Sort functions: init-first, then uncertainty
 
         _run_phase_3_probe_loop(ctx)        # Per-function LLM probe loops  ← main work
+
+        # Q16 Task 4: Stage-boundary re-calibration — scan probe log for high-bit
+        # return codes observed during probing that weren't in the initial sentinel table.
+        try:
+            _probe_raw_bytes = _download_blob(ARTIFACT_CONTAINER,
+                                              f"{ctx.job_id}/explore_probe_log.json")
+            _probe_entries = json.loads(_probe_raw_bytes) if _probe_raw_bytes else []
+            if isinstance(_probe_entries, list):
+                _new_cands: dict[int, list[str]] = {}
+                for _pe in _probe_entries:
+                    _ret_m2 = _re.match(r"Returned:\s*(\d+)",
+                                        str(_pe.get("result_excerpt") or ""))
+                    if _ret_m2:
+                        _pv = int(_ret_m2.group(1)) & 0xFFFFFFFF
+                        if _pv > 0x80000000 and _pv not in ctx.sentinels:
+                            _new_cands.setdefault(_pv, []).append(
+                                str(_pe.get("function") or "")
+                            )
+                if _new_cands:
+                    _boundary_resolved = _name_sentinel_candidates(_new_cands, ctx.client, ctx.model)
+                    if _boundary_resolved:
+                        ctx.sentinels.update(_boundary_resolved)
+                        ctx.sentinel_new_codes_this_run += len(_boundary_resolved)
+                        logger.info("[%s] stage-boundary recal: %d new codes: %s",
+                                    ctx.job_id, len(_boundary_resolved),
+                                    {f"0x{k:08X}": v for k, v in _boundary_resolved.items()})
+        except Exception as _rce:
+            logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, _rce)
 
         _run_phase_4_reconcile(ctx)         # AC-1: reconcile probe log vs findings
         _run_phase_5_sentinel_catalog(ctx)  # Persist + promote sentinel evidence

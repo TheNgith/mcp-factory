@@ -133,6 +133,9 @@ class ExploreContext:
     # Text injected into write-function prompts when unlock succeeded.
     write_unlock_block: str = ""
 
+    # ── Q16: Cumulative sentinel new-code count (written to session-meta) ─────
+    sentinel_new_codes_this_run: int = 0
+
     # ── PRODUCED BY _run_phase_2_curriculum_order ────────────────────────────
     # Init/startup/login functions — probed before all others (Q-5).
     init_invocables: list[dict] = field(default_factory=list)
