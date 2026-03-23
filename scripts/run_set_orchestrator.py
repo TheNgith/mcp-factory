@@ -294,8 +294,9 @@ def _run_leg(
     functions_success = int((dashboard or {}).get("functions_success") or 0)
     if functions_success <= 0:
         findings_candidates = [
+            leg_dir / "stage-05-finalization" / "findings.json",
+            leg_dir / "evidence" / "stage-02-probe-loop" / "findings.json",
             leg_dir / "evidence" / "stage-07-finalize" / "findings.json",
-            leg_dir / "artifacts" / "findings.json",
             leg_dir / "findings.json",
         ]
         findings: list[dict[str, Any]] = []
