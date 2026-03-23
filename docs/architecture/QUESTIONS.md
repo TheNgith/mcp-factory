@@ -647,3 +647,70 @@ re-start.
 
 No other human decisions are needed. Everything else is an engineering choice with a
 clear answer documented in Q15/Q16/Q17.
+
+**Confirmed decisions (2026-03-22):**
+1. N=3, M=3 — confirmed.
+2. Ablation variable order — use recommended priority; reorder if results are
+   inconclusive after first two cycles.
+3. Promotion bar — improve ≥1 gate, no regressions, confirmed in ≥2/3 Layer 2 runs.
+   See explanation below.
+4. Starting component — contoso_cs.dll confirmed.
+5. Max cycles before coordinator halts and reports — 10 confirmed.
+
+### Q17 Run Structure: N+M as Branching, Not Flat Parallelism
+
+The correct mental model for N+M is branching, not a flat pool of 6 equivalent runs:
+
+```
+                   ┌── M1: prompt_framing = "systematic"     ┐
+N1 (baseline) ─┐  ├── M2: prompt_framing = "explore"         │  UNION
+N2 (baseline) ─┼──┤── M3: prompt_framing = "find-combos"     ├─ merger → coordinator
+N3 (baseline) ─┘  │                                           │  evaluates
+                   └── (all M share N as their trunk)         ┘
+```
+
+- The N=3 runs are the **trunk**: identical context, same profile, same settings.
+  Their purpose is robustness confirmation — do 3 identical runs converge on the same
+  outcome? If they don't converge, the task is not stable enough to ablate.
+- The M=3 runs are **branches**: each changes exactly one variable from the N trunk.
+  All three branches change the same variable family, with different values.
+  Everything not listed as changed is identical to the trunk.
+- One cycle tests ONE variable family. Next cycle tests the next.
+- The UNION merger pools findings from all N+M branches. Every valid finding from
+  any branch contributes — a branch that only resolved one extra function is still
+  a contributor.
+- The coordinator asks: "Did any M branch produce a better gate outcome than the N
+  median?" If yes and no regressions: that branch's profile becomes the new trunk
+  for the next cycle.
+
+**What variables would the M=3 branches change per cycle?**
+
+| Priority | Variable family | Example M1 / M2 / M3 values |
+|---|---|---|
+| 1 | Prompt framing | `"probe carefully"` / `"explore systematically"` / `"find valid args"` |
+| 2 | Vocab/hint ordering | IDs listed first / IDs listed last / IDs omitted |
+| 3 | Context density | Full prior findings / current stage only / no prior context |
+| 4 | Tool budget | 8 calls / 16 calls / 24 calls |
+
+Family 1 is tested in cycle 1. If a branch is promoted, cycle 2 starts from the
+promoted framing and tests Family 2. And so on. Each cycle the N trunk may be
+different from the previous cycle's N trunk if a promotion occurred.
+
+**Stage-by-stage branching (Q15 Phase 4, deferred):**
+The above describes per-cycle branching — each coordinator cycle is one batch of N+M
+runs evaluated end-to-end. Q15 Phase 4 extends this into per-stage branching: the
+UNION merger runs at each pipeline *stage boundary*, seeding the next stage's runs
+with everything all prior-stage branches found. This is the full knowledge pipeline
+and is a Phase 4 build after the basic per-cycle loop is working.
+
+**Promotion bar — what it means:**
+A branch is promoted to new trunk baseline when ALL of the following are true:
+1. At least one gate improved vs. N median (e.g. T-05 moved from warn → pass).
+2. No gate regressed (nothing that was pass in N went to warn or fail in this branch).
+3. The improvement appeared in at least 2 of the 3 M runs for that variable value
+   (not just one lucky run).
+
+This bar is set at 2/3 M runs because a single run improvement could be model variance.
+2/3 means the improvement is reproducible under the same variable change. If you set
+the bar at 3/3 (strict), one bad run would block a real improvement. If you set it at
+1/3 (loose), you risk promoting luck. 2/3 is the minimum-noise-maximum-signal point.

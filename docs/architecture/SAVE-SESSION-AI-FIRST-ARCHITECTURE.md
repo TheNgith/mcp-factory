@@ -975,3 +975,125 @@ the coordinator back to manual (human reads the full artifact tree).
 - Group 3 (model settings): ✅ emitted in session-meta.json, needs pass-through to dashboard-row
 - Group 4 (ablation/cycle): ❌ not emitted — requires Q15 Phase 2 job parameter extension
 - Group 5 (sentinels): ❌ not emitted — requires Q16 sentinel-calibration-state.json emitter
+
+### 19.8 Coordinator Artifact Visibility (What the User Sees)
+
+The coordinator's decisions, playbook state, and cycle-by-cycle reasoning must all be
+visible through save-session artifacts — not buried in log files. The user interacts
+with this pipeline through reasoning conversations, not file browsing. That means
+the coordinator's outputs must be written as first-class save-session artifacts that
+surface clearly when save-session processes a coordinator-dispatched run.
+
+**Central coordinator state (outside any single session folder):**
+
+```
+sessions/
+  coordinator-state.json          ← current playbook position, what was promoted
+  coordinator-cycle-{N}-report.md ← human-readable report after each cycle completes
+```
+
+`coordinator-state.json` is updated after every cycle. It is the single file I read
+at the start of each reasoning conversation to understand exactly where the coordinator
+left off. It contains:
+
+```json
+{
+  "component": "contoso_cs",
+  "current_cycle": 3,
+  "playbook_step": "B",
+  "current_baseline_profile": "systematic-framing",
+  "baseline_functions_success": 4,
+  "cycles_completed": [
+    {
+      "cycle": 1,
+      "variable_tested": "prompt_framing",
+      "winner": "systematic",
+      "gate_delta": {"T-05": "warn→pass"},
+      "promoted": true
+    },
+    {
+      "cycle": 2,
+      "variable_tested": "vocab_ordering",
+      "winner": null,
+      "gate_delta": {},
+      "promoted": false
+    }
+  ],
+  "functions_blocked": ["CS_GetAccountBalance", "CS_LookupCustomer", "..."],
+  "stopping_reason": null,
+  "max_cycles": 10
+}
+```
+
+**Per-cycle report (human-readable, visible to owner):**
+
+`coordinator-cycle-{N}-report.md` is written after each cycle completes. It contains:
+- Variable tested and the three M values tried
+- Gate outcomes for each M branch vs. the N control median
+- Promotion decision and reason
+- Current function coverage vs. baseline
+- Which functions are still blocked and the best available hypothesis for why
+- Recommended human action if any (e.g. "provide CUST- format ID for vocab hints")
+- Next variable to test in cycle N+1
+
+This is the artifact that surfaces the coordinator's reasoning. It is written in
+plain language, not JSON. Reading one file tells the owner: what was tried, what
+improved, what didn't, and what comes next.
+
+**Per-session coordinator fields in `human/summary.md`:**
+
+Every session folder produced by a coordinator-dispatched run must include these
+lines in its `human/summary.md` (produced by `collect_session.py`):
+
+```
+Coordinator cycle : 3
+Playbook step     : B
+Run set           : runset-2026-03-22-abc123
+Layer             : 2 (ablation)
+Variable changed  : prompt_framing = "systematic"
+Gate outcome      : T-05 warn→pass (vs. N median)
+Promotion status  : candidate (awaiting 2/3 confirmation)
+```
+
+This means: open any session folder from a coordinator batch, read `human/summary.md`,
+and immediately know whether this run was a control or a branch, what it changed, and
+whether it was the run that triggered a promotion candidate.
+
+**Save-session contract extension for coordinator runs:**
+
+`collect_session.py` must write these fields to `human/session-save-meta.json` when
+coordinator fields are present in `session-meta.json`:
+
+```json
+"coordinator": {
+  "cycle": 3,
+  "playbook_step": "B",
+  "run_set_id": "runset-2026-03-22-abc123",
+  "layer": 2,
+  "ablation_variable": "prompt_framing",
+  "ablation_value": "systematic",
+  "is_coordinator_run": true
+}
+```
+
+If `coordinator` block is absent, this is a manually-dispatched run (normal A/B or
+isolation run). No change to existing behavior for non-coordinator runs.
+
+**How this feeds into DASHBOARD.md:**
+
+When `compare_sessions.py` generates DASHBOARD.md, coordinator runs are grouped by
+`run_set_id` and `coordinator_cycle`. Each cycle gets a row group:
+
+```
+Cycle 3 — variable: prompt_framing — 6 runs
+  N1 (baseline)         T-04=pass T-05=warn  T-14=na  functions=4/13
+  N2 (baseline)         T-04=pass T-05=warn  T-14=na  functions=4/13
+  N3 (baseline)         T-04=pass T-05=warn  T-14=na  functions=4/13
+  M1 (systematic)       T-04=pass T-05=PASS  T-14=na  functions=5/13  ← candidate
+  M2 (explore)          T-04=pass T-05=warn  T-14=na  functions=4/13
+  M3 (find-combos)      T-04=pass T-05=warn  T-14=na  functions=4/13
+  → PROMOTED: systematic-framing  (2/3 M improved T-05)
+```
+
+This layout makes the coordinator's reasoning visible without any intermediary.
+The owner can read DASHBOARD.md and understand every decision the coordinator made.
