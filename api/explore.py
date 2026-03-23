@@ -93,6 +93,64 @@ logger = logging.getLogger("mcp_factory.api")
 
 
 
+def _load_prior_session_artifacts(prior_job_id: str) -> dict:
+    """Load artifacts from a prior pipeline run for circular feedback.
+
+    Returns a dict with optional keys: findings, sentinels, vocab, api_reference.
+    Missing artifacts are silently skipped (cold start for that artifact).
+    """
+    artifacts: dict = {}
+    if not prior_job_id:
+        return artifacts
+
+    logger.info("[circular-feedback] loading artifacts from prior job %s", prior_job_id)
+
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{prior_job_id}/findings.json")
+        artifacts["findings"] = json.loads(raw)
+        logger.info("[circular-feedback] loaded %d prior findings",
+                    len(artifacts["findings"]))
+    except Exception:
+        pass
+
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{prior_job_id}/sentinel_calibration.json")
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            sentinel_table = {}
+            for k, v in parsed.items():
+                try:
+                    sentinel_table[int(k, 16) if isinstance(k, str) else int(k)] = str(v)
+                except (ValueError, TypeError):
+                    pass
+            if sentinel_table:
+                artifacts["sentinels"] = sentinel_table
+                logger.info("[circular-feedback] loaded %d prior sentinel codes",
+                            len(sentinel_table))
+    except Exception:
+        pass
+
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{prior_job_id}/vocab.json")
+        artifacts["vocab"] = json.loads(raw)
+        logger.info("[circular-feedback] loaded prior vocab (%d keys)",
+                    len(artifacts.get("vocab", {})))
+    except Exception:
+        pass
+
+    try:
+        raw = _download_blob(ARTIFACT_CONTAINER, f"{prior_job_id}/api_reference.md")
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        artifacts["api_reference"] = raw
+        logger.info("[circular-feedback] loaded prior api_reference (%d chars)",
+                    len(artifacts.get("api_reference", "")))
+    except Exception:
+        pass
+
+    return artifacts
+
+
 def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContext:
     """Build a fully-initialised ExploreContext from a job ID and invocable list."""
     from api.storage import _load_findings
@@ -105,14 +163,8 @@ def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContex
 
     inv_map: dict[str, dict] = {inv["name"]: inv for inv in invocables}
 
-    # COH-1: Merge invocables into the registry so enrich_invocable /
-    # _patch_invocable can resolve function names.  Use merge (not replace)
-    # so that a refine/gap run with a target subset doesn't evict the full
-    # set of functions already registered — run_generate must see all of
-    # them to produce a complete schema.
     _merge_invocables(job_id, invocables)
 
-    # Inject synthetic built-in tools that the LLM calls to record discoveries
     inv_map["enrich_invocable"] = {
         "name": "enrich_invocable", "source_type": "enrich",
         "_job_id": job_id, "execution": {"method": "enrich"}, "parameters": [],
@@ -133,9 +185,40 @@ def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContex
     prior_findings = _load_findings(job_id)
     already_explored = {f.get("function") for f in prior_findings if f.get("function")}
 
+    # Circular feedback: load prior session artifacts if prior_job_id is set
+    _prior = _load_prior_session_artifacts(runtime.prior_job_id)
+    _prior_sentinels = _prior.get("sentinels", {})
+    _prior_vocab = _prior.get("vocab", {})
+    _prior_findings = _prior.get("findings", [])
+
+    # Seed findings from prior session so the LLM starts with that knowledge
+    if _prior_findings and not prior_findings:
+        from api.storage import _patch_finding
+        for pf in _prior_findings:
+            fn = pf.get("function")
+            if fn and pf.get("status") == "success":
+                try:
+                    _patch_finding(job_id, fn, {
+                        "status": pf["status"],
+                        "finding": pf.get("finding", ""),
+                        "working_call": pf.get("working_call"),
+                        "notes": f"Seeded from prior session {runtime.prior_job_id}",
+                        "source": "prior_session",
+                    })
+                    already_explored.add(fn)
+                except Exception:
+                    pass
+        logger.info("[circular-feedback] seeded %d success findings from prior session",
+                    sum(1 for f in _prior_findings if f.get("status") == "success"))
+
     _run_started_at = float((_get_job_status(job_id) or {}).get("explore_started_at") or time.time())
 
-    return ExploreContext(
+    # Pre-seed sentinels from prior session (will be refined by Phase 0.5)
+    _initial_sentinels = dict(_SENTINEL_DEFAULTS)
+    if _prior_sentinels:
+        _initial_sentinels.update(_prior_sentinels)
+
+    ctx = ExploreContext(
         job_id=job_id,
         runtime=runtime,
         client=client,
@@ -145,9 +228,16 @@ def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContex
         inv_map=inv_map,
         tool_schemas=tool_schemas,
         total=total,
-        sentinels=dict(_SENTINEL_DEFAULTS),
+        sentinels=_initial_sentinels,
         already_explored=already_explored,
     )
+
+    # Store prior session artifacts for use by later phases
+    ctx._prior_session = _prior  # type: ignore[attr-defined]
+    if _prior_vocab:
+        ctx.vocab = dict(_prior_vocab)
+
+    return ctx
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -461,6 +551,55 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
                          ctx.job_id, exc)
     except Exception as _we:
         logger.debug("[%s] phase1: write-unlock probe failed: %s", ctx.job_id, _we)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Write-unlock re-probe helper (called at 4 stage boundaries)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _try_write_unlock_reprobe(ctx: ExploreContext, trigger: str) -> None:
+    """Re-attempt write-unlock with current accumulated knowledge.
+
+    Called at stage boundaries where the pipeline has gained new knowledge
+    that might help crack the write-unlock sequence. Only acts if write is
+    still blocked.
+
+    trigger: human-readable label for logs (e.g. "post-phase4", "post-synthesis")
+    """
+    if ctx.unlock_result.get("unlocked"):
+        return
+    try:
+        logger.info("[%s] %s: re-probing write-unlock with accumulated knowledge",
+                    ctx.job_id, trigger)
+        ctx.unlock_result = _probe_write_unlock(
+            ctx.invocables, ctx.dll_strings, ctx.vocab,
+        )
+        if ctx.unlock_result.get("unlocked"):
+            ctx.write_unlock_block = (
+                f"\nWRITE MODE ACTIVE (resolved at {trigger}): "
+                "The write-unlock sequence has been executed. Write functions "
+                "should now succeed. Probe with real ID values from "
+                "STATIC ANALYSIS HINTS.\n"
+            )
+            logger.info("[%s] %s: WRITE UNLOCKED: %s",
+                        ctx.job_id, trigger, ctx.unlock_result.get("notes"))
+            try:
+                current_status = _get_job_status(ctx.job_id) or {}
+                _persist_job_status(ctx.job_id, {
+                    **current_status,
+                    "write_unlock_outcome": "resolved",
+                    "write_unlock_sentinel": None,
+                    "write_unlock_resolved_at": trigger,
+                })
+            except Exception as exc:
+                logger.debug("[%s] %s: unlock status update failed: %s",
+                             ctx.job_id, trigger, exc)
+        else:
+            logger.info("[%s] %s: write-unlock still blocked after re-probe",
+                        ctx.job_id, trigger)
+    except Exception as exc:
+        logger.debug("[%s] %s: write-unlock re-probe failed: %s",
+                     ctx.job_id, trigger, exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1369,17 +1508,21 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             logger.debug("[%s] stage-boundary recal failed: %s", ctx.job_id, exc)
 
         _run_phase_4_reconcile(ctx)         # AC-1: reconcile probe log vs findings
+        _try_write_unlock_reprobe(ctx, "post-phase4-reconcile")
         _run_phase_5_sentinel_catalog(ctx)  # Persist + promote sentinel evidence
 
         if not _cancel_requested(job_id):
             report = _run_phase_6_synthesize(ctx)  # LLM → api_reference.md
+            _try_write_unlock_reprobe(ctx, "post-phase6-synthesis")
 
             if report:
                 _run_phase_7_backfill(ctx, report)  # Layer-3 schema enrichment
                 _run_phase_7b_verify_enrichment(ctx)  # Execute working_calls to verify
+                _try_write_unlock_reprobe(ctx, "post-phase7b-verification")
 
                 if not _cancel_requested(job_id):
                     _run_phase_8_gap_resolution(ctx)        # Retry + clarification Qs
+                    _try_write_unlock_reprobe(ctx, "post-phase8-gap-resolution")
                     _run_phase_9_behavioral_spec(ctx, report)  # Typed Python stub
 
         _run_phase_10_harmonize(ctx)    # Final deterministic reconciliation

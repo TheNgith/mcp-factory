@@ -148,6 +148,7 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "model": _model_override,
         "instruction_fragment": _instruction_fragment,
         "context_density": _context_density,
+        "prior_job_id": str(raw.get("prior_job_id") or "").strip(),
     }
 
 

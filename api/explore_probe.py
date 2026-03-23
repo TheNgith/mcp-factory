@@ -157,15 +157,36 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     )
     _is_write_fn = bool(_WRITE_FN_RE.search(fn_name))
     _is_version_fn = bool(_VERSION_FN_RE.search(fn_name))
-    _instruction = (
-        ctx.runtime.instruction_fragment
-        if ctx.runtime.instruction_fragment
-        else (
+
+    if ctx.runtime.instruction_fragment:
+        _instruction = ctx.runtime.instruction_fragment
+    elif _is_write_fn:
+        _known_ids = []
+        if ctx.vocab and ctx.vocab.get("id_formats"):
+            _known_ids = [str(f) for f in ctx.vocab["id_formats"] if f][:4]
+        _id_hint = ", ".join(_known_ids) if _known_ids else "CUST-001, ORD-001, ACCT-001"
+        _instruction = (
+            "Your PRIMARY GOAL is to find the init sequence that makes this write function "
+            "return 0 instead of a sentinel error code.\n"
+            "STRATEGY — try each step, check the return value after EACH attempt:\n"
+            "  1. Call CS_Initialize() with NO args, then call this function with real args.\n"
+            "  2. Call CS_Initialize(param_1=0), then this function with real args.\n"
+            "  3. Call CS_Initialize(param_1=1), then this function with real args.\n"
+            "  4. Call CS_Initialize(param_1=2), then this function with real args.\n"
+            f"  Use these IDs as args: {_id_hint}. For amounts try 100, 500, 1000.\n"
+            "  5. If still failing, try other init modes: 4, 8, 16.\n"
+            "After EACH init+write attempt, check: did the write function return 0?\n"
+            "  - If YES: call record_finding(status='success', working_call=<the args that worked>)\n"
+            "  - If NO after all attempts: call record_finding(status='error') with the sentinel codes seen.\n"
+            "Do NOT waste tool calls on enrich_invocable until you find a working call.\n"
+        )
+    else:
+        _instruction = (
             "Call it with safe probe values, observe the result, "
             "then call enrich_invocable and record_finding with what you learned. "
             "Be brief — one summary sentence after you're done."
         )
-    )
+
     conversation = [
         sys_msg,
         {
@@ -227,6 +248,12 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         logger.debug("[%s] probe-vocab-snapshot write failed for %s: %s",
                      ctx.job_id, fn_name, _vsne)
 
+    # Write functions get a larger tool budget — they need init+write+retry cycles
+    _effective_max_tool_calls = (
+        max(ctx.runtime.max_tool_calls, 14) if _is_write_fn
+        else ctx.runtime.max_tool_calls
+    )
+
     # Per-function local state (not shared; no lock required)
     _observed_successes: list[dict] = []
     _enrich_called = False
@@ -246,9 +273,9 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
     for _round in range(ctx.runtime.max_rounds):
         if _cancel_requested(ctx.job_id):
             break
-        if _fn_tool_call_count >= ctx.runtime.max_tool_calls:
+        if _fn_tool_call_count >= _effective_max_tool_calls:
             logger.info("[%s] explore_worker: %s hit tool-call cap (%d), moving on",
-                        ctx.job_id, fn_name, ctx.runtime.max_tool_calls)
+                        ctx.job_id, fn_name, _effective_max_tool_calls)
             break
 
         try:
@@ -501,7 +528,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
 
             if _policy_stop_reason in {"policy_exhausted", "dependency_missing", "schema_missing"}:
                 break
-            if _fn_tool_call_count >= ctx.runtime.max_tool_calls:
+            if _fn_tool_call_count >= _effective_max_tool_calls:
                 break
 
         if _policy_stop_reason in {"policy_exhausted", "dependency_missing", "schema_missing"}:
@@ -520,7 +547,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         ):
             return
         for _attempt in range(max_attempts):
-            if _fn_tool_call_count >= ctx.runtime.max_tool_calls:
+            if _fn_tool_call_count >= _effective_max_tool_calls:
                 break
             _fb_args, _fb_selection = _build_ranked_fallback_probe_args(
                 inv, _vocab_snap, attempt=_attempt
@@ -1000,7 +1027,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
         # Determine stop reason from local state
         if _policy_stop_reason:
             _computed_stop_reason = _policy_stop_reason
-        elif _fn_tool_call_count >= ctx.runtime.max_tool_calls:
+        elif _fn_tool_call_count >= _effective_max_tool_calls:
             _computed_stop_reason = "cap_hit_tool_calls"
         elif _cancel_requested(ctx.job_id):
             _computed_stop_reason = "cancel"
@@ -1063,7 +1090,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
             "finding_recorded": _finding_recorded,
             "stop_reason": _policy_stop_reason or (
                 "cap_hit_tool_calls"
-                if _fn_tool_call_count >= ctx.runtime.max_tool_calls
+                if _fn_tool_call_count >= _effective_max_tool_calls
                 else "natural"
             ),
         }

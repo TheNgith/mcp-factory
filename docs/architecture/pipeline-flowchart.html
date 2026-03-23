@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Factory — Pipeline Flowchart</title>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1019;--card:#1a1b2e;--border:#2a2b3e;--setup:#00bcd4;--unlock:#ff9800;--probe:#4caf50;--analysis:#9c27b0;--synth:#2196f3;--retry:#f44336;--final:#607d8b;--text:#e0e0e0;--muted:#6a6a8a}
+body{font-family:'Chakra Petch',sans-serif;background:var(--bg);color:var(--text);padding:30px 20px;min-height:100vh}
+.wrap{max-width:960px;margin:0 auto}
+header{text-align:center;margin-bottom:40px}
+h1{font-size:2.2rem;font-weight:700;background:linear-gradient(135deg,#00bcd4,#2196f3,#9c27b0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px}
+.sub{color:var(--muted);font-size:.85rem;font-weight:300;letter-spacing:.5px}
+.flow{display:flex;flex-direction:column;align-items:center;gap:0}
+.phase{position:relative;width:100%;max-width:700px;border:2px solid var(--border);border-radius:10px;padding:16px 20px;cursor:pointer;transition:all .25s}
+.phase:hover{transform:translateX(4px);border-color:var(--col)}
+.phase .tag{position:absolute;top:-10px;left:16px;background:var(--bg);padding:0 8px;font-size:.7rem;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--col)}
+.phase .name{font-size:1rem;font-weight:600;color:var(--col);margin-bottom:4px}
+.phase .desc{font-size:.82rem;color:var(--muted);line-height:1.5}
+.phase .params{display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:.78rem;line-height:1.6}
+.phase .params .label{font-weight:600;color:var(--col);font-size:.72rem;letter-spacing:.5px;text-transform:uppercase;margin-top:6px}
+.phase .params .label:first-child{margin-top:0}
+.phase.open .params{display:block}
+.arrow{width:2px;height:24px;background:var(--border);position:relative}
+.arrow::after{content:'▼';position:absolute;bottom:-8px;left:50%;transform:translateX(-50%);color:var(--border);font-size:.6rem}
+.arrow.cond{background:var(--unlock);width:auto;height:auto;padding:4px 12px;border-radius:20px;font-size:.7rem;font-weight:600;color:var(--unlock);border:1px dashed var(--unlock)}
+.big{border-width:3px;padding:20px 24px}
+.big .name{font-size:1.15rem}
+.legend{margin-top:40px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:20px;background:var(--card);border-radius:10px;border:1px solid var(--border)}
+.legend h3{grid-column:1/-1;font-size:1rem;margin-bottom:4px}
+.legend .item{display:flex;align-items:center;gap:8px;font-size:.82rem}
+.legend .dot{width:14px;height:14px;border-radius:4px;flex-shrink:0}
+.note{margin-top:24px;padding:16px 20px;background:rgba(255,152,0,.08);border:1px solid rgba(255,152,0,.3);border-radius:8px;font-size:.82rem;line-height:1.6}
+.note strong{color:var(--unlock)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>MCP Factory Pipeline</h1>
+<p class="sub">Click any phase to expand parameters, controls, and outputs</p>
+</header>
+
+<div class="flow">
+
+<div class="phase" style="--col:var(--setup)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 0.5</span>
+<div class="name">Sentinel Calibration</div>
+<div class="desc">Build DLL-specific error code vocabulary. Parse hint codes, sweep empty-arg calls to discover sentinel returns.</div>
+<div class="params">
+<div class="label">Controls</div>
+None per-request (always runs). Hint error codes parsed from hints text.
+<div class="label">Reads</div>
+hints text, invocables list
+<div class="label">Produces</div>
+<code>ctx.sentinels</code> (int→meaning map), <code>sentinel-calibration.json</code>
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--setup)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 0a</span>
+<div class="name">Vocab Seed</div>
+<div class="desc">Load/seed the cross-function semantic accumulator from prior sessions, hints, and use_cases.</div>
+<div class="params">
+<div class="label">Controls</div>
+None per-request
+<div class="label">Reads</div>
+Prior session vocab (if exists), hints, use_cases
+<div class="label">Produces</div>
+<code>ctx.vocab</code> (shared across all function probes)
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--setup)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 0b</span>
+<div class="name">Static Analysis</div>
+<div class="desc">Extract binary strings (IDs, emails), IAT imports, sentinel constants directly from the DLL via Ghidra.</div>
+<div class="params">
+<div class="label">Controls</div>
+None per-request
+<div class="label">Reads</div>
+DLL binary (via Ghidra static analysis)
+<div class="label">Produces</div>
+<code>ctx.static_hints_block</code>, <code>ctx.dll_strings</code>, <code>static-analysis.json</code>
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--unlock)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 1</span>
+<div class="name">Write-Unlock Probe</div>
+<div class="desc">Try to flip DLL from read-only → write-ready. Tests init modes (0–512), no-param init, credential sweep. <strong>Now tests write fns with real args from vocab.</strong></div>
+<div class="params">
+<div class="label">Controls</div>
+None per-request. Strategy: no-param init → mode-based init → credential sweep. Tests write fns with args from <code>_build_write_test_args</code> using vocab id_formats and dll_strings.
+<div class="label">Reads</div>
+invocables, dll_strings, vocab
+<div class="label">Produces</div>
+<code>ctx.unlock_result</code>, <code>ctx.write_unlock_block</code> (injected into every write-fn prompt), <code>write-unlock-probe.json</code>
+<div class="label">Session Meta</div>
+<code>write_unlock_outcome</code>: blocked | resolved | not_attempted<br>
+<code>write_unlock_sentinel</code>: hex string of blocking sentinel
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--setup)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 2</span>
+<div class="name">Curriculum Order</div>
+<div class="desc">Sort functions: init-first (CS_Initialize), then by uncertainty score. Caps total explored to <code>max_functions</code>.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>max_functions</code> (default: 50, caps how many fns explored)
+<div class="label">Reads</div>
+invocables, prior findings (for uncertainty scoring)
+<div class="label">Produces</div>
+<code>ctx.init_invocables</code>, sorted invocable list
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase big" style="--col:var(--probe)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 3 — MAIN WORK</span>
+<div class="name">Probe Loop (_explore_one per function)</div>
+<div class="desc">Per-function LLM agent loop. The LLM calls the DLL, observes results, enriches the schema, records findings. This is where function discovery happens.</div>
+<div class="params">
+<div class="label">Controls (all per-request overridable)</div>
+<code>max_rounds</code> (default: 5) — LLM conversation rounds per function<br>
+<code>max_tool_calls</code> (default: 8) — total DLL calls per function<br>
+<code>min_direct_probes_per_function</code> (default: 1) — must call target fn at least N times<br>
+<code>instruction_fragment</code> — custom instruction per function probe<br>
+<code>context_density</code> — full/minimal/none prior findings<br>
+<code>skip_documented</code> — skip fns with existing findings<br>
+<code>deterministic_fallback_enabled</code> — non-LLM fallback after LLM probing<br>
+<code>model</code> — LLM model override
+<div class="label">Reads</div>
+Everything from phases 0–2: sentinels, vocab, static_hints_block, dll_strings, init_invocables, write_unlock_block
+<div class="label">Produces</div>
+<code>findings.json</code> (per-function outcomes), <code>probe-log.json</code> (every DLL call), enriched invocables
+<div class="label">Write Function Behavior</div>
+Write fns get 14 tool calls (not 8). Targeted prompt: "Your ONLY job is to find the init→write sequence." Tests each init mode then immediately tests write. No more dependency_missing block.
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--analysis)" onclick="this.classList.toggle('open')">
+<span class="tag">Post-Phase 3</span>
+<div class="name">Stage-Boundary Recalibration (Q16§4)</div>
+<div class="desc">Scan probe log for high-bit return codes not in the sentinel table. Name new codes via LLM call.</div>
+<div class="params">
+<div class="label">Controls</div>
+None (always runs). Triggered by any return value > 0x80000000 not already in <code>ctx.sentinels</code>.
+<div class="label">Reads</div>
+<code>explore_probe_log.json</code>, current sentinel table
+<div class="label">Produces</div>
+Updated <code>ctx.sentinels</code>, <code>ctx.sentinel_new_codes_this_run</code> count
+<div class="label">Triggers</div>
+If new codes found AND write-unlock still blocked → triggers Q16§5 re-probe (see below)
+</div>
+</div>
+
+<div class="arrow cond">IF new sentinels resolved AND write still blocked</div>
+
+<div class="phase" style="--col:var(--unlock)" onclick="this.classList.toggle('open')">
+<span class="tag">Q16§5</span>
+<div class="name">Write-Unlock Re-Probe #1</div>
+<div class="desc">Re-run the write-unlock sequence with updated sentinel knowledge. A code that meant "not initialized" now tells us <em>what</em> to initialize.</div>
+<div class="params">
+<div class="label">Controls</div>
+Conditional — only runs if stage-boundary recalibration resolved new codes AND <code>ctx.unlock_result.unlocked == false</code>
+<div class="label">Reads</div>
+Updated sentinels, invocables, dll_strings, vocab
+<div class="label">Produces</div>
+Updated <code>ctx.unlock_result</code>, updated <code>ctx.write_unlock_block</code>, updated <code>write_unlock_outcome</code> in session meta
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--analysis)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 4</span>
+<div class="name">Reconcile</div>
+<div class="desc">Cross-reference probe log vs findings. Upgrade misclassified error→success when probe log shows return=0 on a direct call.</div>
+<div class="params">
+<div class="label">Controls</div>
+None
+<div class="label">Invariant</div>
+Only upgrades; never downgrades success→error
+<div class="label">Produces</div>
+Patched findings reflecting probe-log ground truth
+</div>
+</div>
+
+<div class="arrow cond">Re-Probe #2: write-unlock with reconciled knowledge</div>
+
+<div class="phase" style="--col:var(--analysis)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 5</span>
+<div class="name">Sentinel Catalog</div>
+<div class="desc">Persist and promote cross-probe sentinel evidence for this and future sessions.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>EXPLORE_ENABLE_STICKY_SENTINEL_BASELINE</code> env var (default: off)
+<div class="label">Produces</div>
+<code>sentinel-catalog.json</code> — per-code evidence with frequency, functions, and confidence
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--synth)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 6</span>
+<div class="name">Synthesize</div>
+<div class="desc">LLM generates api-reference.md — a human-readable synthesis of all findings across all functions.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>model</code> — LLM model for synthesis
+<div class="label">Reads</div>
+All findings, invocables, vocab
+<div class="label">Produces</div>
+<code>api-reference.md</code> — the complete API documentation
+</div>
+</div>
+
+<div class="arrow cond">Re-Probe #3: write-unlock with semantic knowledge from synthesis</div>
+
+<div class="phase" style="--col:var(--synth)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 7</span>
+<div class="name">Backfill</div>
+<div class="desc">Enrich schema from the synthesis doc. Semantic param names (param_1 → customer_id), descriptions, types.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>model</code>
+<div class="label">Reads</div>
+api-reference.md, invocables
+<div class="label">Produces</div>
+Patched invocables with semantic names, <code>backfill-report.json</code>
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--synth);border-style:dashed" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 7b — NEW</span>
+<div class="name">Enrichment Verification</div>
+<div class="desc">Execute each success finding's <code>working_call</code> against the DLL. Confirms enrichment by proving the args actually work. <strong>2 functions verified in test.</strong></div>
+<div class="params">
+<div class="label">Controls</div>
+None (always runs after backfill)
+<div class="label">Reads</div>
+findings, <code>ctx.inv_map</code>, <code>ctx.init_invocables</code>
+<div class="label">Produces</div>
+<code>verification</code> field per finding: <code>verified</code> (return=0) / <code>inferred</code> (sentinel) / <code>error</code>
+<div class="label">Produces (artifact)</div>
+<code>verification-report.json</code>
+</div>
+</div>
+
+<div class="arrow cond">Re-Probe #4: write-unlock using verified read outputs as write args</div>
+
+<div class="phase" style="--col:var(--retry)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 8</span>
+<div class="name">Gap Resolution + Clarification</div>
+<div class="desc">Second-pass probing of failed functions with enriched context from successful ones. Then generates clarification questions for remaining unknowns.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>gap_resolution_enabled</code> (default: true) — master switch<br>
+<code>clarification_questions_enabled</code> (default: true)
+<div class="label">Reads</div>
+All findings (including newly enriched), invocables, sentinels, vocab, use_cases
+<div class="label">Produces</div>
+Updated findings, <code>explore_questions</code> list in job status
+</div>
+</div>
+
+<div class="arrow cond">Re-Probe #5: final write-unlock attempt with ALL accumulated knowledge</div>
+
+<div class="phase" style="--col:var(--final)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 9</span>
+<div class="name">Behavioral Spec</div>
+<div class="desc">Generate a typed Python behavioral specification from findings + synthesis.</div>
+<div class="params">
+<div class="label">Controls</div>
+<code>model</code>
+<div class="label">Produces</div>
+<code>behavioral_spec.py</code> — typed Python stub with docstrings
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--final)" onclick="this.classList.toggle('open')">
+<span class="tag">Phase 10</span>
+<div class="name">Harmonize</div>
+<div class="desc">Final deterministic pass — cross-reference probe log one more time, upgrade any remaining misclassified findings.</div>
+<div class="params">
+<div class="label">Controls</div>
+None
+<div class="label">Invariant</div>
+Only upgrades error→success; never downgrades
+<div class="label">Produces</div>
+<code>harmonization-report.json</code>
+</div>
+</div>
+
+<div class="arrow"></div>
+
+<div class="phase" style="--col:var(--final)" onclick="this.classList.toggle('open')">
+<span class="tag">Finalize</span>
+<div class="name">Contract Artifacts (T-01 through T-18)</div>
+<div class="desc">Emit session-meta.json, transition-index.json, stage-index.json. Close vocab. Validate all 18 cohesion transitions.</div>
+<div class="params">
+<div class="label">Key Transitions</div>
+T-17: sentinel_calibration_outcome (pass/warn/fail)<br>
+T-18: write_unlock_probe_outcome (pass/warn/fail)
+<div class="label">Produces</div>
+<code>session-meta.json</code>, <code>transition-index.json</code>, <code>stage-index.json</code>, <code>cohesion-report.json</code>
+</div>
+</div>
+
+</div>
+
+<div class="note">
+<strong>IMPLEMENTED:</strong> 5 write-unlock re-probe points across the pipeline. Write functions get 14 tool calls (not 8). Targeted prompt: "Your ONLY job is to find the init sequence that makes this return 0."
+</div>
+
+<div class="note" style="background:rgba(33,150,243,.08);border-color:rgba(33,150,243,.3);margin-top:12px">
+<strong style="color:var(--synth)">Circular Feedback:</strong> Pass <code>prior_job_id</code> in explore_settings to seed this run with a previous session's findings, sentinel table, vocab, and api-reference. Each iteration builds on the last: Iteration 1 (cold) → Iteration 2 (warm, starts with prior findings) → Iteration 3 (hot, full knowledge base). The pipeline's output becomes its own input.
+</div>
+
+<div class="legend">
+<h3>Phase Categories</h3>
+<div class="item"><div class="dot" style="background:var(--setup)"></div>Setup / Foundation</div>
+<div class="item"><div class="dot" style="background:var(--unlock)"></div>Write-Unlock</div>
+<div class="item"><div class="dot" style="background:var(--probe)"></div>Probe Loop (Main Work)</div>
+<div class="item"><div class="dot" style="background:var(--analysis)"></div>Post-Probe Analysis</div>
+<div class="item"><div class="dot" style="background:var(--synth)"></div>Synthesis / Enrichment</div>
+<div class="item"><div class="dot" style="background:var(--retry)"></div>Retry / Gap Resolution</div>
+<div class="item"><div class="dot" style="background:var(--final)"></div>Final Phases</div>
+</div>
+</div>
+</body>
+</html>

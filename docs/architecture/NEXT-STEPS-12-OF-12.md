@@ -176,6 +176,61 @@ after each init attempt, not `CS_ProcessPayment()`.
 
 ---
 
+## Test Results — 2026-03-23 Afternoon
+
+### Test 1 (commit 90761c3): Write-unlock + verification changes
+
+- **Result**: 9/13 success, 4 error (same count as overnight)
+- **Write-unlock**: still blocked (13 attempts, now with real args)
+- **Phase 7b**: did NOT run (bug: `working_call.get("args")` returned None
+  because `working_call` IS the args dict, not `{args: {...}}`)
+- **Write probes**: `schema_missing` policy still blocking deterministic fallback
+  (required_any keys didn't match param_N names from fallback)
+- **Key insight**: CS_ProcessRefund enriched to "success" via backfill, not probed
+
+### Test 2 (commit 68ee906): Fix schema_missing + Phase 7b format
+
+- **Result**: 9/13 success, 4 error
+- **Phase 7b**: WORKING — verified CS_GetDiagnostics and CS_CalculateInterest
+- **Write probes**: Now actually probing write functions!
+  - CS_ProcessPayment: 2 direct tool calls (was 0), still got sentinels
+  - CS_RedeemLoyaltyPoints: 2 direct tool calls (was 0), still got sentinels
+  - CS_ProcessRefund: 2 direct tool calls, still got sentinels
+  - CS_UnlockAccount: 1 direct tool call, returned 0xFFFFFFFE (account not found)
+- **No more policy blocks**: `write_policy_events: []` on all write functions
+- **Honest scorecard after Test 2**:
+
+| Function | Status | Verification | Notes |
+|----------|--------|-------------|-------|
+| CS_Initialize | success | (no args to verify) | Truly verified, return=0 |
+| CS_GetVersion | success | (no args) | Truly verified, return=131841 |
+| CS_GetDiagnostics | success | **verified** | Phase 7b confirmed |
+| CS_CalculateInterest | success | **verified** | Phase 7b confirmed |
+| CS_GetAccountBalance | success | unverified | Enriched, param_1=CUST-001 |
+| CS_GetLoyaltyPoints | success | unverified | Enriched, param_1=CUST-001 |
+| CS_GetOrderStatus | success | unverified | Enriched, param_1=ORD-20040301-0042 |
+| CS_LookupCustomer | success | unverified | Enriched, param_1=CUST-001 |
+| CS_ProcessPayment | success | unverified | Enriched via backfill, never returned 0 |
+| CS_ProcessRefund | error | — | Probed, sentinel returned |
+| CS_RedeemLoyaltyPoints | error | — | Probed, sentinel returned |
+| CS_UnlockAccount | error | — | Returns 0xFFFFFFFE (account not found) |
+| entry | error | — | Not a real function |
+
+### What's left for 12/12
+
+1. **Verify the 4 enriched-but-unverified functions** — Phase 7b needs to verify
+   GetAccountBalance, GetLoyaltyPoints, GetOrderStatus, LookupCustomer, ProcessPayment.
+   These have working_call args but Phase 7b may not have reached them (need to check).
+
+2. **Crack the write functions** — the LLM gets 8 tool calls and tries, but can't
+   find the right init+args combination. Options:
+   a. Increase tool budget for write functions specifically
+   b. Add the init call as a mandatory prefix in the write-unlock block
+   c. Pre-seed the LLM with known-good IDs from static analysis
+   d. Multi-stage probing: probe read functions first, use their outputs as write args
+
+3. **Rate limiting (429)** — still kills some LLM probes. Running sequentially helps.
+
 ## .cursorrules
 
 Created at repo root. Contains:
