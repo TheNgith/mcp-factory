@@ -229,6 +229,8 @@ async def session_snapshot(job_id: str):
         )
         _zwrite(zf, "diagnostics/executor_trace.json",
                 f"{job_id}/executor_trace.json")
+        _zwrite(zf, "diagnostics/executor-trace.json",
+                f"{job_id}/executor_trace.json")
         _zwrite(zf, "diagnostics/diagnosis_raw.json",
                 f"{job_id}/diagnosis_raw.json")
         _zwrite(zf, "diagnostics/mini_session_transcript.txt",
@@ -309,6 +311,25 @@ async def session_snapshot(job_id: str):
             "gap_count":      _unresolved_count,
             "finding_count":  len(_all_findings_for_meta),
             "question_count": len(gaps),
+            "functions_total": len(_fn_latest),
+            "functions_success": sum(1 for s in _fn_latest.values() if s == "success"),
+            "functions_error": _unresolved_count,
+            "write_unlock_outcome": status.get("write_unlock_outcome"),
+            "write_unlock_sentinel": status.get("write_unlock_sentinel"),
+            "write_unlock_resolved_at": status.get("write_unlock_resolved_at"),
+            "sentinel_new_codes_this_run": status.get("sentinel_new_codes_this_run", 0),
+            "prior_job_id": status.get("explore_runtime", {}).get("prior_job_id"),
+            "prior_findings_seeded": status.get("prior_findings_seeded", 0),
+            "verification_verified": status.get("verification_verified", 0),
+            "verification_inferred": status.get("verification_inferred", 0),
+            "verification_error": status.get("verification_error", 0),
+            "prompt_profile_id": status.get("prompt_profile_id"),
+            "layer": status.get("layer"),
+            "ablation_variable": status.get("ablation_variable"),
+            "ablation_value": status.get("ablation_value"),
+            "run_set_id": status.get("run_set_id"),
+            "coordinator_cycle": status.get("coordinator_cycle"),
+            "playbook_step": status.get("playbook_step"),
         }
         if not _try_blob(f"{job_id}/session-meta.json"):
             zf.writestr("session-meta.json", json.dumps(meta, indent=2))
@@ -322,6 +343,7 @@ async def session_snapshot(job_id: str):
         _zwrite(zf, "evidence/stage-01-pre-probe/vocab.json", f"{job_id}/vocab.json")
         _zwrite(zf, "evidence/stage-01-pre-probe/static-analysis.json", f"{job_id}/static_analysis.json")
         _zwrite(zf, "evidence/stage-01-pre-probe/sentinel-calibration.json", f"{job_id}/sentinel_calibration.json")
+        _zwrite(zf, "evidence/stage-01-pre-probe/write-unlock-probe.json", f"{job_id}/write_unlock_probe.json")
 
         _zwrite(zf, "evidence/stage-02-probe-loop/probe-log.json", f"{job_id}/explore_probe_log.json")
         _zwrite(zf, "evidence/stage-02-probe-loop/findings.json", f"{job_id}/findings.json")
@@ -347,6 +369,20 @@ async def session_snapshot(job_id: str):
         _zwrite(zf, "evidence/stage-07-finalize/final-status.json", f"{job_id}/status.json")
         _zwrite(zf, "evidence/stage-07-finalize/schema-evolution.json", f"{job_id}/schema_evolution.json")
         _zwrite(zf, "evidence/stage-07-finalize/schema-final.json", f"{job_id}/mcp_schema.json")
+
+        # MC coordinator decisions and verification evidence
+        _zwrite(zf, "evidence/mc-decisions/mc3-post-reconcile.json",
+                f"{job_id}/mc-decisions/mc3-post-reconcile.json")
+        _zwrite(zf, "evidence/mc-decisions/mc4-post-synthesis.json",
+                f"{job_id}/mc-decisions/mc4-post-synthesis.json")
+        _zwrite(zf, "evidence/mc-decisions/mc5-post-verification.json",
+                f"{job_id}/mc-decisions/mc5-post-verification.json")
+        _zwrite(zf, "evidence/mc-decisions/mc6-post-gap-resolution.json",
+                f"{job_id}/mc-decisions/mc6-post-gap-resolution.json")
+        _zwrite(zf, "evidence/mc-decisions/winning-init-sequence.json",
+                f"{job_id}/winning_init_sequence.json")
+        _zwrite(zf, "evidence/mc-decisions/verification-report.json",
+                f"{job_id}/verification-report.json")
 
     zbuf.seek(0)
     return StreamingResponse(

@@ -31,6 +31,10 @@ _TRANSITION_SEVERITY: dict[str, str] = {
     # Q16: sentinel calibration + write-unlock probe outcome transitions
     "T-17": "low",
     "T-18": "low",
+    # MC coordinator and verification transitions
+    "T-19": "medium",
+    "T-20": "high",
+    "T-21": "medium",
 }
 
 
@@ -679,6 +683,68 @@ def emit_contract_artifacts(job_id: str) -> dict[str, dict]:
     add_transition(
         "T-18", "write_unlock_probe_outcome", t18_status, t18_reason,
         "S-01", "S-02", [e_write_unlock], [e_probe_log], [e_probe_log],
+    )
+
+    # T-19: mc_coordinator_decisions — did MCs produce reasoning artifacts?
+    e_mc3 = "evidence/mc-decisions/mc3-post-reconcile.json"
+    e_mc4 = "evidence/mc-decisions/mc4-post-synthesis.json"
+    e_mc5 = "evidence/mc-decisions/mc5-post-verification.json"
+    e_mc6 = "evidence/mc-decisions/mc6-post-gap-resolution.json"
+    mc_blobs_present = sum(1 for b in [
+        f"mc-decisions/mc3-post-reconcile.json",
+        f"mc-decisions/mc4-post-synthesis.json",
+        f"mc-decisions/mc5-post-verification.json",
+        f"mc-decisions/mc6-post-gap-resolution.json",
+    ] if _try_blob(job_id, b))
+    if mc_blobs_present == 4:
+        t19_status = "pass"
+        t19_reason = f"all 4 micro coordinator decisions recorded"
+    elif mc_blobs_present > 0:
+        t19_status = "partial"
+        t19_reason = f"{mc_blobs_present}/4 micro coordinator decisions recorded"
+    else:
+        t19_status = "not_applicable"
+        t19_reason = "no micro coordinator decisions found (pre-MC pipeline version)"
+    add_transition(
+        "T-19", "mc_coordinator_decisions", t19_status, t19_reason,
+        "S-02", "S-06", [e_mc3, e_mc4], [e_mc5, e_mc6], [e_findings],
+    )
+
+    # T-20: enrichment_verification_outcome — did Phase 7b verify enriched findings?
+    v_verified = int(status.get("verification_verified") or 0)
+    v_inferred = int(status.get("verification_inferred") or 0)
+    v_error = int(status.get("verification_error") or 0)
+    v_total = v_verified + v_inferred + v_error
+    e_verification = "evidence/mc-decisions/verification-report.json"
+    if v_total > 0 and v_verified > 0:
+        t20_status = "pass"
+        t20_reason = f"{v_verified}/{v_total} enriched functions verified by DLL execution"
+    elif v_total > 0:
+        t20_status = "warn"
+        t20_reason = f"0/{v_total} enriched functions verified (all inferred or error)"
+    else:
+        t20_status = "not_applicable"
+        t20_reason = "enrichment verification not run (no enriched findings)"
+    add_transition(
+        "T-20", "enrichment_verification_outcome", t20_status, t20_reason,
+        "S-05", "S-06", [e_backfill, e_findings], [e_verification], [e_findings],
+    )
+
+    # T-21: winning_init_sequence — was the write-unlock sequence persisted for future runs?
+    e_winning = "evidence/mc-decisions/winning-init-sequence.json"
+    write_resolved_at = str(status.get("write_unlock_resolved_at") or "")
+    if write_resolved_at:
+        t21_status = "pass"
+        t21_reason = f"write-unlock cracked at {write_resolved_at}; init sequence persisted"
+    elif write_unlock_outcome == "blocked":
+        t21_status = "fail"
+        t21_reason = "write-unlock blocked; no winning init sequence to persist"
+    else:
+        t21_status = "not_applicable"
+        t21_reason = "no write functions detected or unlock not attempted"
+    add_transition(
+        "T-21", "winning_init_sequence_persistence", t21_status, t21_reason,
+        "S-02", "S-07", [e_mc6], [e_winning], [e_findings],
     )
 
     transition_index = {"version": "1.0", "transitions": transitions}
