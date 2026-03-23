@@ -83,7 +83,7 @@ jobs:
             --resource-group ${{ env.RG }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.IMAGE }}:${{ github.sha }} \
-            --min-replicas 1
+            --min-replicas 0
           # Ensure ingress always points at the correct port (pipeline listens on 8000)
           az containerapp ingress update \
             --name ${{ env.APP_NAME }} \

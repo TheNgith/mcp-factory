@@ -83,7 +83,7 @@ jobs:
               --resource-group ${{ env.RG }} \
               --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
               --image "$IMAGE_TAG" \
-              --min-replicas 1 \
+              --min-replicas 0 \
               --set-env-vars "PIPELINE_URL=${{ env.PIPELINE_URL }}"
             az containerapp ingress update \
               --name ${{ env.APP_NAME }} \
@@ -102,7 +102,7 @@ jobs:
               --user-assigned "${{ env.IDENTITY_ID }}" \
               --target-port 8080 \
               --ingress external \
-              --min-replicas 1 \
+              --min-replicas 0 \
               --max-replicas 3 \
               --cpu 0.25 \
               --memory 0.5Gi \

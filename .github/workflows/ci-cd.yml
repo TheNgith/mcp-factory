@@ -250,7 +250,7 @@ jobs:
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
             --image ${{ env.PIPELINE_IMAGE }}:${{ needs.build.outputs.image-tag }} \
-            --min-replicas 1
+            --min-replicas 0
           az containerapp ingress update \
             --name ${{ env.PIPELINE_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
@@ -263,7 +263,7 @@ jobs:
             --name ${{ env.UI_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} \
-            --min-replicas 1 \
+            --min-replicas 0 \
             --image ${{ env.UI_IMAGE }}:${{ needs.build.outputs.image-tag }}
           az containerapp ingress update \
             --name ${{ env.UI_APP }} \
