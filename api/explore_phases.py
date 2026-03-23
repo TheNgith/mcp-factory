@@ -321,34 +321,68 @@ def _analyze_decompiled_unlock_patterns(invocables: list[dict]) -> dict:
 
 
 def _generate_xor_codes(target: int, max_results: int = 10) -> list[str]:
-    """Generate printable ASCII strings whose bytes XOR to the target value."""
-    if target >= 256:
+    """Generate byte strings whose bytes XOR to the target value.
+
+    Uses the full 1-255 byte range (excluding 0x00 which would null-terminate
+    a C string). Returns latin-1 decoded strings so they round-trip through
+    the executor's string→bytes path without data loss.
+
+    Why full byte range: for targets with bit 7 set (e.g. 0xA5 = 165),
+    printable ASCII (all < 128) can never XOR to a value >= 128 because
+    XOR preserves the bit width. We MUST use bytes 128-255.
+    """
+    if target >= 256 or target == 0:
         return []
 
     codes: list[str] = []
-    bases = [b"AAAA", b"abcd", b"1234", b"test", b"CODE",
-             b"PASS", b"key1", b"UNLOCK", b"admin", b"XXXX"]
 
-    for base in bases:
-        xor_val = 0
-        for b in base:
-            xor_val ^= b
-        needed = xor_val ^ target
-        candidate = base[:-1] + bytes([needed & 0xFF])
-        if all(32 <= b < 127 for b in candidate):
-            codes.append(candidate.decode("ascii"))
+    # Strategy 1: 4-byte codes with 3 fixed printable bytes + 1 computed byte
+    # Pick 3 bytes that XOR together, then set the 4th to hit the target.
+    prefixes = [
+        b"AAA", b"abc", b"123", b"XYZ", b"key",
+        b"COD", b"PAS", b"UNL", b"adm", b"XXX",
+    ]
+    for prefix in prefixes:
+        xor_of_prefix = 0
+        for b in prefix:
+            xor_of_prefix ^= b
+        needed = xor_of_prefix ^ target
+        if needed == 0:
+            needed = target  # avoid null byte; add one more byte pair instead
+            candidate = prefix + bytes([target, 0x41, 0x41])  # extra pair cancels
         else:
-            for offset in range(32, 127):
-                alt = base[:-1] + bytes([offset])
-                check = 0
-                for b in alt:
-                    check ^= b
-                if check == target:
-                    codes.append(alt.decode("ascii"))
-                    break
-
+            candidate = prefix + bytes([needed & 0xFF])
+        # Verify: no null bytes (would truncate C string)
+        if 0 not in candidate and len(candidate) > 3:
+            check = 0
+            for b in candidate:
+                check ^= b
+            if check == target:
+                codes.append(candidate.decode("latin-1"))
         if len(codes) >= max_results:
             break
+
+    # Strategy 2: 5-byte codes using two computed bytes for more diversity
+    if len(codes) < max_results:
+        for a in [0x41, 0x42, 0x61, 0x31]:
+            for b in [0x43, 0x44, 0x62, 0x32]:
+                for c in [0x45, 0x46, 0x63, 0x33]:
+                    needed = a ^ b ^ c ^ target
+                    if needed == 0:
+                        continue
+                    candidate = bytes([a, b, c, needed & 0xFF])
+                    if 0 not in candidate and len(candidate) > 3:
+                        check = 0
+                        for byte in candidate:
+                            check ^= byte
+                        if check == target:
+                            codes.append(candidate.decode("latin-1"))
+                    if len(codes) >= max_results:
+                        break
+                if len(codes) >= max_results:
+                    break
+            if len(codes) >= max_results:
+                break
 
     return list(dict.fromkeys(codes))
 

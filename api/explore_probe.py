@@ -334,32 +334,51 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                         ctx.job_id, fn_name, _effective_max_tool_calls)
             break
 
-        try:
-            from typing import cast, Any as _Any
-            response = ctx.client.chat.completions.create(
-                model=ctx.model,
-                messages=conversation,
-                tools=cast(_Any, ctx.tool_schemas),
-                tool_choice="auto",
-                temperature=0,
-                timeout=90.0,
-            )
-        except Exception as exc:
-            _exc_type = type(exc).__name__
-            _exc_status = getattr(exc, "status_code", None)
-            _exc_body = str(getattr(exc, "body", None) or "")[:200]
-            logger.warning(
-                "[%s] explore_worker: OpenAI call failed for %s round %d: "
-                "type=%s status=%s body=%s msg=%s",
-                ctx.job_id, fn_name, _round,
-                _exc_type, _exc_status, _exc_body, exc,
-            )
-            _fn_probe_log.append({
-                "phase": "llm_error", "function": fn_name, "round": _round,
-                "tool": None, "args": {},
-                "result_excerpt": f"LLM error: {_exc_type} status={_exc_status}: {exc}",
-                "trace": None, "classification": {"has_return": False}, "policy": None,
-            })
+        _llm_ok = False
+        for _retry in range(4):
+            try:
+                from typing import cast, Any as _Any
+                response = ctx.client.chat.completions.create(
+                    model=ctx.model,
+                    messages=conversation,
+                    tools=cast(_Any, ctx.tool_schemas),
+                    tool_choice="auto",
+                    temperature=0,
+                    timeout=90.0,
+                )
+                _llm_ok = True
+                break
+            except Exception as exc:
+                _exc_type = type(exc).__name__
+                _exc_status = getattr(exc, "status_code", None)
+                _exc_body = str(getattr(exc, "body", None) or "")[:200]
+                _is_rate_limit = (
+                    _exc_status in (429, "429")
+                    or "rate" in str(exc).lower()
+                    or "too many" in str(exc).lower()
+                )
+                if _is_rate_limit and _retry < 3:
+                    _backoff = (2 ** _retry) * 5  # 5s, 10s, 20s
+                    logger.info(
+                        "[%s] %s: 429 rate limit, retry %d/3 after %ds",
+                        ctx.job_id, fn_name, _retry + 1, _backoff,
+                    )
+                    time.sleep(_backoff)
+                    continue
+                logger.warning(
+                    "[%s] explore_worker: OpenAI call failed for %s round %d: "
+                    "type=%s status=%s body=%s msg=%s",
+                    ctx.job_id, fn_name, _round,
+                    _exc_type, _exc_status, _exc_body, exc,
+                )
+                _fn_probe_log.append({
+                    "phase": "llm_error", "function": fn_name, "round": _round,
+                    "tool": None, "args": {},
+                    "result_excerpt": f"LLM error: {_exc_type} status={_exc_status}: {exc}",
+                    "trace": None, "classification": {"has_return": False}, "policy": None,
+                })
+                break
+        if not _llm_ok:
             break
 
         msg = response.choices[0].message

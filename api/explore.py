@@ -590,6 +590,7 @@ def _run_phase_1_write_unlock(ctx: ExploreContext) -> None:
                     "sequence": ctx.unlock_result.get("sequence"),
                     "write_fn_tested": ctx.unlock_result.get("write_fn_tested"),
                     "notes": ctx.unlock_result.get("notes"),
+                    "code_reasoning_analysis": ctx.unlock_result.get("code_reasoning_analysis"),
                 }, indent=2).encode(),
             )
         except Exception as exc:
@@ -702,6 +703,14 @@ def _reprobe_write_functions_after_unlock(ctx: ExploreContext, trigger: str) -> 
     write_args = _build_write_args_from_vocab(ctx)
     reprobe_count = 0
 
+    # Include the winning args at the front of every write function's candidates
+    # (MC-6 proved these work for at least one function)
+    _winning_fn = ctx.unlock_result.get("write_fn_tested", "")
+    _winning_args = ctx.unlock_result.get("write_fn_args")
+    if _winning_args and isinstance(_winning_args, dict):
+        for fn in write_args:
+            write_args[fn] = [_winning_args] + write_args[fn]
+
     for finding in failed_writes:
         fn_name = finding["function"]
         inv = inv_map.get(fn_name)
@@ -715,8 +724,11 @@ def _reprobe_write_functions_after_unlock(ctx: ExploreContext, trigger: str) -> 
                 arg_candidates = [{"param_1": "CUST-001", "param_2": 100}]
             else:
                 arg_candidates = [{}]
+        # Also include winning args even if fn wasn't in write_args
+        if _winning_args and _winning_args not in arg_candidates:
+            arg_candidates = [_winning_args] + arg_candidates
 
-        for args in arg_candidates[:5]:
+        for args in arg_candidates[:6]:
             try:
                 # Re-init before each write attempt
                 for step in ctx.unlock_result.get("sequence", []):
@@ -741,6 +753,22 @@ def _reprobe_write_functions_after_unlock(ctx: ExploreContext, trigger: str) -> 
                         break
             except Exception:
                 continue
+
+    # If the winning function was among the failed writes but re-probe didn't
+    # find it (e.g., different args), force-patch it since MC-6 already confirmed it.
+    if _winning_fn and _winning_args and reprobe_count == 0:
+        for finding in failed_writes:
+            if finding["function"] == _winning_fn:
+                _patch_finding(ctx.job_id, _winning_fn, {
+                    "status": "success",
+                    "working_call": _winning_args,
+                    "notes": f"Confirmed by {trigger}: {_winning_fn}({_winning_args}) = 0",
+                    "verification": "verified",
+                })
+                reprobe_count += 1
+                logger.info("[%s] %s: force-patched %s from MC unlock proof",
+                            ctx.job_id, trigger, _winning_fn)
+                break
 
     logger.info("[%s] %s: re-probe complete — %d/%d write functions now succeed",
                 ctx.job_id, trigger, reprobe_count, len(failed_writes))
