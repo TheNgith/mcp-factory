@@ -367,11 +367,220 @@ This is a **code-reasoning task**, not a brute-force task. The LLM needs to read
 
 ---
 
+## Test Results — 2026-03-24 (Post-Restructure, commit a4d4981)
+
+### Pipeline Restructure Completed
+The entire `api/explore*.py` flat file layout was restructured into `api/pipeline/`
+stage-based package with checkpoint system. All 8 stages have their own subdirectory,
+CONTEXT.md manifests, and the checkpoint system is integrated into the orchestrator.
+
+### Run: Job a6d8f6ac (contoso_cs.dll)
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| CS_Initialize | success | Working call: {} |
+| CS_GetDiagnostics | success | Working call: {param_2: 1} |
+| CS_GetVersion | success | Working call: {} |
+| CS_GetAccountBalance | success | Working call found |
+| CS_GetLoyaltyPoints | success | Working call found |
+| CS_LookupCustomer | success | Working call found |
+| CS_GetOrderStatus | success | Working call found |
+| CS_CalculateInterest | success | Working call found |
+| CS_ProcessRefund | success | Write fn — no lock gate |
+| CS_ProcessPayment | error | Needs unlock first |
+| CS_RedeemLoyaltyPoints | error | Needs unlock first |
+| CS_UnlockAccount | error | XOR 0xA5 code never tested by LLM |
+| entry | error | Not a real function |
+
+**Score: 9/12 real functions**
+
+### Key Findings
+
+1. **Session snapshot now captures reasoning artifacts**: probe-round-reasoning,
+   probe-stop-reasons, probe-strategy-summary, sentinel-calibration-decisions,
+   param-rename-decisions, synthesis-input-snapshot, backfill-decision-log,
+   and all checkpoint data.
+
+2. **Explore endpoint fallback fixed**: Now checks `result.invocables` from job
+   status when blob/memory miss (fixes post-deploy 404).
+
+3. **Pipeline thread hung after probe loop**: The stage-boundary re-calibration
+   was running `_probe_write_unlock` without a timeout. Fixed with 120s cap
+   using ThreadPoolExecutor.
+
+4. **Status updates added**: Each post-probe stage now reports its name
+   (S-03: Reconciliation, S-04: Synthesis, etc.) so we can see exactly where
+   the pipeline is during the long post-probe phase.
+
+5. **Output pointer params fixed**: `_build_write_test_args` was setting
+   `uint *` output params to `1` (integer), causing access violations when
+   the DLL tried to write to address 0x1. Now leaves output pointers absent
+   so the bridge allocates proper buffers.
+
+6. **CS_UnlockAccount returned 0 once**: With empty args (register garbage).
+   The LLM probe loop never tried XOR-valid codes — it used "test", "abcd",
+   "unlock", "aaaa" which all XOR to wrong values.
+
+### Root Cause for Missing 3 Functions
+
+The pipeline correctly identifies from Ghidra decompilation:
+- XOR target = 0xA5
+- Dependency chains: UnlockAccount → ProcessPayment, RedeemLoyaltyPoints
+- Flag checks: bit 2
+
+But the code-reasoning XOR codes are only tried in Phase 1, NOT during the
+LLM probe loop. The LLM doesn't know about the XOR requirement because the
+`doc_comment` (Ghidra decompiled C) context wasn't being surfaced effectively
+enough for the LLM to independently discover the pattern.
+
+### What Needs to Happen for 12/12
+
+1. **Ensure `include_doc_comment=true` is passed** so the LLM sees the
+   decompiled C code during probing.
+2. **Improve Phase 1 code-reasoning**: The XOR codes ARE mathematically
+   correct (UTF-8 bytes XOR to 0xA5). The failure was that write-function
+   testing after unlock used broken args (output pointer issue — now fixed).
+3. **After Phase 1 fix**: If CS_UnlockAccount returns 0 with XOR code,
+   then CS_ProcessPayment and CS_RedeemLoyaltyPoints should work because
+   the lock bit gets cleared.
+
+---
+
+## Overnight Testing Plan (2026-03-24, for Sonnet)
+
+### Prerequisites — Local Setup
+
+The Azure VM can be deallocated. Run everything locally on Windows:
+
+**Terminal 1 — Bridge (port 9100):**
+```powershell
+cd C:\Users\evanw\Downloads\capstone_project\mcp-factory
+.\.venv\Scripts\python.exe scripts\gui_bridge.py
+```
+The bridge defaults to port 9100.
+
+**Terminal 2 — API (port 8000):**
+```powershell
+cd C:\Users\evanw\Downloads\capstone_project\mcp-factory
+$env:GUI_BRIDGE_URL = "http://localhost:9100"
+$env:GUI_BRIDGE_SECRET = "local-dev-key"
+$env:MCP_FACTORY_API_KEY = ""  # disable auth for local testing
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+**Note**: Set `PIPELINE_API_KEY=""` or leave unset to skip auth locally.
+The bridge secret just needs to match between API and bridge — any non-empty
+string works for local dev.
+
+### Test Sequence (8 hours budget)
+
+#### Test 1: Verify Phase 1 Fix (~30 min)
+**Goal**: Confirm the output-pointer fix in `_build_write_test_args` lets
+Phase 1 properly test write functions after CS_UnlockAccount returns 0.
+
+```powershell
+# Upload DLL
+$resp = Invoke-RestMethod -Uri "http://localhost:8000/api/analyze" `
+  -Method POST -InFile "C:\Users\evanw\Downloads\mcp-test-binaries\contoso_cs.dll"
+
+# Start explore with doc_comment enabled
+$body = @{
+  hints = "contoso_cs.dll: 12 functions. CS_Initialize(mode) sets up. CS_UnlockAccount needs 4-byte code XORing to 0xA5. include_doc_comment=true."
+  use_cases = "Full autonomous exploration with code reasoning."
+  include_doc_comment = $true
+  max_rounds = 6
+  max_tool_calls = 12
+} | ConvertTo-Json
+Invoke-RestMethod -Uri "http://localhost:8000/api/jobs/$($resp.job_id)/explore" `
+  -Method POST -ContentType "application/json" -Body $body
+```
+
+Poll until done. Save session. Check:
+- Did Phase 1 `_probe_write_unlock` reach code-reasoning strategy?
+- Did CS_UnlockAccount return 0 with any XOR code?
+- Did write functions (CS_ProcessPayment) return 0 afterward?
+- Check `write_unlock_probe.json` and `checkpoints/latest.json`
+
+#### Test 2: Checkpoint-Focused Run (~20 min)
+**Goal**: Use checkpoint from Test 1 to skip S-00/S-01 and focus the probe
+loop on the 3 failing functions only.
+
+```powershell
+$body = @{
+  hints = "Focus on CS_UnlockAccount, CS_ProcessPayment, CS_RedeemLoyaltyPoints."
+  checkpoint_id = "<job_id_from_test_1>"
+  focus_functions = @("CS_UnlockAccount","CS_ProcessPayment","CS_RedeemLoyaltyPoints")
+  max_rounds = 8
+  max_tool_calls = 14
+  include_doc_comment = $true
+} | ConvertTo-Json
+```
+
+#### Test 3: With Explicit XOR Hint (~20 min)
+**Goal**: Give the LLM a direct hint about the XOR mechanism to see if
+better context solves the problem.
+
+```powershell
+$body = @{
+  hints = "CS_UnlockAccount(param_1=customer_id, param_2=unlock_code). The DLL XORs all bytes of param_2 and checks if result == 0xA5. Generate a 4+ byte string whose bytes XOR to 0xA5. Example: bytes 0x41,0x42,0x43,0xE5 XOR to 0xA5. Call CS_Initialize() first, then CS_UnlockAccount(CUST-001, <code>), then test CS_ProcessPayment."
+  include_doc_comment = $true
+  max_rounds = 8
+  max_tool_calls = 14
+} | ConvertTo-Json
+```
+
+#### Test 4: Circular Pipeline (3 iterations, ~90 min)
+**Goal**: Run cold → warm → hot start pipeline with prior_job_id chaining.
+
+- Iteration 1: Fresh start, no prior
+- Iteration 2: `prior_job_id = <iter1_job_id>`
+- Iteration 3: `prior_job_id = <iter2_job_id>`
+
+Check: Does the winning init sequence persist? Does iteration 2 start with
+seeded findings? Do MC coordinators improve across iterations?
+
+#### Test 5: Parameter Sweep (~2 hours)
+**Goal**: Find optimal pipeline parameters.
+
+Run 4 configurations in sequence:
+1. `max_rounds=4, max_tool_calls=8` (lean)
+2. `max_rounds=8, max_tool_calls=14` (generous)
+3. `max_rounds=6, max_tool_calls=12, context_density=full` (default)
+4. `max_rounds=10, max_tool_calls=20` (maximum)
+
+Compare: functions_success, runtime, verification counts.
+
+#### Test 6: Regression on Other Saved Sessions
+**Goal**: Ensure restructure didn't break anything.
+
+Re-run save-session on any existing job IDs from the deployed API and compare
+dashboard-row.json metrics against `sessions/_runs/` baselines.
+
+### What to Record for Each Test
+
+Save session with:
+```powershell
+powershell -File scripts\save-session.ps1 `
+  -JobId <id> -ApiUrl "http://localhost:8000" `
+  -OutDir "sessions\_runs\2026-03-24-overnight-test-N" `
+  -CompatibilityMode
+```
+
+For each test, record in `sessions/_runs/<folder>/human/summary.md`:
+- Functions success count
+- Write unlock outcome
+- Which MC coordinator made progress
+- Any error stages
+- Runtime duration
+
+---
+
 ## .cursorrules
 
 Created at repo root. Contains:
 - Canonical names for all core concepts
-- File layout reference
+- File layout reference (updated for api/pipeline/ restructure)
 - Code style rules (no cryptic abbreviations, no import aliases)
 - Pipeline phase reference (11 phases + 4 MC checkpoints)
+- Checkpoint system reference
 - Testing conventions
