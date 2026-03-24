@@ -23,7 +23,7 @@ from api.storage import (
     _upload_to_blob,
     _load_findings,
 )
-from api.explore_phases import _infer_param_desc
+from api.pipeline.helpers import _infer_param_desc
 
 import logging
 logger = logging.getLogger("mcp_factory.api")

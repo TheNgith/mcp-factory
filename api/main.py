@@ -46,7 +46,7 @@ from api.worker import _queue_worker_loop, _analyze_worker
 from api.executor import _execute_tool
 from api.chat import stream_chat
 from api.generate import run_generate
-from api.explore_phases import _infer_param_desc
+from api.pipeline.helpers import _infer_param_desc
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger("mcp_factory.api")
@@ -149,6 +149,9 @@ def _normalize_explore_runtime_settings(body: dict[str, Any] | None) -> dict[str
         "instruction_fragment": _instruction_fragment,
         "context_density": _context_density,
         "prior_job_id": str(raw.get("prior_job_id") or "").strip(),
+        "checkpoint_id": str(raw.get("checkpoint_id") or "").strip(),
+        "focus_functions": list(raw.get("focus_functions") or []),
+        "skip_to_stage": str(raw.get("skip_to_stage") or "").strip(),
     }
 
 
@@ -556,7 +559,7 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
     Optional body: {"invocables": [...]}  — if omitted, uses the invocables
     already registered for this job.
     """
-    from api.explore import _explore_worker
+    from api.pipeline.orchestrator import _explore_worker
 
     body = body or {}
     invocables: list | None = body.get("invocables") if body else None
@@ -644,7 +647,7 @@ async def refine_job(job_id: str, body: dict[str, Any] = None):
 
     Returns 202 immediately; poll GET /api/jobs/{job_id} for explore_phase progress.
     """
-    from api.explore import _explore_worker
+    from api.pipeline.orchestrator import _explore_worker
     from api.storage import _JOB_INVOCABLE_MAPS, _patch_finding
 
     body = body or {}
@@ -841,7 +844,7 @@ async def answer_gaps(job_id: str, body: dict[str, Any] = None):
 
     # Trigger targeted mini-sessions for every function that received an answer,
     # then re-run gap generation to surface any remaining unknowns.
-    from api.explore import _run_gap_answer_mini_sessions
+    from api.pipeline.s06_gaps.gap_resolution import _run_gap_answer_mini_sessions
     inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
     if not inv_map:
         try:

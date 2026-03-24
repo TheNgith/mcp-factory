@@ -29,7 +29,7 @@ class TestStripOutputBufferParams:
 
     @pytest.fixture(autouse=True)
     def _import(self):
-        from api.explore_helpers import _strip_output_buffer_params
+        from api.pipeline.helpers import _strip_output_buffer_params
         self.strip = _strip_output_buffer_params
 
     def test_preserves_byte_star_string_input(self):
@@ -149,7 +149,7 @@ class TestRankedFallbackArgs:
 
     @pytest.fixture(autouse=True)
     def _import(self):
-        from api.explore_helpers import _build_ranked_fallback_probe_args
+        from api.pipeline.helpers import _build_ranked_fallback_probe_args
         self.build = _build_ranked_fallback_probe_args
 
     def test_attempt_uses_ranked_candidates(self):
@@ -213,7 +213,7 @@ class TestExploreRuntime:
     """Verify ExploreRuntime produces correct defaults without a live environment."""
 
     def test_default_construction(self):
-        from api.explore_types import ExploreRuntime
+        from api.pipeline.types import ExploreRuntime
         r = ExploreRuntime()
         assert r.max_rounds >= 1
         assert r.max_tool_calls >= 1
@@ -226,7 +226,7 @@ class TestExploreRuntime:
 
     def test_from_job_runtime_empty_dict(self):
         """from_job_runtime({}) should fall back to defaults / environment defaults."""
-        from api.explore_types import ExploreRuntime
+        from api.pipeline.types import ExploreRuntime
         r = ExploreRuntime.from_job_runtime({})
         # Must not raise; runtime values must be sensible positive numbers
         assert r.max_rounds >= 1
@@ -239,7 +239,7 @@ class TestExploreRuntime:
         The dict uses camelCase-style short keys (see ExploreRuntime.from_job_runtime
         source): 'max_rounds', 'max_tool_calls', 'max_functions'.
         """
-        from api.explore_types import ExploreRuntime
+        from api.pipeline.types import ExploreRuntime
         r = ExploreRuntime.from_job_runtime({
             "max_rounds":     3,
             "max_tool_calls": 12,
@@ -258,7 +258,7 @@ class TestExploreContext:
     """Verify ExploreContext dataclass has expected attributes."""
 
     def test_dataclass_fields_exist(self):
-        from api.explore_types import ExploreContext, ExploreRuntime
+        from api.pipeline.types import ExploreContext, ExploreRuntime
         from threading import Lock
 
         ctx = ExploreContext(
@@ -284,7 +284,7 @@ class TestExploreContext:
         assert ctx.sentinel_catalog == {}
 
     def test_state_dict_initialised(self):
-        from api.explore_types import ExploreContext, ExploreRuntime
+        from api.pipeline.types import ExploreContext, ExploreRuntime
         ctx = ExploreContext(
             job_id="j", runtime=ExploreRuntime(), client=None, model="m",
             run_started_at=0.0, invocables=[], inv_map={}, tool_schemas=[],

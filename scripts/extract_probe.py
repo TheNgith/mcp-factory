@@ -25,7 +25,7 @@ Extracted from explore.py so the ~1000-line per-function agent loop lives in
 its own module, making explore.py focus on the pipeline phases and orchestrator.
 
 Import surface for callers:
-    from api.explore_probe import _explore_one, _run_phase_3_probe_loop
+    from api.pipeline.s02_probe.probe_loop import _explore_one, _run_phase_3_probe_loop
 \"\"\"
 from __future__ import annotations
 
@@ -47,21 +47,21 @@ from api.storage import (
     _register_invocables, _merge_invocables, _get_current_invocables,
 )
 from api.telemetry import _openai_client
-from api.explore_phases import (
+from api.pipeline.helpers import (
     _SENTINEL_DEFAULTS, _CAP_PROFILE,
     _MAX_EXPLORE_ROUNDS_PER_FUNCTION, _MAX_TOOL_CALLS_PER_FUNCTION, _MAX_FUNCTIONS_PER_SESSION,
     _calibrate_sentinels, _probe_write_unlock, _infer_param_desc,
     _name_sentinel_candidates,
 )
-from api.explore_vocab import (
+from api.pipeline.vocab import (
     _update_vocabulary, _generate_hypothesis, _backfill_schema_from_synthesis,
     _vocab_block, _uncertainty_score,
 )
-from api.explore_prompts import (
+from api.pipeline.prompts import (
     _build_explore_system_message, _generate_behavioral_spec,
     _synthesize, _generate_confidence_gaps,
 )
-from api.explore_helpers import (
+from api.pipeline.helpers import (
     _GAP_RESOLUTION_ENABLED,
     _INIT_RE,
     _VERSION_FN_RE,
@@ -78,8 +78,8 @@ from api.explore_helpers import (
     _strip_output_buffer_params,
     _write_policy_precheck,
 )
-from api.explore_gap import _attempt_gap_resolution, _run_gap_answer_mini_sessions
-from api.explore_types import ExploreContext, ExploreRuntime
+from api.pipeline.s06_gaps.gap_resolution import _attempt_gap_resolution, _run_gap_answer_mini_sessions
+from api.pipeline.types import ExploreContext, ExploreRuntime
 
 logger = logging.getLogger("mcp_factory.api")
 

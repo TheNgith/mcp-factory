@@ -167,7 +167,7 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             import json as _json
             _vocab = _json.loads(_download_blob(ARTIFACT_CONTAINER, f"{job_id}/vocab.json"))
             if _vocab:
-                from api.explore import _vocab_block
+                from api.pipeline.vocab import _vocab_block
                 # Strip description/user_context before passing to _vocab_block —
                 # they're already hoisted into _domain_preamble above the rules.
                 _vocab_for_block = {k: v for k, v in _vocab.items()

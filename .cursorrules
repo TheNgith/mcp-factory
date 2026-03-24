@@ -31,15 +31,39 @@ MVP target: 12/12 verified functions on contoso_cs.dll, then generalize to a fol
 ### Job status
 - Use `current_status` or `job_status`, never `_cur`, `_wucurrent`, `_gap_current`
 
-## File Layout (api/)
-- `explore.py` — pipeline orchestrator, phases 0-2 & 4-10
-- `explore_probe.py` — per-function LLM agent loop (_explore_one)
-- `explore_phases.py` — sentinel calibration, write-unlock probe
-- `explore_helpers.py` — shared helpers, write policy precheck
-- `explore_types.py` — ExploreContext + ExploreRuntime dataclasses
+## File Layout (api/pipeline/ — stage-based package)
+
+### Shared infrastructure (api/)
+- `main.py` — FastAPI app + job/explore endpoints
+- `chat.py` — streaming agentic chat loop
+- `executor.py` — DLL/CLI/GUI execution bridge
+- `storage.py` — blob helpers
+- `static_analysis.py` — binary static analysis (IAT, strings, sentinels)
 - `cohesion.py` — T-01..T-21 transitions, session-meta, stage-index
 - `routes_session.py` — session_snapshot ZIP + report endpoints
-- `main.py` — FastAPI app + job/explore endpoints
+
+### Pipeline package (api/pipeline/)
+- `orchestrator.py` — main pipeline driver (_explore_worker), all phase functions
+- `types.py` — ExploreContext + ExploreRuntime dataclasses
+- `helpers.py` — shared helpers, constants, write policy precheck
+- `vocab.py` — vocabulary table management, hypothesis, schema backfill
+- `prompts.py` — LLM prompt builders, synthesis, behavioral spec generation
+- `checkpoint.py` — checkpoint save/load/seed/merge system
+
+### Stage directories (api/pipeline/s{NN}_{name}/)
+Each stage has: `__init__.py` (context docs + re-exports), `CONTEXT.md`, stage modules.
+- `s00_setup/` — sentinel calibration, vocab seed, static analysis
+- `s01_unlock/` — write-unlock probe, XOR code generation
+- `s02_probe/` — curriculum ordering, per-function LLM probe loop
+- `s03_reconcile/` — reconciliation, MC-3 write analysis, sentinel catalog
+- `s04_synthesis/` — API reference synthesis, MC-4 init clues
+- `s05_enrichment/` — schema backfill, verification, MC-5 chaining
+- `s06_gaps/` — gap resolution, MC-6 final unlock
+- `s07_finalize/` — behavioral spec, harmonization, contract artifacts
+
+### Legacy shims (api/explore*.py)
+The old flat files are now thin shims that re-export from api/pipeline/*.
+They exist for backward compatibility only. Always import from api.pipeline.*.
 
 ## Code Style
 - Never use cryptic abbreviations (_wuo, _hc, _pv, etc.)
@@ -55,30 +79,35 @@ The explore pipeline has 11 phases (0-10) plus 4 micro coordinator checkpoints.
 
 Every pipeline step has a canonical identifier: `S-{stage}.{substep}`
 
-| ID | Function | Stage Name | Cohesion Stage |
-|----|----------|------------|----------------|
-| S-00.1 | `_run_phase_05_calibrate` | Sentinel calibration | S-01 |
-| S-00.2 | `_run_phase_0_vocab_seed` | Vocab seed | S-01 |
-| S-00.3 | `_run_phase_0_static` | Static analysis | S-01 |
-| S-01.1 | `_run_phase_1_write_unlock` | Write-unlock probe | S-01 |
-| S-02.1 | `_run_phase_2_curriculum_order` | Curriculum ordering | S-02 |
-| S-02.2 | `_run_phase_3_probe_loop` | **Probe loop (main work)** | S-02 |
-| S-03.1 | `_run_phase_4_reconcile` | Reconcile probe log | S-03 |
-| S-03.MC | `_mc3_post_reconcile` | **MC: write failure analysis** | S-03 |
-| S-03.2 | `_run_phase_5_sentinel_catalog` | Sentinel catalog | S-03 |
-| S-04.1 | `_run_phase_6_synthesize` | Synthesis (api-reference.md) | S-04 |
-| S-04.MC | `_mc4_post_synthesis` | **MC: parse synthesis for init clues** | S-04 |
-| S-05.1 | `_run_phase_7_backfill` | Schema enrichment | S-05 |
-| S-05.2 | `_run_phase_7b_verify_enrichment` | Verification (execute working_calls) | S-05 |
-| S-05.MC | `_mc5_post_verification` | **MC: chain read → write** | S-05 |
-| S-06.1 | `_run_phase_8_gap_resolution` | Gap resolution | S-06 |
-| S-06.MC | `_mc6_post_gap_resolution` | **MC: final comprehensive unlock** | S-06 |
-| S-07.1 | `_run_phase_9_behavioral_spec` | Behavioral spec | S-07 |
-| S-07.2 | `_run_phase_10_harmonize` | Harmonize | S-07 |
-| S-07.3 | Finalize | Contract artifacts (T-01 through T-21) | S-07 |
+| ID | Function | Stage Name | Package |
+|----|----------|------------|---------|
+| S-00.1 | `_run_phase_05_calibrate` | Sentinel calibration | s00_setup |
+| S-00.2 | `_run_phase_0_vocab_seed` | Vocab seed | s00_setup |
+| S-00.3 | `_run_phase_0_static` | Static analysis | s00_setup |
+| S-01.1 | `_run_phase_1_write_unlock` | Write-unlock probe | s01_unlock |
+| S-02.1 | `_run_phase_2_curriculum_order` | Curriculum ordering | s02_probe |
+| S-02.2 | `_run_phase_3_probe_loop` | **Probe loop (main work)** | s02_probe |
+| S-03.1 | `_run_phase_4_reconcile` | Reconcile probe log | s03_reconcile |
+| S-03.MC | `_mc3_post_reconcile` | **MC: write failure analysis** | s03_reconcile |
+| S-03.2 | `_run_phase_5_sentinel_catalog` | Sentinel catalog | s03_reconcile |
+| S-04.1 | `_run_phase_6_synthesize` | Synthesis (api-reference.md) | s04_synthesis |
+| S-04.MC | `_mc4_post_synthesis` | **MC: parse synthesis for init clues** | s04_synthesis |
+| S-05.1 | `_run_phase_7_backfill` | Schema enrichment | s05_enrichment |
+| S-05.2 | `_run_phase_7b_verify_enrichment` | Verification (execute working_calls) | s05_enrichment |
+| S-05.MC | `_mc5_post_verification` | **MC: chain read -> write** | s05_enrichment |
+| S-06.1 | `_run_phase_8_gap_resolution` | Gap resolution | s06_gaps |
+| S-06.MC | `_mc6_post_gap_resolution` | **MC: final comprehensive unlock** | s06_gaps |
+| S-07.1 | `_run_phase_9_behavioral_spec` | Behavioral spec | s07_finalize |
+| S-07.2 | `_run_phase_10_harmonize` | Harmonize | s07_finalize |
+| S-07.3 | Finalize | Contract artifacts (T-01 through T-21) | s07_finalize |
 
-MC checkpoints are marked with `.MC` suffix. They always follow the phase they analyze.
-MC decision artifacts: `{job_id}/mc-decisions/mc{N}-{slug}.json`
+### Checkpoint System (api/pipeline/checkpoint.py)
+- Saves per-stage and per-function checkpoint data to blob storage
+- `checkpoint_id` in explore_settings loads a prior checkpoint
+- `focus_functions` limits probing to specific functions only
+- `skip_to_stage` resumes from a stage boundary
+- Checkpoints are saved after each stage completes
+- Functions with status="success" and working_call are skippable
 
 ### Micro Coordinators:
 Each MC reads what the previous phase produced, reasons about it, adjusts strategy,
@@ -106,21 +135,23 @@ Loads: findings, sentinel table, vocab, api-reference.
 
 ### Write functions:
 ProcessPayment, ProcessRefund, RedeemLoyaltyPoints, UnlockAccount
-(matched by _WRITE_FN_RE in explore_helpers.py)
-Write functions get 14 tool calls (not 8) and targeted init→write testing prompts.
+(matched by _WRITE_FN_RE in api/pipeline/helpers.py)
+Write functions get 14 tool calls (not 8) and targeted init->write testing prompts.
 
 ## Testing
 - 21 transitions in transition-index.json (T-01 through T-21)
 - Tests parse routes_session.py (not main.py) for ZIP structure
 - Run: pytest tests/ -v --tb=short --ignore=tests/test_mcp_stdio.py
-- Circular test: scripts/run_circular_test.py (3-iteration cold→warm→hot)
+- Circular test: scripts/run_circular_test.py (3-iteration cold->warm->hot)
 
 ## Key Files for Context Strategies
-- `api/explore_probe.py` — LLM prompt and per-function agent loop
-- `api/explore_prompts.py` — system message builders
-- `api/explore_gap.py` — gap resolution second-pass probing
+- `api/pipeline/s02_probe/probe_loop.py` — LLM prompt and per-function agent loop
+- `api/pipeline/prompts.py` — system message builders
+- `api/pipeline/s06_gaps/gap_resolution.py` — gap resolution second-pass probing
+- `api/pipeline/checkpoint.py` — checkpoint system for resumable focused runs
 - `docs/architecture/COLLECTIVE-ARCHITECTURE.md` — macro/micro coordinator design
 - `docs/architecture/PIPELINE-PARAMETERS.md` — all configurable parameters
+- `docs/architecture/PIPELINE-RESTRUCTURE-PLAN.md` — restructure plan
 
 ## Azure / Cost
 - Container Apps: min-replicas 0 (scale to zero when idle)
