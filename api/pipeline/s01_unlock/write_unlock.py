@@ -210,10 +210,20 @@ def _build_write_test_args(
                     p = {"name": p, "type": "string"}
                 pname = p.get("name", "arg")
                 ptype = (p.get("type") or "").lower()
-                if _re.search(r"id|account|customer|order", pname, _re.I):
+                is_ptr = "*" in ptype
+                is_out_ptr = is_ptr and (
+                    p.get("direction") == "out"
+                    or "undefined" in ptype
+                    or _re.search(r"out|result|receipt|buf", pname, _re.I)
+                )
+                if is_out_ptr and not _re.search(r"id|account|customer|name", pname, _re.I):
+                    pass  # leave absent → bridge allocates output buffer
+                elif _re.search(r"id|account|customer|order", pname, _re.I):
                     args[pname] = id_val
                 elif _re.search(r"amount|cents|points|value|price", pname, _re.I):
                     args[pname] = 100
+                elif is_ptr and ("byte" in ptype or "char" in ptype):
+                    args[pname] = id_val
                 elif "int" in ptype or "dword" in ptype or "long" in ptype:
                     args[pname] = 1
                 elif "char" in ptype or "str" in ptype:

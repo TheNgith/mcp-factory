@@ -2296,6 +2296,8 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
         _run_phase_3_probe_loop(ctx)
 
+        _set_explore_status(job_id, ctx.total, ctx.total, "Post-probe: sentinel recalibration…")
+
         # Q16 Task 4: Stage-boundary re-calibration — scan probe log for high-bit
         # return codes observed during probing that weren't in the initial sentinel table.
         try:
@@ -2343,13 +2345,21 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                         # Q16§5: re-probe write-unlock if new sentinel codes explain
                         # why it was failing (e.g. a code meant "not initialized"
                         # and we now know the right init args).
+                        # Capped at 120s to prevent blocking the post-probe stages.
                         if not ctx.unlock_result.get("unlocked"):
                             logger.info("[%s] stage-boundary: re-probing write-unlock "
                                         "with %d new sentinel codes",
                                         ctx.job_id, len(boundary_resolved))
-                            ctx.unlock_result = _probe_write_unlock(
-                                ctx.invocables, ctx.dll_strings, ctx.vocab,
-                            )
+                            import concurrent.futures as _cf
+                            with _cf.ThreadPoolExecutor(max_workers=1) as _tp:
+                                _fut = _tp.submit(_probe_write_unlock,
+                                                  ctx.invocables, ctx.dll_strings, ctx.vocab)
+                                try:
+                                    ctx.unlock_result = _fut.result(timeout=120)
+                                except _cf.TimeoutError:
+                                    logger.warning("[%s] stage-boundary: write-unlock re-probe "
+                                                   "timed out after 120s", ctx.job_id)
+                                    _fut.cancel()
                             if ctx.unlock_result.get("unlocked"):
                                 ctx.write_unlock_block = (
                                     "\nWRITE MODE ACTIVE (resolved after sentinel recalibration): "
@@ -2377,6 +2387,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         mark_stage_complete(_checkpoint, "s02_probe")
         save_checkpoint(_checkpoint)
 
+        _set_explore_status(job_id, ctx.total, ctx.total, "S-03: Reconciliation + MC-3…")
         _run_phase_4_reconcile(ctx)
         _mc3_post_reconcile(ctx)
         _run_phase_5_sentinel_catalog(ctx)
@@ -2387,6 +2398,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
         save_checkpoint(_checkpoint)
 
         if not _cancel_requested(job_id):
+            _set_explore_status(job_id, ctx.total, ctx.total, "S-04: Synthesis + MC-4…")
             report = _run_phase_6_synthesize(ctx)
             _mc4_post_synthesis(ctx)
 
@@ -2395,6 +2407,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
             save_checkpoint(_checkpoint)
 
             if report:
+                _set_explore_status(job_id, ctx.total, ctx.total, "S-05: Backfill + verification + MC-5…")
                 _run_phase_7_backfill(ctx, report)
                 _run_phase_7b_verify_enrichment(ctx)
                 _mc5_post_verification(ctx)
@@ -2405,6 +2418,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 save_checkpoint(_checkpoint)
 
                 if not _cancel_requested(job_id):
+                    _set_explore_status(job_id, ctx.total, ctx.total, "S-06: Gap resolution + MC-6…")
                     _run_phase_8_gap_resolution(ctx)
                     _mc6_post_gap_resolution(ctx)
 
@@ -2415,6 +2429,7 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
 
                     _run_phase_9_behavioral_spec(ctx, report)
 
+        _set_explore_status(job_id, ctx.total, ctx.total, "S-07: Harmonize + finalize…")
         _run_phase_10_harmonize(ctx)
         _run_finalize(ctx)
 
