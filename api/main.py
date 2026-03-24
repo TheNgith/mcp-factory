@@ -567,7 +567,7 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
 
     if not invocables:
         # Load from in-memory registry (populated by /api/generate)
-        from api.storage import _JOB_INVOCABLE_MAPS
+        from api.storage import _JOB_INVOCABLE_MAPS, _register_invocables
         inv_map = _JOB_INVOCABLE_MAPS.get(job_id)
         if not inv_map:
             # Try blob
@@ -576,6 +576,14 @@ async def explore_job(job_id: str, body: dict[str, Any] = None):
                 inv_map = json.loads(raw)
             except Exception:
                 inv_map = None
+
+        if not inv_map:
+            # Fallback: extract from job status result (set by /api/analyze)
+            _status = _get_job_status(job_id) or {}
+            _result_invocables = (_status.get("result") or {}).get("invocables")
+            if _result_invocables:
+                inv_map = {inv["name"]: inv for inv in _result_invocables}
+                _register_invocables(job_id, _result_invocables)
 
         if not inv_map:
             raise HTTPException(
