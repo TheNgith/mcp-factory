@@ -198,15 +198,18 @@ def _is_true_output_param(p: dict) -> bool:
     Ghidra marks ALL pointer params as direction="out", but byte*/char*
     are almost always INPUT strings (customer IDs, unlock codes, etc.).
     Only undefined*/int*/uint*/dword* pointers are true output buffers.
+
+    For non-Ghidra schemas (no pointer type), direction="out" is trusted.
     """
     direction = str(p.get("direction") or "in").lower()
     if direction != "out":
         return False
     ptype = str(p.get("type") or "").lower()
+    # No pointer indicator — trust the explicit direction="out" label.
     if "*" not in ptype:
-        return False
+        return True
+    # Has pointer type — override Ghidra's mislabeling of string inputs.
     base = ptype.replace("const ", "").strip().rstrip(" *")
-    # byte* and char* are input strings, not output buffers
     if base in ("byte", "char", "string", "str"):
         return False
     return True
