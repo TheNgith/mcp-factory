@@ -330,6 +330,9 @@ async def session_snapshot(job_id: str):
             "run_set_id": status.get("run_set_id"),
             "coordinator_cycle": status.get("coordinator_cycle"),
             "playbook_step": status.get("playbook_step"),
+            "checkpoint_id": (status.get("explore_runtime") or {}).get("checkpoint_id"),
+            "focus_functions": (status.get("explore_runtime") or {}).get("focus_functions"),
+            "skip_to_stage": (status.get("explore_runtime") or {}).get("skip_to_stage"),
         }
         if not _try_blob(f"{job_id}/session-meta.json"):
             zf.writestr("session-meta.json", json.dumps(meta, indent=2))
@@ -383,6 +386,58 @@ async def session_snapshot(job_id: str):
                 f"{job_id}/winning_init_sequence.json")
         _zwrite(zf, "evidence/mc-decisions/verification-report.json",
                 f"{job_id}/verification-report.json")
+
+        # ── Reasoning artifacts (probe loop decision trail) ───────────────
+        _zwrite(zf, "evidence/stage-00-calibrate/sentinel-calibration-decisions.json",
+                f"{job_id}/evidence/stage-00-calibrate/sentinel-calibration-decisions.json")
+        _zwrite(zf, "evidence/stage-01-pre-probe/probe-vocab-snapshot.json",
+                f"{job_id}/evidence/stage-01-pre-probe/probe-vocab-snapshot.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/param-rename-decisions.json",
+                f"{job_id}/evidence/stage-02-probe-loop/param-rename-decisions.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-round-reasoning.json",
+                f"{job_id}/evidence/stage-02-probe-loop/probe-round-reasoning.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-stop-reasons.json",
+                f"{job_id}/evidence/stage-02-probe-loop/probe-stop-reasons.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-strategy-summary.json",
+                f"{job_id}/evidence/stage-02-probe-loop/probe-strategy-summary.json")
+        _zwrite(zf, "evidence/stage-02-probe-loop/probe-user-message-sample.txt",
+                f"{job_id}/probe_user_message_sample.txt")
+
+        # ── Synthesis reasoning ───────────────────────────────────────────
+        _zwrite(zf, "evidence/stage-04-synthesis/synthesis-input-snapshot.json",
+                f"{job_id}/evidence/stage-04-synthesis/synthesis-input-snapshot.json")
+        _zwrite(zf, "evidence/stage-04-synthesis/synthesis-coverage-check.json",
+                f"{job_id}/evidence/stage-04-synthesis/synthesis-coverage-check.json")
+
+        # ── Backfill reasoning ────────────────────────────────────────────
+        _zwrite(zf, "evidence/stage-06-backfill/backfill-decision-log.json",
+                f"{job_id}/evidence/stage-06-backfill/backfill-decision-log.json")
+
+        # ── Gap resolution reasoning ──────────────────────────────────────
+        _zwrite(zf, "evidence/stage-05-gap-resolution/expert-answer-interpretation.json",
+                f"{job_id}/evidence/stage-05-gap-resolution/expert-answer-interpretation.json")
+        _zwrite(zf, "evidence/stage-05-gap-resolution/mini-session-reasoning.json",
+                f"{job_id}/evidence/stage-05-gap-resolution/mini-session-reasoning.json")
+
+        # ── Checkpoints (pipeline resumability data) ──────────────────────
+        _zwrite(zf, "checkpoints/latest.json",
+                f"{job_id}/checkpoints/latest.json")
+        _zwrite(zf, "checkpoints/s00_setup.json",
+                f"{job_id}/checkpoints/s00_setup.json")
+        _zwrite(zf, "checkpoints/s01_unlock.json",
+                f"{job_id}/checkpoints/s01_unlock.json")
+        _zwrite(zf, "checkpoints/s02_probe.json",
+                f"{job_id}/checkpoints/s02_probe.json")
+        _zwrite(zf, "checkpoints/s03_reconcile.json",
+                f"{job_id}/checkpoints/s03_reconcile.json")
+        _zwrite(zf, "checkpoints/s04_synthesis.json",
+                f"{job_id}/checkpoints/s04_synthesis.json")
+        _zwrite(zf, "checkpoints/s05_enrichment.json",
+                f"{job_id}/checkpoints/s05_enrichment.json")
+        _zwrite(zf, "checkpoints/s06_gaps.json",
+                f"{job_id}/checkpoints/s06_gaps.json")
+        _zwrite(zf, "checkpoints/s07_finalize.json",
+                f"{job_id}/checkpoints/s07_finalize.json")
 
     zbuf.seek(0)
     return StreamingResponse(
