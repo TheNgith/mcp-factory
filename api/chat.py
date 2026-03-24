@@ -397,7 +397,13 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     "type": _json_type,
                     "description": _p.get("description") or _p.get("type", "string"),
                 }
-                if _p.get("direction", "in") != "out":
+                _pt_base = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+                _is_true_out = (
+                    _p.get("direction", "in") == "out"
+                    and "*" in _p.get("type", "")
+                    and _pt_base not in ("byte", "char", "string", "str")
+                )
+                if not _is_true_out:
                     _required.append(_pname)
             _safe = _re_chat.sub(r"[^a-zA-Z0-9_.\-]", "_", _inv["name"])[:64]
             _desc = _inv.get("doc") or _inv.get("description") or _inv["name"]

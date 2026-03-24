@@ -173,7 +173,14 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             }
             # Only "in" direction params go in required; "out" buffers are
             # allocated by the executor, not passed by the caller.
-            if p.get("direction", "in") != "out":
+            # byte*/char* are always input strings even when Ghidra says "out".
+            _ptype_base = p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
+            _is_true_out = (
+                p.get("direction", "in") == "out"
+                and "*" in p.get("type", "")
+                and _ptype_base not in ("byte", "char", "string", "str")
+            )
+            if not _is_true_out:
                 required.append(pname)
 
         # Discovery pipeline uses `description`; older/generated schemas use

@@ -192,6 +192,26 @@ def _ranked_param_candidates(param_name: str, json_type: str, description: str, 
     return deduped
 
 
+def _is_true_output_param(p: dict) -> bool:
+    """True only for parameters that are genuinely output-only buffers.
+
+    Ghidra marks ALL pointer params as direction="out", but byte*/char*
+    are almost always INPUT strings (customer IDs, unlock codes, etc.).
+    Only undefined*/int*/uint*/dword* pointers are true output buffers.
+    """
+    direction = str(p.get("direction") or "in").lower()
+    if direction != "out":
+        return False
+    ptype = str(p.get("type") or "").lower()
+    if "*" not in ptype:
+        return False
+    base = ptype.replace("const ", "").strip().rstrip(" *")
+    # byte* and char* are input strings, not output buffers
+    if base in ("byte", "char", "string", "str"):
+        return False
+    return True
+
+
 def _build_ranked_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) -> tuple[dict, dict]:
     """Build deterministic fallback args plus per-parameter selection metadata."""
     args: dict = {}
@@ -200,8 +220,7 @@ def _build_ranked_fallback_probe_args(inv: dict, vocab: dict, attempt: int = 0) 
         if isinstance(p, str):
             p = {"name": p, "json_type": "string"}
         pname = str(p.get("name") or "")
-        direction = str(p.get("direction") or "in").lower()
-        if direction == "out":
+        if _is_true_output_param(p):
             continue
         jtype = str(p.get("json_type") or "string")
         pdesc = str(p.get("description") or p.get("type") or "")
@@ -375,7 +394,7 @@ def _build_tool_schemas(invocables: list[dict]) -> list[dict]:
                 "type": json_type,
                 "description": p.get("description") or p.get("type", "string"),
             }
-            if p.get("direction", "in") != "out":
+            if not _is_true_output_param(p):
                 required.append(pname)
         safe_name = _re.sub(r"[^a-zA-Z0-9_.\-]", "_", inv["name"])[:64]
         desc = inv.get("doc") or inv.get("description") or inv.get("signature") or inv["name"]

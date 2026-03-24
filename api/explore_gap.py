@@ -181,7 +181,8 @@ def _attempt_gap_resolution(
                             _p = _p_lookup.get(_k, {})
                             _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
                             _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                            if not _is_out and _p.get("direction", "in") != "out":
+                            _pt_is_string = _pt in ("byte", "char", "string", "str")
+                            if not _is_out and (not _p.get("direction") == "out" or _pt_is_string):
                                 _clean[_k] = _v
                         _observed_successes.append(_clean)
 
@@ -444,7 +445,8 @@ def _run_gap_answer_mini_sessions(job_id: str, invocables: list[dict], max_mini_
                                 _p = _p_lookup.get(_k, {})
                                 _pt = _p.get("type", "").lower().replace("const ", "").strip().rstrip(" *")
                                 _is_out = "*" in _p.get("type", "") and _pt in _out_bases
-                                if not _is_out and _p.get("direction", "in") != "out":
+                                _pt_is_string = _pt in ("byte", "char", "string", "str")
+                                if not _is_out and (not _p.get("direction") == "out" or _pt_is_string):
                                     _clean[_k] = _v
                             _observed_successes.append(_clean)
 
