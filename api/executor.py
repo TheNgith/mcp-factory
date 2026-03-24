@@ -203,9 +203,12 @@ def _execute_dll(inv: dict, execution: dict, args: dict, extra_sentinels: dict |
                         if isinstance(val, int):
                             c_args.append(ctypes.c_int64(val))
                         else:
-                            c_args.append(ctypes.c_char_p(str(val).encode()))
+                            # latin-1 preserves byte values 0-255 exactly (1:1 mapping).
+                            # UTF-8 would multi-byte-encode chars >=128, corrupting
+                            # the raw byte sequence DLLs expect for byte* params.
+                            c_args.append(ctypes.c_char_p(str(val).encode("latin-1", errors="replace")))
                     elif atype == ctypes.c_char_p:
-                        c_args.append(ctypes.c_char_p(str(val).encode()))
+                        c_args.append(ctypes.c_char_p(str(val).encode("latin-1", errors="replace")))
                     else:
                         try:
                             c_args.append(atype(int(val)))
@@ -221,7 +224,7 @@ def _execute_dll(inv: dict, execution: dict, args: dict, extra_sentinels: dict |
                 elif isinstance(v, float):
                     c_args.append(ctypes.c_double(v))
                 elif isinstance(v, str):
-                    c_args.append(ctypes.c_char_p(v.encode()))
+                    c_args.append(ctypes.c_char_p(v.encode("latin-1", errors="replace")))
 
         _t0_call = time.perf_counter()
         result = fn(*c_args)

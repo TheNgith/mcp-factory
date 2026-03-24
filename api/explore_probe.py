@@ -358,7 +358,10 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                     or "too many" in str(exc).lower()
                 )
                 if _is_rate_limit and _retry < 3:
-                    _backoff = (2 ** _retry) * 5  # 5s, 10s, 20s
+                    # Respect Retry-After header if present; otherwise exponential backoff
+                    _retry_after = getattr(exc, "headers", {})
+                    _ra_val = (_retry_after or {}).get("retry-after") or (_retry_after or {}).get("Retry-After")
+                    _backoff = int(float(_ra_val)) + 1 if _ra_val else (2 ** _retry) * 8  # 8s, 16s, 32s
                     logger.info(
                         "[%s] %s: 429 rate limit, retry %d/3 after %ds",
                         ctx.job_id, fn_name, _retry + 1, _backoff,
@@ -694,6 +697,25 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
 
     if _is_write_fn and not _observed_successes:
         _run_deterministic_fallback("write function fallback coverage", 2)
+
+    # Safety net: scan probe log for "Returned: 0" from the target function
+    # that _observed_successes might have missed (e.g., 429 killed the round
+    # between the tool execution and the success tracking).
+    if not _observed_successes:
+        for _pe in _fn_probe_log:
+            if _pe.get("tool") != fn_name:
+                continue
+            _rex = _pe.get("result_excerpt") or ""
+            _rm = _re.search(r"Returned:\s*0(?:\s|,|$)", _rex)
+            if _rm:
+                _recovered_args = _pe.get("args") or {}
+                _observed_successes.append(_recovered_args)
+                _best_raw_result = _rex
+                logger.info(
+                    "[%s] explore_worker: recovered success for %s from probe log (429 safety net)",
+                    ctx.job_id, fn_name,
+                )
+                break
 
     # ── Force record_finding if LLM never called it ──────────────────────────
 
@@ -1218,15 +1240,23 @@ def _run_phase_3_probe_loop(ctx: ExploreContext) -> None:
     except Exception as _mce:
         logger.debug("[%s] phase3: model context save failed: %s", ctx.job_id, _mce)
 
+    # Small inter-function delay to spread LLM calls and avoid 429 bursts.
+    # Write functions get longer delays since they use more LLM rounds.
+    _INTER_FN_DELAY = 1.5  # seconds between non-write functions
+    _WRITE_FN_DELAY = 3.0  # seconds between write functions
+
     if ctx.runtime.concurrency > 1:
         logger.info("[%s] phase3: running %d functions with concurrency=%d",
                     ctx.job_id, len(ctx.invocables), ctx.runtime.concurrency)
         with _TPE(max_workers=ctx.runtime.concurrency) as _pool:
             list(_pool.map(lambda inv: _explore_one(inv, ctx), ctx.invocables))
     else:
-        for inv in ctx.invocables:
+        for _fn_idx, inv in enumerate(ctx.invocables):
             if _cancel_requested(ctx.job_id):
                 break
+            if _fn_idx > 0:
+                _delay = _WRITE_FN_DELAY if _WRITE_FN_RE.search(inv["name"]) else _INTER_FN_DELAY
+                time.sleep(_delay)
             _explore_one(inv, ctx)
 
 
