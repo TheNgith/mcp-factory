@@ -321,70 +321,106 @@ def _analyze_decompiled_unlock_patterns(invocables: list[dict]) -> dict:
 
 
 def _generate_xor_codes(target: int, max_results: int = 10) -> list[str]:
-    """Generate byte strings whose bytes XOR to the target value.
+    """Generate Python strings whose UTF-8 encoded bytes XOR to *target*.
 
-    Uses the full 1-255 byte range (excluding 0x00 which would null-terminate
-    a C string). Returns latin-1 decoded strings so they round-trip through
-    the executor's string→bytes path without data loss.
+    The DLL receives a C string via ctypes. The executor path is:
+      Python str → str.encode("utf-8") → ctypes c_char_p → DLL byte*
+    The DLL then XORs each byte of that C string (via lstrlenA).
 
-    Why full byte range: for targets with bit 7 set (e.g. 0xA5 = 165),
-    printable ASCII (all < 128) can never XOR to a value >= 128 because
-    XOR preserves the bit width. We MUST use bytes 128-255.
+    For targets < 128: ASCII-only codes work (same in UTF-8 and latin-1).
+    For targets >= 128 (e.g. 0xA5): we use 3-byte UTF-8 characters whose
+    encoded bytes contribute high-bit XOR values that ASCII cannot reach.
     """
     if target >= 256 or target == 0:
         return []
 
     codes: list[str] = []
 
-    # Strategy 1: 4-byte codes with 3 fixed printable bytes + 1 computed byte
-    # Pick 3 bytes that XOR together, then set the 4th to hit the target.
-    prefixes = [
-        b"AAA", b"abc", b"123", b"XYZ", b"key",
-        b"COD", b"PAS", b"UNL", b"adm", b"XXX",
-    ]
-    for prefix in prefixes:
-        xor_of_prefix = 0
-        for b in prefix:
-            xor_of_prefix ^= b
-        needed = xor_of_prefix ^ target
-        if needed == 0:
-            needed = target  # avoid null byte; add one more byte pair instead
-            candidate = prefix + bytes([target, 0x41, 0x41])  # extra pair cancels
-        else:
-            candidate = prefix + bytes([needed & 0xFF])
-        # Verify: no null bytes (would truncate C string)
-        if 0 not in candidate and len(candidate) > 3:
-            check = 0
-            for b in candidate:
-                check ^= b
-            if check == target:
-                codes.append(candidate.decode("latin-1"))
-        if len(codes) >= max_results:
-            break
-
-    # Strategy 2: 5-byte codes using two computed bytes for more diversity
-    if len(codes) < max_results:
-        for a in [0x41, 0x42, 0x61, 0x31]:
-            for b in [0x43, 0x44, 0x62, 0x32]:
-                for c in [0x45, 0x46, 0x63, 0x33]:
-                    needed = a ^ b ^ c ^ target
-                    if needed == 0:
-                        continue
-                    candidate = bytes([a, b, c, needed & 0xFF])
-                    if 0 not in candidate and len(candidate) > 3:
-                        check = 0
-                        for byte in candidate:
-                            check ^= byte
-                        if check == target:
-                            codes.append(candidate.decode("latin-1"))
-                    if len(codes) >= max_results:
-                        break
-                if len(codes) >= max_results:
-                    break
+    if target < 128:
+        # Pure ASCII: 3 known bytes + 1 computed byte
+        prefixes = [b"AAA", b"abc", b"123", b"XYZ", b"key",
+                    b"COD", b"PAS", b"UNL", b"adm", b"XXX"]
+        for prefix in prefixes:
+            xor_acc = 0
+            for b in prefix:
+                xor_acc ^= b
+            needed = xor_acc ^ target
+            if needed == 0 or needed > 127:
+                continue
+            candidate = prefix + bytes([needed])
+            if 0 not in candidate:
+                codes.append(candidate.decode("ascii"))
             if len(codes) >= max_results:
                 break
+        return list(dict.fromkeys(codes))
 
-    return list(dict.fromkeys(codes))
+    # Target >= 128: use 3-byte UTF-8 characters (U+0800..U+FFFF).
+    # A 3-byte UTF-8 char encodes as [0xE0|h, 0x80|m, 0x80|l]
+    # whose byte XOR is always 0xC0 | (bits from h,m,l) with bit7=1, bit6=1.
+    # Adding an ASCII prefix byte can flip bit 6 to reach targets where bit6=0.
+    #
+    # We solve: prefix_xor ^ utf8_byte1 ^ utf8_byte2 ^ utf8_byte3 = target
+    # by brute-forcing over valid codepoints.
+
+    _found: set[str] = set()
+
+    for prefix_byte in [0x41, 0x42, 0x43, 0x61, 0x62, 0x63, 0x31, 0x32, 0x33, 0x58]:
+        if len(_found) >= max_results:
+            break
+        for cp in range(0x0800, 0x10000):
+            if len(_found) >= max_results:
+                break
+            try:
+                s = chr(cp)
+                utf8 = s.encode("utf-8")
+            except (ValueError, UnicodeEncodeError):
+                continue
+            if len(utf8) != 3:
+                continue
+            xor_val = prefix_byte
+            for b in utf8:
+                xor_val ^= b
+            if xor_val == target:
+                code = chr(prefix_byte) + s
+                if code not in _found:
+                    # Verify: no null bytes in UTF-8 encoding
+                    full_utf8 = code.encode("utf-8")
+                    if 0 not in full_utf8:
+                        _found.add(code)
+            if len(_found) >= max_results:
+                break
+
+    codes = list(_found)
+
+    # Fallback: also try 2 ASCII + 1 three-byte UTF-8
+    if len(codes) < max_results:
+        for p1 in [0x41, 0x61, 0x31]:
+            if len(codes) >= max_results:
+                break
+            for p2 in [0x42, 0x62, 0x32]:
+                if len(codes) >= max_results:
+                    break
+                prefix_xor = p1 ^ p2
+                for cp in range(0x0800, 0x10000):
+                    if len(codes) >= max_results:
+                        break
+                    try:
+                        s = chr(cp)
+                        utf8 = s.encode("utf-8")
+                    except (ValueError, UnicodeEncodeError):
+                        continue
+                    if len(utf8) != 3:
+                        continue
+                    xor_val = prefix_xor
+                    for b in utf8:
+                        xor_val ^= b
+                    if xor_val == target:
+                        code = chr(p1) + chr(p2) + s
+                        full_utf8 = code.encode("utf-8")
+                        if 0 not in full_utf8 and code not in codes:
+                            codes.append(code)
+
+    return codes[:max_results]
 
 
 def _probe_write_unlock(invocables: list[dict], dll_strings: dict,
