@@ -489,12 +489,11 @@ async def analyze(
 ):
     _check_auth(x_bridge_key)
 
+    # Flush any cached DLL handles so the file can be overwritten on disk.
+    _flush_dll_cache()
+
     tmp_dir: Path | None = None
 
-    # Persistent upload directory — binaries written here survive after analysis
-    # so that /execute calls can still load them via ctypes/subprocess.
-    # Using a fixed path (not tempfile) means the dll_path stored in invocables
-    # remains valid across the full analyze → chat → execute lifecycle.
     _UPLOAD_DIR = Path(r"C:\mcp-factory\uploads")
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1496,6 +1495,46 @@ def _execute_sql_bridge(execution: dict, name: str, args: dict) -> str:
     )
 
 
+_DLL_CACHE: dict[str, "ctypes.WinDLL | ctypes.CDLL"] = {}
+_DLL_CACHE_LOCK = threading.Lock()
+
+
+def _get_cached_dll(dll_path: str, calling_convention: str = "") -> "ctypes.WinDLL | ctypes.CDLL":
+    """Return a cached DLL handle, loading it on first access.
+
+    Keeps the DLL loaded across /execute calls so in-memory state (customer
+    records, lock flags, earned points) persists across a pipeline session.
+    The cache is cleared when /analyze is called, which needs to overwrite
+    the DLL file on disk.
+    """
+    import ctypes
+    with _DLL_CACHE_LOCK:
+        lib = _DLL_CACHE.get(dll_path)
+        if lib is not None:
+            return lib
+        _cc = calling_convention.lower()
+        if _cc in ("cdecl", "__cdecl", "c"):
+            lib = ctypes.CDLL(dll_path)
+        else:
+            lib = ctypes.WinDLL(dll_path)
+        _DLL_CACHE[dll_path] = lib
+        logger.info("DLL loaded and cached: %s (convention=%s)", dll_path, _cc or "stdcall")
+        return lib
+
+
+def _flush_dll_cache() -> None:
+    """Unload all cached DLLs. Called before /analyze overwrites DLL files."""
+    import ctypes
+    with _DLL_CACHE_LOCK:
+        for path, lib in list(_DLL_CACHE.items()):
+            try:
+                ctypes.windll.kernel32.FreeLibrary(lib._handle)
+                logger.info("DLL cache: unloaded %s", path)
+            except Exception:
+                pass
+        _DLL_CACHE.clear()
+
+
 def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
     """Call a native DLL function via ctypes on this Windows VM."""
     import ctypes
@@ -1589,13 +1628,8 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
 
     lib = None
     try:
-        # Choose calling convention: cdecl functions must use CDLL; stdcall uses WinDLL.
-        # Using the wrong convention on x86 32-bit corrupts the stack and returns garbage.
-        _cc = execution.get("calling_convention", "").lower()
-        if _cc in ("cdecl", "__cdecl", "c"):
-            lib = ctypes.CDLL(dll_path)
-        else:
-            lib = ctypes.WinDLL(dll_path)
+        _cc = execution.get("calling_convention", "")
+        lib = _get_cached_dll(dll_path, _cc)
         fn  = getattr(lib, func_name)
         fn.restype = restype
 
@@ -1825,16 +1859,6 @@ def _execute_dll_bridge(inv: dict, execution: dict, args: dict) -> str:
         return _ret_tag
     except Exception as exc:
         return f"DLL call error: {exc}"
-    finally:
-        # Unload the DLL so the file is not held locked between execute calls.
-        # Without this, a subsequent /analyze call that tries to overwrite the
-        # same file in C:\mcp-factory\uploads\ would get ERROR_SHARING_VIOLATION
-        # and the bridge would return 400, preventing Ghidra from re-analyzing.
-        if lib is not None:
-            try:
-                ctypes.windll.kernel32.FreeLibrary(lib._handle)
-            except Exception:
-                pass
 
 
 @app.post("/execute")
@@ -1897,6 +1921,14 @@ async def execute(
     else:  # cli / subprocess / anything else
         result = await loop.run_in_executor(None, _execute_cli_bridge, execution, name, args)
     return JSONResponse({"result": result})
+
+
+@app.post("/flush-dll-cache")
+async def flush_dll_cache(x_bridge_key: str = Header(default="")):
+    """Unload all cached DLLs so state resets for the next pipeline run."""
+    _check_auth(x_bridge_key)
+    _flush_dll_cache()
+    return {"status": "flushed", "note": "All cached DLLs unloaded; next call will reload fresh."}
 
 
 @app.get("/health")

@@ -2191,6 +2191,21 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
     logger.info("[%s] explore_worker: starting, %d functions to explore",
                 job_id, len(invocables))
 
+    # Flush the bridge DLL cache so each pipeline run starts from clean state.
+    try:
+        from api.executor import _call_execute_bridge
+        from api.config import GUI_BRIDGE_URL, GUI_BRIDGE_SECRET
+        if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
+            import httpx
+            _br = httpx.Client(base_url=GUI_BRIDGE_URL,
+                               headers={"X-Bridge-Key": GUI_BRIDGE_SECRET},
+                               timeout=5.0)
+            _br.post("/flush-dll-cache")
+            _br.close()
+            logger.info("[%s] bridge DLL cache flushed for fresh session", job_id)
+    except Exception as _flush_exc:
+        logger.debug("[%s] bridge DLL cache flush failed (non-fatal): %s", job_id, _flush_exc)
+
     try:
         ctx = _build_explore_context(job_id, invocables)
         _set_explore_status(job_id, 0, ctx.total, "Starting exploration…")
