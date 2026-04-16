@@ -31,6 +31,13 @@ from flask import Flask, request, jsonify, send_from_directory
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# Vendored error enrichment (copied next to this file at generation time).
+try:
+    from error_enrichment import build_error_payload as _build_error_payload
+except Exception:
+    def _build_error_payload(*_a, **_kw):
+        return None
+
 # Always load .env from the server's own directory, regardless of cwd
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 # openai 2.x reads OPENAI_BASE_URL directly from os.environ;
@@ -45,6 +52,45 @@ app = Flask(__name__, static_folder="static")
 INVOCABLES = json.loads(r"""__INVOCABLES_JSON__""")
 
 INVOCABLE_MAP = {inv["name"]: inv for inv in INVOCABLES}
+
+
+def _format_error(
+    function_name: str,
+    raw_result=None,
+    trace=None,
+    exception=None,
+    inv=None,
+) -> tuple[str, dict | None]:
+    """Build a structured error payload + human/JSON composite string.
+
+    The returned string is safe to return directly to a plain-text MCP client
+    (it contains the human paragraph followed by a ```json``` code block with
+    the full payload), while JSON-parsing clients can extract the embedded
+    block.  Also returned as the machine-readable dict so /invoke can ship it
+    in a separate field.
+    """
+    findings = []
+    if isinstance(inv, dict):
+        _summary = inv.get("findings_summary") or {}
+        findings = [
+            {
+                "working_call": entry.get("args"),
+                "confidence": entry.get("confidence"),
+                "recorded_at": entry.get("recorded_at"),
+                "status": "success",
+            }
+            for entry in (_summary.get("working_calls") or [])
+        ]
+    payload = _build_error_payload(
+        function_name, raw_result, trace, exception, findings, None,
+    )
+    if not payload:
+        # The enrichment call decided there was no error; surface whatever the
+        # caller passed through unchanged.
+        return (str(raw_result if raw_result is not None else exception or ""), None)
+    human = payload.get("human") or f"{function_name} failed."
+    block = "```json\n" + json.dumps(payload, indent=2, default=str) + "\n```"
+    return f"{human}\n\n{block}", payload
 
 
 _C_TO_JSON_TYPE = {
@@ -157,18 +203,34 @@ def _retrieve_tools(user_message: str, client, k: int = _TOOL_EMBED_K) -> list:
 
 # ── Execution helpers ───────────────────────────────────────────────────────
 
-def _execute_tool(name: str, args: dict) -> str:
+def _execute_tool(name: str, args: dict) -> tuple[str, dict | None]:
+    """Dispatch a single tool call.  Returns (result_str, error | None)."""
     inv = INVOCABLE_MAP.get(name)
     if not inv:
-        return f"Unknown tool: {name}"
+        return _format_error(
+            name, raw_result=None,
+            trace={"backend": "unknown_tool"},
+            exception=f"Unknown tool: {name}",
+            inv=None,
+        )
     # Support both flat {"execution": {...}} and rich MCP {"mcp": {"execution": {...}}}
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method = execution.get("method", "")
     if method == "dll_import":
         return _execute_dll(inv, execution, args)
     if method == "gui_action":
-        return _execute_gui(execution, name, args)
-    return _execute_cli(execution, name, args)
+        # _execute_gui returns a plain string; classify post-hoc so callers
+        # still get the (str, error|None) contract.
+        _gui_result = _execute_gui(execution, name, args)
+        _lower = _gui_result.lower()
+        if " error" in _lower or _lower.startswith(("error", "unknown gui", "no ", "could not")):
+            return _format_error(
+                name, raw_result=None,
+                trace={"backend": "gui", "exception": _gui_result[:200]},
+                exception=_gui_result, inv=inv,
+            )
+        return _gui_result, None
+    return _execute_cli(execution, name, args, inv)
 
 
 # C type map used by _execute_dll
@@ -225,7 +287,7 @@ def _resolve_dll_path(raw: str) -> str:
     return raw  # best-effort; let ctypes give the real error
 
 
-def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
+def _execute_dll(inv: dict, execution: dict, args: dict) -> tuple[str, dict | None]:
     dll_path  = _resolve_dll_path(execution.get("dll_path", ""))
     func_name = execution.get("function_name", "")
 
@@ -287,20 +349,42 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
         # Decode bytes result from char* functions
         if restype == ctypes.c_char_p:
             if isinstance(result, bytes):
-                return f"Returned: {result.decode(errors='replace')}"
-        return f"Returned: {result}"
+                return f"Returned: {result.decode(errors='replace')}", None
+        # Let the enrichment helper classify numeric results.  Returns (str, None)
+        # if the code is not a known failure, or (err_str, payload) if it is.
+        _raw_str = f"Returned: {result}"
+        _err_str, _payload = _format_error(
+            func_name or inv.get("name", ""),
+            raw_result=result,
+            trace={"backend": "dll", "raw_result": result, "exception": None},
+            exception=None,
+            inv=inv,
+        )
+        if _payload:
+            return _err_str, _payload
+        return _raw_str, None
     except Exception as exc:
-        return f"DLL call error: {exc}"
+        return _format_error(
+            func_name or inv.get("name", ""),
+            raw_result=None,
+            trace={"backend": "dll", "exception": str(exc)},
+            exception=str(exc),
+            inv=inv,
+        )
 
 
-def _execute_cli(execution: dict, name: str, args: dict) -> str:
+def _execute_cli(execution: dict, name: str, args: dict, inv: dict | None = None) -> tuple[str, dict | None]:
     target = (
         execution.get("executable_path")
         or execution.get("target_path")
         or execution.get("dll_path", "")
     )
     if not target:
-        return f"CLI error: no executable path configured for '{name}'"
+        return _format_error(
+            name, raw_result=None,
+            trace={"backend": "cli", "exception": "no executable path"},
+            exception="no executable path configured", inv=inv,
+        )
     # If the invocable name matches the exe stem this is a "launch the app"
     # invocable (e.g. calc, notepad).  Run it with Popen so its GUI window
     # is NOT suppressed, and don't pass the name as a spurious CLI argument.
@@ -321,9 +405,13 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
                 break
         try:
             _ensure_gui_app(target, preferred_backend=_preferred)
-            return f"Launched {_Path(target).name}"
+            return f"Launched {_Path(target).name}", None
         except Exception as exc:
-            return f"CLI error: {exc}"
+            return _format_error(
+                name, raw_result=None,
+                trace={"backend": "cli", "action": "launch", "exception": str(exc)},
+                exception=str(exc), inv=inv,
+            )
     # Standard CLI invocation: target_exe subcommand [args...]
     cmd = [target, name] + [str(v) for v in args.values()]
     # Suppress any GUI window the binary might open (Windows only).
@@ -336,9 +424,26 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
             timeout=10,
             creationflags=creation_flags,
         )
-        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+        if r.returncode == 0:
+            return r.stdout or r.stderr or f"exit_code={r.returncode}", None
+        return _format_error(
+            name, raw_result=None,
+            trace={"backend": "cli", "exit_code": r.returncode,
+                   "stderr_excerpt": (r.stderr or "")[:200], "exception": "nonzero exit"},
+            exception=f"exit_code={r.returncode}", inv=inv,
+        )
+    except subprocess.TimeoutExpired:
+        return _format_error(
+            name, raw_result=None,
+            trace={"backend": "cli", "timeout_hit": True, "exception": "TimeoutExpired"},
+            exception="TimeoutExpired", inv=inv,
+        )
     except Exception as exc:
-        return f"CLI error: {exc}"
+        return _format_error(
+            name, raw_result=None,
+            trace={"backend": "cli", "exception": str(exc)},
+            exception=str(exc), inv=inv,
+        )
 
 
 # ── GUI app state (persistent across HTTP requests) ─────────────────────────
@@ -831,8 +936,8 @@ def invoke():
     body = request.json or {}
     name = body.get("tool", "")
     args = body.get("args", {})
-    result = _execute_tool(name, args)
-    return jsonify({"result": result})
+    result, error = _execute_tool(name, args)
+    return jsonify({"result": result, "error": error})
 
 
 @app.route("/chat", methods=["POST"])
@@ -880,8 +985,11 @@ def chat():
                 fn_args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
                 fn_args = {}
-            result = _execute_tool(fn_name, fn_args)
-            tool_outputs.append({"name": fn_name, "args": fn_args, "result": result})
+            result, error = _execute_tool(fn_name, fn_args)
+            tool_outputs.append({
+                "name": fn_name, "args": fn_args,
+                "result": result, "error": error,
+            })
             tool_messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -1118,6 +1226,45 @@ openai>=1.0
 python-dotenv>=1.0
 """
 
+
+# ---------------------------------------------------------------------------
+# Vendored error-enrichment modules
+#
+# Both generated servers (Flask and MCP SDK) import build_error_payload from a
+# vendored copy of api/error_enrichment.py (which itself imports from
+# api/sentinel_codes.py).  We read those two source files at generation time
+# and strip the `api.` import prefix so the copies work standalone next to
+# mcp_server.py / server.py.  Read once at module load so generate_* functions
+# don't hit disk per-call.
+# ---------------------------------------------------------------------------
+
+def _read_vendored(rel_path: str) -> str:
+    src = os.path.join(os.path.dirname(__file__), "..", "..", rel_path)
+    src = os.path.abspath(src)
+    with open(src, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    # Drop the api. package prefix so the vendored copy imports its sibling
+    # module by bare name (the generated server sits at the import root).
+    return text.replace("from api.sentinel_codes", "from sentinel_codes")
+
+
+try:
+    ERROR_ENRICHMENT_PY = _read_vendored("api/error_enrichment.py")
+    SENTINEL_CODES_PY = _read_vendored("api/sentinel_codes.py")
+except FileNotFoundError:
+    # Fallback when generator is invoked from a packaged install without the
+    # source tree — produce minimal stubs that never crash but return None.
+    ERROR_ENRICHMENT_PY = (
+        "def build_error_payload(*a, **kw):\n    return None\n"
+    )
+    SENTINEL_CODES_PY = (
+        "SENTINEL_DEFAULTS = {}\n"
+        "COMMON_WIN32_ERRORS = {}\n"
+        "COMMON_HRESULTS = {}\n"
+        "COMMON_NTSTATUS = {}\n"
+        "def classify_common_result_code(code):\n    return None\n"
+    )
+
 # ---------------------------------------------------------------------------
 # MCP SDK server template (P1)
 # Emits a True MCP-protocol server using the official mcp Python SDK.
@@ -1157,11 +1304,37 @@ except ImportError:
     _sp.check_call([sys.executable, "-m", "pip", "install", "mcp", "-q"])
     from mcp.server.fastmcp import FastMCP  # type: ignore
 
+# Vendored error enrichment (copied next to this file at generation time).
+try:
+    from error_enrichment import build_error_payload as _build_error_payload
+except Exception:
+    def _build_error_payload(*_a, **_kw):
+        return None
+
 # ---------------------------------------------------------------------------
 # Invocable registry (injected by generator)
 # ---------------------------------------------------------------------------
 INVOCABLES = json.loads(r"""__INVOCABLES_JSON__""")
 INVOCABLE_MAP = {inv["name"]: inv for inv in INVOCABLES}
+
+
+def _format_error(function_name, raw_result=None, trace=None, exception=None, inv=None):
+    """Return a human + ```json payload``` string classifying the failure."""
+    findings = []
+    if isinstance(inv, dict):
+        _summary = inv.get("findings_summary") or {}
+        for entry in (_summary.get("working_calls") or []):
+            findings.append({
+                "working_call": entry.get("args"),
+                "confidence": entry.get("confidence"),
+                "recorded_at": entry.get("recorded_at"),
+                "status": "success",
+            })
+    payload = _build_error_payload(function_name, raw_result, trace, exception, findings, None)
+    if not payload:
+        return str(raw_result if raw_result is not None else exception or "")
+    human = payload.get("human") or f"{function_name} failed."
+    return f"{human}\n\n```json\n{json.dumps(payload, indent=2, default=str)}\n```"
 
 # ---------------------------------------------------------------------------
 # Type maps for ctypes dispatch
@@ -1239,15 +1412,37 @@ def _execute_dll(inv: dict, execution: dict, args: dict) -> str:
         result = fn(*c_args)
         if restype == ctypes.c_char_p and isinstance(result, bytes):
             return f"Returned: {result.decode(errors='replace')}"
+        # Classify numeric returns so sentinel codes reach the MCP client as
+        # human + structured JSON instead of a bare "Returned: 4294967295".
+        _payload = _build_error_payload(
+            func_name or inv.get("name", ""),
+            result,
+            {"backend": "dll", "raw_result": result, "exception": None},
+            None,
+            [],
+            None,
+        )
+        if _payload:
+            return f"{_payload['human']}\n\n```json\n{json.dumps(_payload, indent=2, default=str)}\n```"
         return f"Returned: {result}"
     except Exception as exc:
-        return f"DLL call error: {exc}"
+        return _format_error(
+            func_name or inv.get("name", ""),
+            trace={"backend": "dll", "exception": str(exc)},
+            exception=str(exc),
+            inv=inv,
+        )
 
 
-def _execute_cli(execution: dict, name: str, args: dict) -> str:
+def _execute_cli(execution: dict, name: str, args: dict, inv: dict | None = None) -> str:
     target = execution.get("executable_path") or execution.get("target_path") or execution.get("dll_path", "")
     if not target:
-        return f"CLI error: no executable path configured for '{name}'"
+        return _format_error(
+            name,
+            trace={"backend": "cli", "exception": "no executable path"},
+            exception="no executable path configured",
+            inv=inv,
+        )
     exe_stem = Path(target).stem.lower()
     if exe_stem == name.lower():
         try:
@@ -1257,14 +1452,39 @@ def _execute_cli(execution: dict, name: str, args: dict) -> str:
                 subprocess.Popen([target])
             return f"Launched {Path(target).name}"
         except Exception as exc:
-            return f"CLI error: {exc}"
+            return _format_error(
+                name,
+                trace={"backend": "cli", "action": "launch", "exception": str(exc)},
+                exception=str(exc),
+                inv=inv,
+            )
     cmd = [target, name] + [str(v) for v in args.values()]
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, creationflags=creation_flags)
-        return r.stdout or r.stderr or f"exit_code={r.returncode}"
+        if r.returncode == 0:
+            return r.stdout or r.stderr or f"exit_code={r.returncode}"
+        return _format_error(
+            name,
+            trace={"backend": "cli", "exit_code": r.returncode,
+                   "stderr_excerpt": (r.stderr or "")[:200], "exception": "nonzero exit"},
+            exception=f"exit_code={r.returncode}",
+            inv=inv,
+        )
+    except subprocess.TimeoutExpired:
+        return _format_error(
+            name,
+            trace={"backend": "cli", "timeout_hit": True, "exception": "TimeoutExpired"},
+            exception="TimeoutExpired",
+            inv=inv,
+        )
     except Exception as exc:
-        return f"CLI error: {exc}"
+        return _format_error(
+            name,
+            trace={"backend": "cli", "exception": str(exc)},
+            exception=str(exc),
+            inv=inv,
+        )
 
 
 def _execute_tool(inv: dict, args: dict) -> str:
@@ -1273,7 +1493,7 @@ def _execute_tool(inv: dict, args: dict) -> str:
     method = execution.get("method", "")
     if method == "dll_import":
         return _execute_dll(inv, execution, args)
-    return _execute_cli(execution, name, args)
+    return _execute_cli(execution, name, args, inv)
 
 
 # ---------------------------------------------------------------------------
@@ -1412,6 +1632,11 @@ def main():
         _inject(MCP_JSON_TEMPLATE, component_name, invocables_json),
     )
 
+    # ── Vendored error-enrichment modules (shared by server.py and
+    # mcp_server.py so both surface the same classified failure payload).
+    _write(os.path.join(project_path, "error_enrichment.py"), ERROR_ENRICHMENT_PY)
+    _write(os.path.join(project_path, "sentinel_codes.py"), SENTINEL_CODES_PY)
+
     print(f"\nDone!  cd {project_path}")
     print("  # Flask chat UI:")
     print("  pip install -r requirements.txt")
@@ -1447,6 +1672,8 @@ def generate_mcp_sdk_artifacts(
         "mcp_server_py": _inject(MCP_SERVER_TEMPLATE, component_name, invocables_json),
         "mcp_json": _inject(MCP_JSON_TEMPLATE, component_name, invocables_json),
         "mcp_requirements_txt": MCP_REQUIREMENTS,
+        "error_enrichment_py": ERROR_ENRICHMENT_PY,
+        "sentinel_codes_py": SENTINEL_CODES_PY,
     }
 
 

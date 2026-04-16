@@ -1,0 +1,507 @@
+# Test Plan — MCP Factory
+**Document version:** 1.0  
+**Date:** 2026-03-13  
+**Project:** MCP Factory (Microsoft-Sponsored Capstone)  
+**Team:** Evan King, Layalie & Caden, Thinh Nguyen  
+
+---
+
+## 1. Introduction
+
+MCP Factory is a cloud-hosted web application that converts an existing binary (DLL, EXE, CMD, script, or installed program) into a deployable **Model Context Protocol (MCP)** server, allowing AI agents such as GitHub Copilot to invoke real Windows features through natural language.
+
+The system is hosted on **Azure Container Apps** (East US, resource group `mcp-factory-rg`) and consists of two services:
+
+| Service | Role |
+|---------|------|
+| UI Container App (`mcp-factory-ui`) | FastAPI-served Single-Page Application the end user interacts with |
+| Pipeline Container App (`mcp-factory-pipeline`) | FastAPI REST API that orchestrates discovery, generation, execution, and chat |
+
+The full product pipeline follows five sections defined by the project sponsor (Microsoft):
+
+| Section | Description |
+|---------|-------------|
+| §2 | Specify Target — upload a binary or supply a server-side path |
+| §3 | Display Invocables — list discovered callable features with confidence scores |
+| §4 | Generate MCP Architecture — build and persist the MCP tool schema |
+| §5 | Verify Output — interact with the generated MCP server via a chat interface |
+
+This test plan covers **functional black-box testing** of requirements stated in the Microsoft requirements document and in the internal project specification ([docs/project_description.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/project_description.md), [docs/sections-2-3.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/sections-2-3.md), [docs/product-flow.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/product-flow.md), [docs/architecture.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/architecture.md)). The tester does **not** need access to source code; they need only a web browser and the ability to create small sample files.
+
+**Scope of this document:** Functional correctness of the end-to-end pipeline as accessible through the browser UI and the REST API. Performance, security penetration, and FERPA compliance auditing are beyond this document's scope.
+
+---
+
+## 2. Glossary
+
+| Term | Definition |
+|------|-----------|
+| **Binary** | A file executable on Windows 11/Win32, including DLLs, EXEs, scripts (Python, PowerShell, Bash, SQL, JavaScript, etc.), SOAP/WSDL service descriptions, OpenAPI specs, and COM type libraries. |
+| **DLL** | *Dynamic-Link Library* — a Windows shared-library file (`.dll`) compiled to native machine code and exposing named exported functions. |
+| **EXE** | *Executable* — a Windows application file (`.exe`) that can be launched as a process and may expose CLI argument-based invocations or GUI surfaces. |
+| **Invocable** | A single callable surface discovered inside a binary: one exported DLL function, one CLI sub-command, one SQL stored procedure, one COM method, one GUI button action, etc. Each invocable has a `name`, `kind`, `confidence`, `description`, and `execution` block. |
+| **Confidence Scoring** | A 6-factor quality analysis assigned to each invocable: [header_match](file:///Users/thinhnguyen/Code/mcp-factory/tests/test_fixtures.py#41-60), `doc_comment`, `signature_complete`, `parameter_count`, `return_type`, `non_forwarded`. Result is tiered as **HIGH** (≥ 6 factors), **MEDIUM** (≥ 4), or **LOW** (< 4). |
+| **MCP** | *Model Context Protocol* — an open standard that lets an AI agent discover and call structured tools. An MCP server exposes a `tools/list` endpoint and a `tools/call` endpoint over JSON-RPC 2.0. |
+| **MCP Schema** | A JSON document describing the available tools in OpenAI function-calling format ([type](file:///Users/thinhnguyen/Code/mcp-factory/tests/test_mcp_stdio.py#169-192), `function.name`, `function.description`, `function.parameters`). |
+| **MCP Tool** | One entry in the MCP schema — corresponds to one selected invocable and carries enough metadata for an LLM to compose correct calls. |
+| **Discovery Pipeline** | The server-side subsystem ([src/discovery/main.py](file:///Users/thinhnguyen/Code/mcp-factory/src/discovery/main.py) and supporting modules) that classifies, analyzes, and normalises a target binary into a list of invocables. |
+| **GUI Bridge** | A Windows 11 VM (`mcpfactory-runner-vm`) running a private HTTP service on port 8090 that handles Windows-specific analysis and execution (pywinauto, COM, Registry) which cannot run in the Linux container. |
+| **Job ID** | An 8-character hex identifier (UUID prefix) assigned to each analysis run. Used to poll status and retrieve results. |
+| **Azure Blob Storage** | The cloud object store (`mcpfactorystore`) used to persist uploaded binaries (`uploads` container) and generated artifacts (`artifacts` container). |
+| **Azure AI Search** | The vector search index (`mcpfactory-search`) used for semantic tool retrieval when more tools exist than the model's hard API limit (`OPENAI_MAX_TOOLS`). |
+| **SSE** | *Server-Sent Events* — a unidirectional HTTP streaming protocol used by `/api/chat` to push token and tool-call events to the browser in real time. |
+| **Artifact Hygiene** | The design principle that every output file must contain at least one valid invocable; files with zero discovered features generate *no* output (ADR-0005). |
+| **FERPA** | *Family Educational Rights and Privacy Act* — US federal law governing the confidentiality of student education records. All Azure resources are scoped to the project team only. |
+| **Agentic Loop** | The iterative model→tool→result cycle inside [api/chat.py](file:///Users/thinhnguyen/Code/mcp-factory/api/chat.py). The model calls tools, receives results, and iterates up to `MAX_TOOL_ROUNDS` until it produces a final text answer. |
+| **`selected-invocables.json`** | The hand-off file produced by §3 that lists which invocables the user approved for MCP generation in §4. |
+
+---
+
+## 3. Parameters to be Tested
+
+The following functional parameters are in scope:
+
+| # | Parameter | Section | Source Requirement |
+|---|-----------|---------|-------------------|
+| 1 | File upload acceptance — binary or script file via multipart POST | §2 | Project spec §2, `POST /api/analyze` |
+| 2 | Server-path acceptance — installed-instance directory or executable path | §2 | Project spec §2, `POST /api/analyze-path` |
+| 3 | Free-text hint field — optional hint passed to the discovery engine | §2 | Project spec §2 item 2 |
+| 4 | Job status polling — `queued → running → done` lifecycle | §2–3 | `GET /api/jobs/{job_id}` |
+| 5 | Invocable list display — all discovered invocables shown, all pre-selected | §3 | Project spec §3 items 1–2 |
+| 6 | Confidence scoring — HIGH / MEDIUM / LOW tier shown per invocable | §3 | [docs/sections-2-3.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/sections-2-3.md), ADR-0003 |
+| 7 | User deselection — ability to uncheck individual invocables before generation | §3 | Project spec §3 item 3 |
+| 8 | MCP schema generation — selected invocables produce valid MCP tool JSON | §4 | Project spec §4, `POST /api/generate` |
+| 9 | Component naming — user-specified or system-suggested component name | §4 | Project spec §4 item 1 |
+| 10 | MCP artifact persistence — schema uploaded to Azure Blob Storage | §4 | [api/generate.py](file:///Users/thinhnguyen/Code/mcp-factory/api/generate.py) |
+| 11 | Chat interface — conversational access to generated MCP tools | §5 | Project spec §5, `POST /api/chat` |
+| 12 | Tool invocation via chat — model correctly routes natural language to tool calls | §5 | [api/chat.py](file:///Users/thinhnguyen/Code/mcp-factory/api/chat.py) agentic loop |
+| 13 | Tool result display — stdout/stderr/result visible in the conversation | §5 | Project spec §5 item 2 |
+| 14 | Artifact download — user can download generated MCP JSON and server files | §5 | Project spec §5 item 3, `GET /api/download/{job_id}/{filename}` |
+| 15 | Empty-file rejection — 0-byte upload returns HTTP 400 | §2 | [api/main.py](file:///Users/thinhnguyen/Code/mcp-factory/api/main.py) [analyze()](file:///Users/thinhnguyen/Code/mcp-factory/api/main.py#161-217) guard |
+| 16 | Missing-message rejection — chat request with no messages returns error event | §5 | [api/chat.py](file:///Users/thinhnguyen/Code/mcp-factory/api/chat.py) guard |
+| 17 | Artifact hygiene — binary with no detectable invocables produces no ghost output | §3 | ADR-0005 |
+| 18 | Health endpoint — `/health` returns `{"status": "ok"}` without authentication | Infra | [api/main.py](file:///Users/thinhnguyen/Code/mcp-factory/api/main.py) health handler |
+
+---
+
+## 4. Design of Testing
+
+### 4.1 Testing Strategy
+
+All tests are **functional black-box** tests. Tests are conducted against the live deployed application through the browser UI or through direct HTTP calls using a tool such as **curl** or **Postman**. No access to the server filesystem or source code is required.
+
+### 4.2 Test Environments
+
+| Environment | URL | Notes |
+|-------------|-----|-------|
+| Production (Azure) | `https://mcp-factory-ui.{azureenv}.azurecontainerapps.io` | Requires team credentials |
+| Local development | `http://localhost:8000` (API) + `http://localhost:3000` (UI) | Requires `.env` configuration |
+
+### 4.3 Test Types
+
+| Type | Description | # Tests |
+|------|-------------|---------|
+| **Happy-path end-to-end** | Full §2→§3→§4→§5 pipeline with a valid fixture binary | 1 (TC-01) |
+| **Input boundary / negative** | Edge-case inputs to verify error handling and rejection | 1 (TC-02) |
+
+### 4.4 Test Case Design Table
+
+| TC ID | Parameter(s) Exercised | Input Type | Expected Output |
+|-------|----------------------|-----------|----------------|
+| TC-01 | 1, 4, 5, 6, 8, 11, 12, 13, 14 | Valid Python script file | End-to-end: invocables discovered, MCP schema generated, chat executes tool, result displayed, artifact downloadable |
+| TC-02 | 15, 16 | Empty file + missing-message chat request | HTTP 400 for empty file; SSE `error` event for empty messages |
+
+### 4.5 Fixtures and Preconditions
+
+**TC-01** uses a short Python script (`hello_demo.py`) that the tester creates locally before the test. This script is chosen because:
+- It is small (< 1 KB), easy to inspect, and produces deterministic outputs.
+- Python scripts are fully supported by [src/discovery/script_analyzer.py](file:///Users/thinhnguyen/Code/mcp-factory/src/discovery/script_analyzer.py) and identify `python_function` invocables.
+- No Windows-specific tools (GUI bridge, dumpbin, COM) are required, so the test runs identically on any environment.
+
+**TC-02** requires only a zero-byte file (trivially created with a text editor "Save As" of a blank file) and a curl/Postman request.
+
+### 4.6 Pass / Fail Criteria
+
+A test case **passes** when every stated expected-output item is observed exactly as described. It **fails** if any expected item is absent, or if an unexpected error state is shown that is not described in the "expected output" column.
+
+---
+
+## 5. Test Case #1
+
+### TC-01 — End-to-End Pipeline with a Python Script
+
+#### a) Test Case Name
+**TC-01: Full Pipeline — Upload Python Script, Discover Invocables, Generate MCP Schema, Verify via Chat, Download Artifact**
+
+#### b) System Configuration
+
+| Item | Requirement |
+|------|------------|
+| Operating system | Any modern OS (Windows, macOS, Linux) with a web browser |
+| Browser | Google Chrome 120+ or Microsoft Edge 120+ (Firefox also supported) |
+| Application | MCP Factory UI loaded at `http://localhost:3000` (local) **or** the Azure deployment URL provided by the project team |
+| Network | The browser must be able to reach the MCP Factory UI and its backend API |
+| Azure services | Azure Blob Storage, Azure OpenAI (`gpt-4o` deployment), and Application Insights must be reachable by the backend containers (verify with `/health` endpoint first) |
+| Authentication | If `PIPELINE_API_KEY` is configured, every API call must include the header `X-Pipeline-Key: <key>`. The browser UI handles this automatically when the key is embedded via the environment; if testing via curl, supply the header manually. |
+
+#### c) Exact Input
+
+**Step 1 — Pre-test: Verify the application is running**
+
+Open a new browser tab and navigate to:
+```
+http://localhost:3000/
+```
+(or the Azure URL if testing against the cloud deployment)
+
+You should see the MCP Factory web application with a headline such as "MCP Factory" and a file upload control. If you see a blank page or a network error, stop and resolve the connectivity issue before continuing.
+
+To confirm the backend API is healthy, open a second tab and navigate to:
+```
+http://localhost:8000/health
+```
+(or `https://<pipeline-hostname>/health` for Azure)
+
+You must see:
+```json
+{"status": "ok", "version": "1.0.0"}
+```
+
+---
+
+**Step 2 — Create the test fixture file**
+
+On your local computer, create a plain-text file named **`hello_demo.py`** with exactly the following content (copy-paste exactly, preserving indentation):
+
+```python
+def greet(name: str) -> str:
+    """Return a personalised greeting."""
+    return f"Hello, {name}! Welcome to MCP Factory."
+
+def add(a: int, b: int) -> int:
+    """Return the sum of two integers."""
+    return a + b
+
+def farewell(name: str) -> str:
+    """Return a farewell message."""
+    return f"Goodbye, {name}. Have a great day!"
+```
+
+Save the file anywhere on your computer (e.g., the Desktop). Confirm the file is approximately 230 bytes.
+
+---
+
+**Step 3 — Upload the file (§2)**
+
+In the MCP Factory browser tab:
+
+1. Locate the **"Upload Binary"** section (or a file-drop zone labeled "Upload your binary or script").
+2. Click **"Choose File"** (or drag and drop `hello_demo.py` onto the drop zone).
+3. In the **"Hints"** text field (if present), type:
+   ```
+   Python utility with greeting and arithmetic functions
+   ```
+4. Click **"Analyze"** (or **"Upload & Analyze"**).
+
+The UI should immediately display a status indicator such as "Analysis queued…" or show a job ID string (8 hex characters, e.g., `a3f1bc20`).
+
+---
+
+**Step 4 — Wait for analysis to complete (§3)**
+
+The UI will poll the backend at `GET /api/jobs/{job_id}` approximately every 2–5 seconds. When analysis completes, the status will change to **"done"**.
+
+Expected wait time: **10–60 seconds** depending on server load.
+
+If the status shows "error", note the error message and stop — do not proceed to Step 5.
+
+---
+
+**Step 5 — Review discovered invocables and select (§3)**
+
+Once analysis is complete, the UI will show a **list of discovered invocables**. For `hello_demo.py`, expect:
+
+| Name | Kind | Expected Confidence |
+|------|------|-------------------|
+| `greet` | `python_function` | MEDIUM or HIGH |
+| `add` | `python_function` | MEDIUM or HIGH |
+| `farewell` | `python_function` | MEDIUM or HIGH |
+
+All three invocables should be **pre-checked** (selected by default).
+
+**Deselect** `farewell` by clicking its checkbox to uncheck it. Only `greet` and `add` should remain selected.
+
+---
+
+**Step 6 — Generate the MCP schema (§4)**
+
+1. In the **"Component Name"** field (pre-populated with a suggestion such as `hello_demo`), leave the default value or type:
+   ```
+   hello-demo-mcp
+   ```
+2. Click **"Generate MCP Server"** (or **"Generate"**).
+
+The UI should display a confirmation message such as "MCP schema generated" and show the `job_id`.
+
+---
+
+**Step 7 — Verify via chat (§5)**
+
+In the **chat interface** that appears after generation:
+
+Type the following message and press **Enter** (or click **"Send"**):
+```
+What is the greeting for Alice?
+```
+
+Observe the chat area.
+
+---
+
+**Step 8 — Download artifact (§5)**
+
+Locate the **"Download"** button (may be labeled "Download MCP Schema" or shown as a download icon next to the job). Click it.
+
+Your browser should prompt you to save a file named `mcp_schema.json` (or similar). Save it and open it in any text/JSON editor.
+
+---
+
+#### d) Exact Expected Output
+
+**Step 1 — Health check:**
+- Browser tab at `/health` shows: `{"status": "ok", "version": "1.0.0"}`
+
+**Step 3 — After upload:**
+- Within 3 seconds, the UI displays a **Job ID** (8 hex characters) and a status of `"queued"` or `"running"`.
+- No "400 Bad Request" or error dialog appears.
+
+**Step 4 — After polling completes:**
+- Status reads `"done"` (not `"error"`).
+- The UI transitions automatically to the invocable list view.
+
+**Step 5 — Invocable list:**
+- **Exactly 3 invocables** are listed: `greet`, `add`, `farewell`.
+- Each invocable shows its **kind** (`python_function`) and a **confidence tier** (e.g., a colored badge: GREEN = HIGH, YELLOW = MEDIUM, RED = LOW).
+- All 3 are checked by default.
+- After unchecking `farewell`, only `greet` and `add` have filled checkboxes.
+
+**Step 6 — After generation:**
+- The UI shows a success message containing the component name (e.g., `hello-demo-mcp`) and the `job_id`.
+- A chat input field appears.
+
+**Step 7 — Chat response:**
+The chat area displays a sequence of events in this order:
+
+1. A **tool_call event** showing that the model called the `greet` tool with argument `{"name": "Alice"}` (visible as a labeled box or log line in the UI, e.g., "🔧 greet(name=Alice)").
+2. A **tool_result event** showing the tool's output: `Hello, Alice! Welcome to MCP Factory.`
+3. A **final text message** from the assistant summarising the result, for example:
+   > "The greeting for Alice is: Hello, Alice! Welcome to MCP Factory."
+
+> [!NOTE]
+> The exact wording of the assistant's final summary may vary because the LLM generates it. What must be present is (a) the `greet` tool was called with `name = "Alice"`, and (b) the tool result `Hello, Alice! Welcome to MCP Factory.` appears in the chat.
+
+**Step 8 — Downloaded artifact:**
+
+The downloaded `mcp_schema.json` file must:
+- Be valid JSON (parseable in any JSON viewer).
+- Contain a top-level [tools](file:///Users/thinhnguyen/Code/mcp-factory/tests/test_mcp_stdio.py#169-192) array with **exactly 2 entries** (because `farewell` was deselected).
+- The two tool entries must have `"name": "greet"` and `"name": "add"` respectively.
+- Each entry must contain `"type": "function"`, a `"description"` field (non-empty string), and a `"parameters"` object with `"type": "object"`.
+
+Example of minimum expected content:
+```json
+{
+  "job_id": "<8-char-hex>",
+  "mcp_version": "1.0",
+  "component": "hello-demo-mcp",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "greet",
+        "description": "Return a personalised greeting.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "description": "str" }
+          },
+          "required": ["name"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "add",
+        "description": "Return the sum of two integers.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "a": { "type": "string", "description": "int" },
+            "b": { "type": "string", "description": "int" }
+          },
+          "required": ["a", "b"]
+        }
+      }
+    }
+  ]
+}
+```
+
+---
+
+## 6. Test Case #2
+
+### TC-02 — Negative: Empty File Upload and Empty Chat Message
+
+#### a) Test Case Name
+**TC-02: Boundary / Negative — Empty File Rejected at Upload; Chat with No Messages Returns Error**
+
+#### b) System Configuration
+
+| Item | Requirement |
+|------|------------|
+| Operating system | Any OS |
+| Tool | **curl** (version 7.x or later, available on macOS/Linux natively; on Windows install via `winget install curl.curl`) **or** Postman (version 10+). Either tool must be able to send HTTP POST requests with multipart form bodies. |
+| Application backend URL | `http://localhost:8000` (local) or `https://<pipeline-hostname>` (Azure) |
+| Authentication | If `PIPELINE_API_KEY` is set, add `-H "X-Pipeline-Key: <key>"` to every curl command below. |
+
+> [!IMPORTANT]
+> This test case exercises the **REST API directly** (not the browser UI), because the UI may add client-side validation that prevents empty-file submission before the request ever reaches the server. Testing the API directly verifies the server-side guard independently.
+
+#### c) Exact Input
+
+**Part A — Empty file upload**
+
+**Step A1 — Create an empty file**
+
+On your computer, create a 0-byte file named `empty.dll`:
+
+- **Windows (PowerShell):**
+  ```powershell
+  New-Item -Path "$env:TEMP\empty.dll" -ItemType File -Force
+  ```
+- **macOS / Linux (Terminal):**
+  ```bash
+  touch /tmp/empty.dll
+  ```
+
+Verify the file is exactly 0 bytes:
+- Windows: [(Get-Item "$env:TEMP\empty.dll").Length](file:///Users/thinhnguyen/Code/mcp-factory/mcp_factory.py#53-56) → must print `0`
+- macOS/Linux: `wc -c /tmp/empty.dll` → must print `0 /tmp/empty.dll`
+
+---
+
+**Step A2 — Submit the empty file to `/api/analyze`**
+
+Run the following curl command (replace `<API_URL>` with your backend URL, e.g., `http://localhost:8000`):
+
+```bash
+curl -X POST "<API_URL>/api/analyze" \
+  -F "file=@/tmp/empty.dll;type=application/octet-stream" \
+  -F "hints=" \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+```
+
+On Windows PowerShell, use:
+```powershell
+curl.exe -X POST "http://localhost:8000/api/analyze" `
+  -F "file=@$env:TEMP\empty.dll;type=application/octet-stream" `
+  -F "hints=" `
+  -w "`nHTTP_STATUS:%{http_code}`n"
+```
+
+Record the full response body and the HTTP status code printed after `HTTP_STATUS:`.
+
+---
+
+**Part B — Chat request with no messages**
+
+**Step B1 — Send a chat request with an empty messages array**
+
+```bash
+curl -X POST "<API_URL>/api/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [], "tools": [], "invocables": []}' \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+```
+
+Record the response body and HTTP status code.
+
+---
+
+**Step B2 — Send a chat request with a missing messages field**
+
+```bash
+curl -X POST "<API_URL>/api/chat" \
+  -H "Content-Type: application/json" \
+  -d '{"tools": []}' \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+```
+
+Record the response body and HTTP status code.
+
+---
+
+#### d) Exact Expected Output
+
+**Part A — Empty file upload (Steps A1–A2):**
+
+The server must return:
+
+```
+HTTP_STATUS:400
+```
+
+The response body must be a JSON object containing a `detail` field with a message that clearly explains the file was empty. For example:
+
+```json
+{"detail": "Empty file uploaded"}
+```
+
+The response **must not** be `HTTP_STATUS:202` (accepted) or `HTTP_STATUS:500` (server error). Any 2xx response would mean the server accepted an empty binary for analysis, which is a defect. Any 5xx response would mean the guard crashed rather than returning a clean error.
+
+---
+
+**Part B — Chat with no messages (Steps B1–B2):**
+
+For **Step B1** (empty `messages` array), the server returns HTTP 200 with `Content-Type: text/event-stream`. The body must contain at least one SSE data line that is a JSON object with `"type": "error"`. The full expected response body looks like:
+
+```
+data: {"type": "error", "message": "No messages provided"}
+
+```
+
+(Note the blank line at the end — required by the SSE spec.)
+
+For **Step B2** (missing `messages` key), the behaviour is identical: same `200 text/event-stream` content type, same error event structure. This is because the [stream_chat](file:///Users/thinhnguyen/Code/mcp-factory/api/chat.py#288-463) function defaults missing messages to an empty list and hits the same guard.
+
+> [!NOTE]
+> The `/api/chat` endpoint always returns HTTP 200 with `text/event-stream`, even for errors, because the streaming response header is committed before the body is written. The error is communicated via the SSE event `{"type": "error", ...}` rather than an HTTP error status code. This is by design and documented in [api/chat.py](file:///Users/thinhnguyen/Code/mcp-factory/api/chat.py).
+
+**Summary of all expected status codes for TC-02:**
+
+| Step | Input | Expected HTTP Status | Expected Body |
+|------|-------|---------------------|---------------|
+| A2 | 0-byte `empty.dll` | **400** | `{"detail": "Empty file uploaded"}` |
+| B1 | `{"messages": []}` | **200** (SSE stream) | SSE event: `{"type": "error", "message": "No messages provided"}` |
+| B2 | `{}` (no messages key) | **200** (SSE stream) | SSE event: `{"type": "error", "message": "No messages provided"}` |
+
+---
+
+## References
+
+1. **Project Description (internal):** [docs/project_description.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/project_description.md) — defines sections 1–7 of the product requirements.
+2. **Architecture Document (internal):** [docs/architecture.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/architecture.md) — describes the Azure infrastructure, pipeline stages, confidence scoring, and design decisions.
+3. **Sections 2–3 Specification (internal):** [docs/sections-2-3.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/sections-2-3.md) — lists all supported source types, schema uniformity rules, and test results.
+4. **Product Flow (internal):** [docs/product-flow.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/product-flow.md) — describes the user journey through sections 2–5.
+5. **Lab Notes (internal):** [docs/lab-notes.md](file:///Users/thinhnguyen/Code/mcp-factory/docs/lab-notes.md) — implementation history including confidence scoring (2026-01-21), hybrid analysis (2026-01-27), and GUI pipeline (2026-03-04).
+6. **Microsoft Requirements Document:** [Microsoft2Requirements.docx](file:///Users/thinhnguyen/Code/mcp-factory/Microsoft2Requirements.docx) — sponsor requirements specifying the business scenario (Contoso automated customer service), Azure technologies, budget constraints ($150/month), and FERPA compliance.
+7. **ADR-0003:** Frictionless UX & Confidence Analysis — decision record for confidence scoring tiers and color coding.
+8. **ADR-0005:** Hybrid Analysis & Artifact Hygiene — decision record for strict artifact output rules (no ghost tools).
+9. **Model Context Protocol Specification:** [modelcontextprotocol.io](https://modelcontextprotocol.io) — the official MCP standard governing the [initialize](file:///Users/thinhnguyen/Code/mcp-factory/tests/test_mcp_stdio.py#139-143) handshake, `tools/list`, and `tools/call` endpoints.
+10. **FastAPI Documentation:** [fastapi.tiangolo.com](https://fastapi.tiangolo.com) — reference for the REST API framework used by both container services.
+11. **Azure Container Apps Documentation:** [learn.microsoft.com/azure/container-apps](https://learn.microsoft.com/en-us/azure/container-apps/) — reference for the hosting platform.
+12. **Azure OpenAI Service Documentation:** [learn.microsoft.com/azure/ai-services/openai](https://learn.microsoft.com/en-us/azure/ai-services/openai/) — reference for the `gpt-4o` model deployment and API used in §4–5.
+13. **pefile Python Library:** [github.com/erocarrera/pefile](https://github.com/erocarrera/pefile) — the pure-Python PE parser used for DLL/EXE export extraction (replaced dumpbin dependency on 2026-01-29).
+14. **pywinauto Documentation:** [pywinauto.readthedocs.io](https://pywinauto.readthedocs.io) — the Windows GUI automation library used by the GUI bridge VM for EXE interaction.

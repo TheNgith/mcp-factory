@@ -108,6 +108,26 @@ def _apply_findings_param_names(
                 if inferred not in existing_names:
                     p["name"] = inferred
 
+        # Bake a findings_summary onto the invocable so the standalone
+        # generated server (which has no blob access) can populate
+        # known_good templates in error payloads at runtime.
+        _succ = [f for f in fn_findings if f.get("status") == "success"
+                 and isinstance(f.get("working_call"), dict) and f["working_call"]]
+        if _succ:
+            # Newest first; recorded_at is ISO-8601 so lexicographic sort works.
+            _succ = sorted(_succ, key=lambda f: f.get("recorded_at") or "", reverse=True)
+            inv["findings_summary"] = {
+                "working_calls": [
+                    {
+                        "args": f["working_call"],
+                        "confidence": f.get("confidence") or "medium",
+                        "recorded_at": f.get("recorded_at"),
+                    }
+                    for f in _succ[:3]
+                ],
+                "last_status": _succ[0].get("status"),
+            }
+
 
 def run_generate(body: dict[str, Any]) -> dict[str, Any]:
     """Build an MCP tool schema, persist artifacts, and index in AI Search.
@@ -242,6 +262,8 @@ def run_generate(body: dict[str, Any]) -> dict[str, Any]:
             ("mcp_server.py",       mcp_artifacts.get("mcp_server_py", "")),
             ("mcp.json",            mcp_artifacts.get("mcp_json", "")),
             ("mcp_requirements.txt", mcp_artifacts.get("mcp_requirements_txt", "")),
+            ("error_enrichment.py", mcp_artifacts.get("error_enrichment_py", "")),
+            ("sentinel_codes.py",   mcp_artifacts.get("sentinel_codes_py", "")),
         ]:
             if content:
                 _upload_to_blob(

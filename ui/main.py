@@ -368,6 +368,28 @@ _HTML = r"""<!DOCTYPE html>
       font-family: monospace;
       font-size: 0.78rem;
     }
+    .chat-msg.tool-error {
+      align-self: flex-start;
+      background: rgba(240,91,91,.10);
+      border: 1px solid rgba(240,91,91,.45);
+      color: #f5b1b1;
+      font-family: monospace;
+      font-size: 0.78rem;
+      max-width: 80%;
+    }
+    .tool-error-head { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+    .tool-error-badge {
+      background: rgba(240,91,91,.25);
+      border: 1px solid rgba(240,91,91,.5);
+      color: #f09090;
+      font-size: 0.7rem; font-weight: 700;
+      padding: 1px 6px; border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .tool-error-suggestion { color: #ffd7d7; margin: 4px 0; font-family: var(--font); font-size: 0.82rem; }
+    .tool-error details { margin-top: 6px; }
+    .tool-error summary { cursor: pointer; color: #d9a0a0; font-size: 0.72rem; }
+    .tool-error pre { margin-top: 6px; white-space: pre-wrap; font-size: 0.72rem; color: #b89898; }
     .chat-empty {
       flex: 1; display: flex; align-items: center; justify-content: center;
       color: var(--muted); font-size: 0.85rem; text-align: center;
@@ -1725,6 +1747,7 @@ async function sendMessage() {
 
         } else if (evt.type === 'tool_result') {
           appendChatMsg('tool-call', `   ↳ ${evt.result ?? ''}`);
+          if (evt.error) appendToolError(evt.name, evt.error);
 
         } else if (evt.type === 'status') {
           appendChatMsg('tool-call', `⏳ ${evt.message ?? 'Working...'}`);
@@ -1770,6 +1793,63 @@ function appendChatBubble(role, text) {
 
 function appendChatMsg(role, text) {
   appendChatBubble(role, text);
+}
+
+function appendToolError(fnName, err) {
+  if (!err || typeof err !== 'object') return;
+  const win = $('chat-window');
+  $('chat-empty')?.remove();
+  const div = document.createElement('div');
+  div.className = 'chat-msg tool-error';
+
+  const head = document.createElement('div');
+  head.className = 'tool-error-head';
+  const badge = document.createElement('span');
+  badge.className = 'tool-error-badge';
+  badge.textContent = err.classified_name || err.category || 'error';
+  head.appendChild(badge);
+  if (fnName) {
+    const fn = document.createElement('span');
+    fn.textContent = fnName;
+    head.appendChild(fn);
+  }
+  if (err.raw_code) {
+    const raw = document.createElement('span');
+    raw.textContent = err.raw_code;
+    head.appendChild(raw);
+  }
+  div.appendChild(head);
+
+  if (err.human) {
+    const human = document.createElement('div');
+    human.textContent = err.human;
+    div.appendChild(human);
+  }
+  if (err.suggestion) {
+    const sug = document.createElement('div');
+    sug.className = 'tool-error-suggestion';
+    sug.textContent = `↪ ${err.suggestion}`;
+    div.appendChild(sug);
+  }
+
+  const hasTried = Array.isArray(err.what_tried) && err.what_tried.length;
+  const hasKnown = Array.isArray(err.known_good) && err.known_good.length;
+  if (hasTried || hasKnown) {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = 'Diagnostics';
+    det.appendChild(sum);
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(
+      { what_tried: err.what_tried || [], known_good: err.known_good || [] },
+      null, 2,
+    );
+    det.appendChild(pre);
+    div.appendChild(det);
+  }
+
+  win.appendChild(div);
+  win.scrollTop = win.scrollHeight;
 }
 
 $('send-btn').addEventListener('click', sendMessage);

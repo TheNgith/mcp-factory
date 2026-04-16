@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from api.config import IS_WINDOWS, GUI_BRIDGE_URL, GUI_BRIDGE_SECRET
+from api.error_enrichment import build_error_payload
 from api.sentinel_codes import classify_common_result_code
 
 logger = logging.getLogger("mcp_factory.api")
@@ -432,7 +433,8 @@ def _is_uint_type(type_str: str) -> bool:
     }
 
 
-def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
+def _probe_bridge(client, inv: dict, args: dict, original_result: str,
+                  tried_out: list | None = None) -> str:
     """Run a probe matrix after an initial call returned 4294967295.
 
     Builds variants by:
@@ -442,6 +444,10 @@ def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
 
     Returns immediately on the first successful (non-sentinel) result, or a
     single summary string so the LLM never needs to probe one-at-a-time.
+
+    tried_out: optional list the caller supplies; each attempt is appended as
+    {"encoding": str, "raw_result": str} so the trace can surface exactly what
+    was probed.  The human summary string is unchanged for backward compat.
     """
     params    = list(inv.get("parameters") or [])
     execution = inv.get("execution") or {}
@@ -478,6 +484,8 @@ def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
             pr = client.post("/execute", json={"invocable": inv, "args": probe_args})
             pr.raise_for_status()
             probe_result = pr.json().get("result", "")
+            if tried_out is not None:
+                tried_out.append({"encoding": label, "raw_result": str(probe_result)[:200]})
             result_str = str(probe_result).lower()
             _is_error = (
                 _ERROR_SENTINEL in str(probe_result)
@@ -493,6 +501,8 @@ def _probe_bridge(client, inv: dict, args: dict, original_result: str) -> str:
             if best_label is None:
                 best_label = label
         except Exception as exc:
+            if tried_out is not None:
+                tried_out.append({"encoding": label, "raw_result": f"exception: {exc}"})
             logger.debug("[bridge] probe failed tool=%s label=%s: %s", tool_name, label, exc)
 
     total    = len(probes)
@@ -575,14 +585,16 @@ def _call_execute_bridge(inv: dict, args: dict) -> tuple[str | None, dict]:
         )
         result = resp.json().get("result", "")
         _probe_triggered = False
+        _probe_tried: list[dict] = []
         if _ERROR_SENTINEL in str(result):
-            result = _probe_bridge(client, inv, args, result)
+            result = _probe_bridge(client, inv, args, result, tried_out=_probe_tried)
             _probe_triggered = True
         _trace = {
             "backend":         "bridge",
             "http_status":     resp.status_code,
             "latency_ms":      round(dt_ms, 2),
             "probe_triggered": _probe_triggered,
+            "probe_tried":     _probe_tried,
             "exception":       None,
             "fn":              inv.get("name", ""),
             "args_keys":       list(args.keys()),
@@ -608,6 +620,25 @@ def _execute_tool(inv: dict, args: dict) -> str:
     name      = inv.get("name", "")
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
     method    = execution.get("method", "")
+
+    # ── Synthetic explain_failure tool — return structured diagnostics ───
+    if method == "explain_failure" or name == "explain_failure":
+        import json as _json_ef
+        fn = args.get("function_name", "") or "<unknown>"
+        # Pull the latest error payload recorded for that function from the
+        # caller-supplied tool log (threaded via inv["_tool_log"] like _job_id).
+        tool_log: list = inv.get("_tool_log") or []
+        payload: dict | None = None
+        for entry in reversed(tool_log):
+            if entry.get("name") == fn and entry.get("error"):
+                payload = entry["error"]
+                break
+        if payload is None:
+            return (
+                f"explain_failure: no recent error recorded for '{fn}'. "
+                "Call the function first and retry this after it fails."
+            )
+        return _json_ef.dumps(payload, indent=2, default=str)
 
     # ── Synthetic findings tool — no bridge/DLL call needed ───────────────
     if method == "findings" or name == "record_finding":
@@ -657,15 +688,22 @@ def _execute_tool(inv: dict, args: dict) -> str:
     return result
 
 
-def _execute_tool_traced(inv: dict, args: dict, extra_sentinels: dict | None = None) -> dict:
-    """Like _execute_tool but captures the per-backend execution trace.
+def _execute_tool_traced(inv: dict, args: dict, extra_sentinels: dict | None = None,
+                         findings_for_fn: list[dict] | None = None) -> dict:
+    """Like _execute_tool but captures the per-backend execution trace and
+    a structured error payload when the call failed.
 
-    Returns {"result_str": str, "trace": dict | None}.  Synthetic tools
-    (record_finding, enrich_invocable) always set trace to None.
+    Returns {"result_str": str, "trace": dict | None, "error": dict | None}.
+    Synthetic tools (record_finding, enrich_invocable, explain_failure) set
+    trace and error to None.
 
     extra_sentinels: optional dict mapping hex-string or int keys to meanings,
     merged with the hardcoded sentinel table so DLL-specific error codes get
-    annotated in every tool result string the model sees.
+    annotated in every tool result string the model sees.  It is also passed
+    to build_error_payload so custom codes surface as classified_name.
+
+    findings_for_fn: optional list of findings dicts for this function — used
+    by build_error_payload to populate known_good call templates.
     """
     name      = inv.get("name", "")
     execution = inv.get("execution") or inv.get("mcp", {}).get("execution", {})
@@ -673,19 +711,38 @@ def _execute_tool_traced(inv: dict, args: dict, extra_sentinels: dict | None = N
 
     # Synthetic tools — delegate to _execute_tool, no trace
     if (
-        method in ("findings", "enrich")
-        or name in ("record_finding", "enrich_invocable")
+        method in ("findings", "enrich", "explain_failure")
+        or name in ("record_finding", "enrich_invocable", "explain_failure")
     ):
-        return {"result_str": _execute_tool(inv, args), "trace": None}
+        return {"result_str": _execute_tool(inv, args), "trace": None, "error": None}
 
     if GUI_BRIDGE_URL and GUI_BRIDGE_SECRET:
         result, trace = _call_execute_bridge(inv, args)
-        return {"result_str": result or "Bridge returned an empty result.", "trace": trace}
+        result_str = result or "Bridge returned an empty result."
+        error = build_error_payload(
+            name, result_str, trace, trace.get("exception") if trace else None,
+            findings_for_fn, extra_sentinels,
+        )
+        return {"result_str": result_str, "trace": trace, "error": error}
     if method == "dll_import":
         result, trace = _execute_dll(inv, execution, args, extra_sentinels)
-        return {"result_str": result, "trace": trace}
+        raw = trace.get("raw_result") if trace else None
+        error = build_error_payload(
+            name, raw if raw is not None else result, trace,
+            trace.get("exception") if trace else None,
+            findings_for_fn, extra_sentinels,
+        )
+        return {"result_str": result, "trace": trace, "error": error}
     if method == "gui_action":
         result, trace = _execute_gui(execution, name, args)
-        return {"result_str": result, "trace": trace}
+        error = build_error_payload(
+            name, result, trace, trace.get("exception") if trace else None,
+            findings_for_fn, extra_sentinels,
+        )
+        return {"result_str": result, "trace": trace, "error": error}
     result, trace = _execute_cli(execution, name, args)
-    return {"result_str": result, "trace": trace}
+    error = build_error_payload(
+        name, result, trace, trace.get("exception") if trace else None,
+        findings_for_fn, extra_sentinels,
+    )
+    return {"result_str": result, "trace": trace, "error": error}

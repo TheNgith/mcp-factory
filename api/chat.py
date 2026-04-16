@@ -11,7 +11,12 @@ SSE event format:  data: <json>\n\n
 Event types:
   {"type": "token",       "content": "..."}          – final text content
   {"type": "tool_call",   "name": "...", "args": {}}  – tool about to execute
-  {"type": "tool_result", "name": "...", "result": "..."} – tool output
+  {"type": "tool_result", "name": "...", "result": "...",
+                          "error": {...} | null}      – tool output; error carries
+                                                        the structured failure
+                                                        payload from
+                                                        api.error_enrichment when
+                                                        the call failed
     {"type": "status",      "stage": "...", "message": "..."} – keepalive/progress
   {"type": "done",        "rounds": N}                – final event
   {"type": "error",       "message": "..."}           – fatal error
@@ -64,6 +69,37 @@ _RECORD_FINDING_TOOL = {
                 "status":        {"type": "string", "enum": ["success", "partial", "error"], "description": "'success' if a non-error return was observed; 'error' if every probe hit a sentinel; 'partial' if mixed"},
             },
             "required": ["function_name", "finding", "status"],
+        },
+    },
+}
+
+# ── Synthetic explain_failure tool definition (always injected) ──────────
+_EXPLAIN_FAILURE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "explain_failure",
+        "description": (
+            "Get structured diagnostics about a recent tool-call failure: "
+            "classified error code (sentinel, HRESULT, Win32, NTSTATUS), the "
+            "probe-matrix attempts already tried, known-good argument templates "
+            "from stored findings, and a suggested next step. Call this after "
+            "a tool returns a sentinel or error when you need guidance before "
+            "retrying or explaining the problem to the user. Returns a JSON "
+            "object; do NOT re-invoke the failing tool blindly before reading it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "function_name": {
+                    "type": "string",
+                    "description": "Name of the tool whose most recent failure you want explained.",
+                },
+                "recent_args": {
+                    "type": "object",
+                    "description": "Optional: the args that failed; supplied only for your own reference.",
+                },
+            },
+            "required": ["function_name"],
         },
     },
 }
@@ -436,6 +472,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     _schema_q = _schema_quality(invocables) if invocables else "rich"
     _active_model = _reasoning_model if _schema_q == "basic" else _base_model
     _failure_count = 0  # consecutive 0xFFFFFFFF / -1 returns; triggers mid-session escalation
+    _auto_hint_fired = False  # one-shot: inject explain_failure hint after 3rd failure
     if _schema_q == "basic" and invocables:
         logger.info(
             "[%s] stream_chat: generic schema (black-box binary) — using reasoning model %s",
@@ -488,6 +525,19 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     _called_launchers: set[str] = set()
     _tools_executed: list[str] = []  # names of tool calls that actually ran
     _tool_log: list[dict] = []       # full call+result log for transcript
+    # explain_failure synthetic tool: reads from _tool_log (shared by reference)
+    # so it always reflects the latest recorded error payload for any function.
+    _explain_failure_inv = {
+        "name": "explain_failure",
+        "source_type": "explain_failure",
+        "_job_id": job_id,
+        "_tool_log": _tool_log,
+        "execution": {"method": "explain_failure"},
+        "parameters": [],
+    }
+    inv_map["explain_failure"] = _explain_failure_inv
+    if not any(t.get("function", {}).get("name") == "explain_failure" for t in _active_tools):
+        _active_tools.append(_EXPLAIN_FAILURE_TOOL)
     _last_user_message = next(
         (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
         "",
@@ -770,22 +820,27 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 # Attach the assistant's reasoning text to each tool call in the round
                 # so downstream artifacts can correlate reasoning with every call.
                 _tool_log.append({
-                    "call": fn_name, "args": fn_args, "result": None, "trace": None,
+                    "call": fn_name, "name": fn_name, "args": fn_args,
+                    "result": None, "trace": None, "error": None,
                     "reasoning": _round_reasoning or None,
                 })
 
                 _tool_trace: dict | None = None
+                _tool_error: dict | None = None
                 inv = inv_map.get(fn_name)
                 if inv is None and job_id:
                     inv = _get_invocable(job_id, fn_name)
 
                 if inv is not None:
+                    _findings_for_fn = [f for f in prior if f.get("function") == fn_name] if prior else []
                     # Tool execution can be slow (pywinauto, GUI interaction) —
                     # run in executor so the SSE response stays live.
                     _TOOL_HARD_TIMEOUT = 30  # seconds; DLL/COM/GUI calls can hang
                     _tool_t0 = time.perf_counter()
                     _tool_future = loop.run_in_executor(
-                        None, lambda i=inv, a=fn_args: _execute_tool_traced(i, a, _vocab_sentinels)
+                        None,
+                        lambda i=inv, a=fn_args, ff=_findings_for_fn:
+                            _execute_tool_traced(i, a, _vocab_sentinels, ff),
                     )
                     while True:
                         try:
@@ -794,11 +849,17 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                             )
                             tool_result = _traced["result_str"]
                             _tool_trace = _traced.get("trace")
+                            _tool_error = _traced.get("error")
                             break
                         except asyncio.TimeoutError:
                             if time.perf_counter() - _tool_t0 > _TOOL_HARD_TIMEOUT:
                                 tool_result = f"Tool '{fn_name}' timed out after {_TOOL_HARD_TIMEOUT}s — the call may have hung (COM/DLL deadlock or blocking dialog)."
-                                _tool_trace = {"backend": "timeout", "latency_ms": _TOOL_HARD_TIMEOUT * 1000}
+                                _tool_trace = {"backend": "timeout", "latency_ms": _TOOL_HARD_TIMEOUT * 1000,
+                                               "timeout_hit": True, "exception": "TimeoutExpired"}
+                                # Build a minimal timeout payload so the UI still
+                                # shows a classified banner on hard timeouts.
+                                from api.error_enrichment import build_error_payload as _bep
+                                _tool_error = _bep(fn_name, None, _tool_trace, "TimeoutExpired", None, None)
                                 break
                             yield _sse({
                                 "type": "status",
@@ -816,11 +877,35 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                         f"request body or call /api/generate first."
                     )
                     _tool_ms = 0.0
+                    from api.error_enrichment import build_error_payload as _bep
+                    _tool_error = _bep(
+                        fn_name, None,
+                        {"backend": "unknown_tool"}, None, None, None,
+                    )
+                    if _tool_error is None:
+                        # Synthesize a minimal unknown_tool payload even if the
+                        # enricher returned None (trace-only path would skip it).
+                        _tool_error = {
+                            "category": "unknown_tool",
+                            "severity": "blocking",
+                            "classified_name": None,
+                            "raw_code": None,
+                            "what_tried": [],
+                            "known_good": [],
+                            "suggestion": "Register the tool or call /api/generate first.",
+                            "human": tool_result,
+                        }
 
-                yield _sse({"type": "tool_result", "name": fn_name, "result": tool_result})
+                yield _sse({
+                    "type": "tool_result",
+                    "name": fn_name,
+                    "result": tool_result,
+                    "error": _tool_error,
+                })
                 if _tool_log:
                     _tool_log[-1]["result"] = tool_result
                     _tool_log[-1]["trace"] = _tool_trace
+                    _tool_log[-1]["error"] = _tool_error
                 logger.info(
                     "[stream_chat/%d] tool=%s latency=%.1f ms result=%s",
                     _round,
@@ -837,10 +922,14 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 })
 
                 # Track error sentinels; escalate to reasoning model after 3 failures
-                # if a more capable model is configured.
-                if "4294967295" in tool_result or tool_result.strip() == "-1":
+                # if a more capable model is configured.  Prefer the structured
+                # _tool_error category over the legacy string-match so non-sentinel
+                # failures (bridge_unreachable, timeout, etc.) also count.
+                _is_failure = bool(_tool_error) or \
+                    ("4294967295" in tool_result or tool_result.strip() == "-1")
+                if _is_failure:
                     _failure_count += 1
-                    # Reasoning artifact: log each sentinel hit with context.
+                    # Reasoning artifact: log each failure with full structured payload.
                     # Writes to diagnostics/chat-error-interpretation.json.
                     if job_id:
                         try:
@@ -853,6 +942,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                                 "tool": fn_name,
                                 "args": fn_args,
                                 "result_excerpt": tool_result[:200],
+                                "error_payload": _tool_error,
                                 "model_at_failure": _active_model,
                                 "failure_count": _failure_count,
                                 "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -865,10 +955,30 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                             _err_existing.append(_err_entry)
                             _ulb_err(
                                 _AC_err, _err_blob,
-                                _jerr.dumps(_err_existing, indent=2).encode(),
+                                _jerr.dumps(_err_existing, indent=2, default=str).encode(),
                             )
                         except Exception:
                             pass  # never fail a chat session over an artifact write
+                    # Safety-net hint: after three consecutive failures, inject
+                    # the latest classified explanation as a system note so the
+                    # model sees the suggestion without having to call
+                    # explain_failure itself.  Only fired once per streak.
+                    if (_failure_count == 3 and _tool_error
+                            and not _auto_hint_fired):
+                        _hint_lines = [
+                            "Automated failure diagnostics (from explain_failure):",
+                            f"  {_tool_error.get('human', '')}",
+                        ]
+                        _kg = _tool_error.get("known_good") or []
+                        if _kg:
+                            _hint_lines.append(
+                                f"  Known-good args: {_kg[0].get('args')}"
+                            )
+                        conversation.append({
+                            "role": "system",
+                            "content": "\n".join(_hint_lines),
+                        })
+                        _auto_hint_fired = True
                     if (_failure_count >= 3
                             and _active_model != _reasoning_model
                             and _base_model != _reasoning_model):
