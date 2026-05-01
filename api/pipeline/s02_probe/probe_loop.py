@@ -373,6 +373,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 )
                 _fn_probe_log.append({
                     "phase": "llm_error", "function": fn_name, "round": _round,
+                    "model": ctx.model,
                     "tool": None, "args": {},
                     "result_excerpt": f"LLM error: {_exc_type} status={_exc_status}: {exc}",
                     "trace": None, "classification": {"has_return": False}, "policy": None,
@@ -388,6 +389,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 _no_tool_call_rounds += 1
                 _fn_probe_log.append({
                     "phase": "no_tool_call_round", "function": fn_name, "round": _round,
+                    "model": ctx.model,
                     "tool": None, "args": {},
                     "result_excerpt": "assistant returned no tool calls before probe floor met",
                     "trace": None, "classification": {"has_return": False}, "policy": None,
@@ -511,6 +513,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                     _fn_probe_log.append({
                         "probe_id": f"{fn_name}:{_round}:{_fn_tool_call_count + 1}:{tc_name}",
                         "phase": "explore", "function": fn_name, "round": _round,
+                        "model": ctx.model,
                         "reasoning": (msg.content or "").strip() or None,
                         "tool": tc_name, "args": tc_args,
                         "arg_sources": _arg_sources,
@@ -642,6 +645,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 _fn_probe_log.append({
                     "phase": "deterministic_fallback", "function": fn_name,
                     "round": _attempt, "reasoning": reason, "tool": fn_name,
+                    "model": ctx.model,
                     "args": _fb_args,
                     "arg_sources": _arg_sources,
                     "arg_selection": _fb_selection,
@@ -661,6 +665,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 "probe_id": f"{fn_name}:fb:{_attempt + 1}",
                 "phase": "deterministic_fallback", "function": fn_name,
                 "round": _attempt, "reasoning": reason, "tool": fn_name,
+                "model": ctx.model,
                 "args": _fb_args, "result_excerpt": str(_res)[:200],
                 "arg_sources": _arg_sources,
                 "arg_selection": _fb_selection,
@@ -926,6 +931,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                     }
                     _fn_probe_log.append({
                         "phase": "verify", "function": fn_name, "tool": fn_name,
+                        "model": ctx.model,
                         "args": _verify_args,
                         "arg_sources": _arg_sources,
                         "result_excerpt": str(_vr)[:200],
@@ -1029,6 +1035,7 @@ def _explore_one(inv: dict, ctx: ExploreContext) -> None:
                 }
                 _fn_probe_log.append({
                     "phase": "cross_validate", "function": fn_name,
+                    "model": ctx.model,
                     "tool": _cv["function"], "args": _cv_args,
                     "arg_sources": _arg_sources,
                     "result_excerpt": str(_cv_result)[:200],

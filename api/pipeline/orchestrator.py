@@ -187,6 +187,11 @@ def _build_explore_context(job_id: str, invocables: list[dict]) -> ExploreContex
         OPENAI_EXPLORE_MODEL if OPENAI_API_KEY
         else (OPENAI_REASONING_DEPLOYMENT or OPENAI_DEPLOYMENT)
     )
+    logger.info(
+        "[%s] explore using model=%s (override=%s, backend=%s)",
+        job_id, model, bool(runtime.model_override),
+        "openai" if OPENAI_API_KEY else "azure",
+    )
 
     prior_findings = _load_findings(job_id)
     already_explored = {f.get("function") for f in prior_findings if f.get("function")}
@@ -2232,6 +2237,9 @@ def _explore_worker(job_id: str, invocables: list[dict]) -> None:
                 f"{job_id}/explore_config.json",
                 json.dumps({
                     "mode": ((_get_job_status(job_id) or {}).get("explore_runtime") or {}).get("mode") or "normal",
+                    "model":                           ctx.model,
+                    "model_override":                  bool(ctx.runtime.model_override),
+                    "openai_backend":                  "openai" if OPENAI_API_KEY else "azure",
                     "cap_profile":                     ctx.runtime.cap_profile,
                     "max_rounds_per_function":         ctx.runtime.max_rounds,
                     "max_tool_calls_per_function":     ctx.runtime.max_tool_calls,
