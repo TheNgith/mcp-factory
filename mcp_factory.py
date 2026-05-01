@@ -285,6 +285,32 @@ Examples:
 
     _banner("MCP Factory  ·  end-to-end pipeline")
 
+    # Surface which OpenAI model the explore loop will use, resolved the same
+    # way as the explore worker (override > OPENAI_EXPLORE_MODEL > Azure deploy).
+    _explore_model = (
+        os.getenv("OPENAI_EXPLORE_MODEL")
+        or (
+            "gpt-4o-mini" if os.getenv("OPENAI_API_KEY")
+            else (
+                os.getenv("OPENAI_REASONING_DEPLOYMENT")
+                or os.getenv("OPENAI_DEPLOYMENT")
+                or "(unset)"
+            )
+        )
+    )
+    _chat_model = (
+        os.getenv("OPENAI_CHAT_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or os.getenv("OPENAI_DEPLOYMENT")
+        or "(unset)"
+    )
+    _backend = "openai" if os.getenv("OPENAI_API_KEY") else (
+        "azure" if os.getenv("AZURE_OPENAI_ENDPOINT") else "(unconfigured)"
+    )
+    print(f"  Backend:       {_backend}")
+    print(f"  Explore model: {_explore_model}")
+    print(f"  Chat model:    {_chat_model}")
+
     # ── Fast path: --serve skips the whole pipeline ───────────────────────────
     if args.serve:
         component = args.serve.strip()
