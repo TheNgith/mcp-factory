@@ -133,6 +133,44 @@ _ENRICH_INVOCABLE_TOOL = {
     },
 }
 
+# ── Synthetic abort_task tool definition (always injected) ───────────────
+# Lets the model cleanly stop the loop and surface a user-visible reason
+# instead of substituting a missing capability or fabricating success.
+_ABORT_TASK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "abort_task",
+        "description": (
+            "Stop the current task and notify the user when you cannot complete it correctly. "
+            "Call this AS SOON AS you realise any of: a required tool/button/operation is not "
+            "in your tool list (e.g. user asked for digit '3' but press_three is missing); a "
+            "tool failed with a blocking error and no recovery path exists; a precondition is "
+            "unmet (login required, file not found, app not launched); the request is ambiguous "
+            "in a way you cannot resolve. Do NOT substitute a similar tool, do NOT guess, do "
+            "NOT report success. Calling this ends the session immediately and shows the user "
+            "your reason."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "One-sentence plain-language reason the task cannot be completed (shown verbatim to the user).",
+                },
+                "missing_capability": {
+                    "type": "string",
+                    "description": "Optional: name of the specific tool/button/operation that is missing or failed (e.g. 'press_three', 'login_user').",
+                },
+                "blocking_error": {
+                    "type": "string",
+                    "description": "Optional: short summary of the blocking error returned by a prior tool call, if applicable.",
+                },
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
 
 def _schema_quality(invocables: list) -> str:
     """Return 'basic' when every parameter across all invocables has a generic
@@ -359,7 +397,25 @@ def _build_system_message(invocables: list, job_id: str = "") -> dict:
             "respond to the user explaining the correct format — do not make the call.\n"
             "9. Before interpreting any unexpected return value from a function call, "
             "look it up in the error_codes section of vocab. Always report both the raw "
-            "returned value and its vocab meaning if one exists."
+            "returned value and its vocab meaning if one exists.\n"
+            "10. FAIL-FAST RULE (highest priority — overrides all others):\n"
+            "   Before you start a task, plan the EXACT sequence of tools you will call. "
+            "If ANY tool you would need is not in your tool list — including specific "
+            "buttons, digits, operators, menu items, or operations — STOP and call "
+            "abort_task with a clear reason. Examples that REQUIRE abort_task:\n"
+            "   - User asks to type '23' but press_two or press_three is missing.\n"
+            "   - User asks for division but the divide button/operation is not in tools.\n"
+            "   - User asks to log in but no login/auth tool exists.\n"
+            "   - A required prerequisite tool returned a blocking error you cannot recover.\n"
+            "   - explain_failure returned severity='blocking' with no usable recovery.\n"
+            "   - A tool returned 'not found' / unknown_tool — that capability does not exist.\n"
+            "   ABSOLUTELY FORBIDDEN behaviours:\n"
+            "   - NEVER substitute a similar-but-different tool (e.g. press_five instead of press_three).\n"
+            "   - NEVER fabricate or claim a successful result that you did not verify end-to-end.\n"
+            "   - NEVER silently skip a step the user asked for.\n"
+            "   - NEVER continue calling tools after you have realised the task cannot complete.\n"
+            "   When in doubt: abort_task is always safer than guessing. The user can re-run "
+            "with a wider tool selection. A wrong-but-confident answer is the worst outcome."
             + init_rule
             + criticality_block
             + vocab_block
@@ -473,6 +529,7 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     _active_model = _reasoning_model if _schema_q == "basic" else _base_model
     _failure_count = 0  # consecutive 0xFFFFFFFF / -1 returns; triggers mid-session escalation
     _auto_hint_fired = False  # one-shot: inject explain_failure hint after 3rd failure
+    _abort_nudge_fired: set[str] = set()  # categories already nudged toward abort_task
     if _schema_q == "basic" and invocables:
         logger.info(
             "[%s] stream_chat: generic schema (black-box binary) — using reasoning model %s",
@@ -538,6 +595,18 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
     inv_map["explain_failure"] = _explain_failure_inv
     if not any(t.get("function", {}).get("name") == "explain_failure" for t in _active_tools):
         _active_tools.append(_EXPLAIN_FAILURE_TOOL)
+    # abort_task synthetic tool: model calls it to stop the loop and tell the
+    # user the task cannot be completed (missing capability, blocking error).
+    _abort_inv = {
+        "name": "abort_task",
+        "source_type": "abort",
+        "_job_id": job_id,
+        "execution": {"method": "abort"},
+        "parameters": [],
+    }
+    inv_map["abort_task"] = _abort_inv
+    if not any(t.get("function", {}).get("name") == "abort_task" for t in _active_tools):
+        _active_tools.append(_ABORT_TASK_TOOL)
     _last_user_message = next(
         (m.get("content", "") for m in reversed(conversation) if m.get("role") == "user"),
         "",
@@ -634,6 +703,16 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                 # Exclude already-fired launcher tools so the model can't re-launch.
                 _active_tools = [t for t in _active_tools
                                  if t.get("function", {}).get("name") not in _called_launchers]
+
+            # Re-inject synthetic tools that semantic/keyword filtering would drop
+            # (record_finding, enrich_invocable, explain_failure, abort_task).
+            # The model must always be able to abort or record a finding regardless
+            # of which DLL tools are currently in scope.
+            _present = {t.get("function", {}).get("name") for t in _active_tools}
+            for _syn in (_RECORD_FINDING_TOOL, _ENRICH_INVOCABLE_TOOL,
+                         _EXPLAIN_FAILURE_TOOL, _ABORT_TASK_TOOL):
+                if _syn["function"]["name"] not in _present:
+                    _active_tools.append(_syn)
 
             kwargs: dict = {
                 "model":       _active_model,
@@ -825,6 +904,45 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     "reasoning": _round_reasoning or None,
                 })
 
+                # Hard short-circuit: model invoked abort_task to declare the task
+                # cannot be completed correctly. Surface the reason verbatim and end
+                # the session without any further tool dispatch or summarisation.
+                if fn_name == "abort_task":
+                    _reason = (fn_args.get("reason") or "").strip() \
+                        or "Task cannot be completed with the currently available tools."
+                    _missing = (fn_args.get("missing_capability") or "").strip()
+                    _blocking = (fn_args.get("blocking_error") or "").strip()
+                    _human_parts = [_reason]
+                    if _missing:
+                        _human_parts.append(f"Missing capability: {_missing}.")
+                    if _blocking:
+                        _human_parts.append(f"Blocking error: {_blocking}.")
+                    _abort_human = " ".join(_human_parts)
+                    _tool_log[-1]["result"] = _abort_human
+                    _tool_log[-1]["error"] = {
+                        "category": "task_aborted",
+                        "severity": "blocking",
+                        "human": _abort_human,
+                        "missing_capability": _missing or None,
+                        "blocking_error": _blocking or None,
+                    }
+                    yield _sse({
+                        "type": "tool_result",
+                        "name": fn_name,
+                        "result": _abort_human,
+                        "error": _tool_log[-1]["error"],
+                    })
+                    yield _sse({
+                        "type": "abort",
+                        "reason": _reason,
+                        "missing_capability": _missing or None,
+                        "blocking_error": _blocking or None,
+                        "human": _abort_human,
+                    })
+                    yield _sse({"type": "token", "content": _abort_human})
+                    yield _sse({"type": "done", "aborted": True, "rounds": _round + 1})
+                    return
+
                 _tool_trace: dict | None = None
                 _tool_error: dict | None = None
                 inv = inv_map.get(fn_name)
@@ -920,6 +1038,32 @@ async def stream_chat(body: dict[str, Any]) -> AsyncGenerator[str, None]:
                     "tool_call_id": tc.id,
                     "content": tool_result,
                 })
+
+                # Fail-fast nudge: if the failure category has no recovery path
+                # (unknown_tool, bridge_unreachable, blocking severity), inject a
+                # system note pointing the model at abort_task so it stops trying
+                # to substitute or retry. Fires once per session per category.
+                if _tool_error and isinstance(_tool_error, dict):
+                    _cat = _tool_error.get("category") or ""
+                    _sev = _tool_error.get("severity") or ""
+                    _abort_worthy = (
+                        _cat in ("unknown_tool", "bridge_unreachable")
+                        or _sev == "blocking"
+                    )
+                    if _abort_worthy and _cat not in _abort_nudge_fired:
+                        _abort_nudge_fired.add(_cat)
+                        conversation.append({
+                            "role": "system",
+                            "content": (
+                                f"The tool call '{fn_name}' failed with category '{_cat}' "
+                                f"(severity '{_sev or 'unknown'}'). This is a blocking failure "
+                                "with no automatic recovery. Per RULE 10, do NOT substitute "
+                                "another tool or retry. If this prevents completing the user's "
+                                "request, call abort_task now with a clear reason. Only continue "
+                                "with other tools if they accomplish a DIFFERENT, still-needed "
+                                "part of the task that does not depend on this failure."
+                            ),
+                        })
 
                 # Track error sentinels; escalate to reasoning model after 3 failures
                 # if a more capable model is configured.  Prefer the structured
